@@ -22,6 +22,12 @@ transport) and `docs/VISION.md` for why.
     restore-progress screen, which need the account engine.
   - `ui/components` — `PinPad`, `NumberedWords`, `WordEntry`,
     `WordCheckBoxes`: the shared pieces those screens are built from.
+  - `storage/` — `Storage`: the `coreState` (opaque entries the Rust core
+    owns) and `setting` (this account's own config) tables, one SQLite
+    file per account, written through a single `Commit` per transaction.
+    Ported from PeelCore's `Storage.swift` / `Storage+Writes.swift`; no
+    `message`, `contact` or `tribe` tables yet, and nothing calls it yet —
+    the engine that will is next.
 - `sphinxrs/` — the generated UniFFI Kotlin bindings to the Rust core
   (package `uniffi.sphinxrs`) plus the native `libsphinxrs.so` for
   `arm64-v8a` and `x86_64`. Generated, not hand-written; see below to
@@ -29,10 +35,11 @@ transport) and `docs/VISION.md` for why.
 
 ## What's not here yet
 
-There is no account engine: no storage, no MQTT, no server connection. An
-account made or restored here is real (the same core, the same twelve
-words, properly sealed under a PIN) but local only — nothing is sent
-anywhere, and the home screen is a placeholder that re-derives the
+There is no account engine: no MQTT, no server connection, and nothing
+yet calls `Storage`. An account made or restored here is real (the same
+core, the same twelve words, properly sealed under a PIN) but local
+only — nothing is sent anywhere, and the home screen is a placeholder
+that re-derives the
 account's own pubkey to prove the bridge works, not a chat list. See the
 `peel` repository's `docs/PLAN.md` for the architecture this grows into
 next.
