@@ -9,10 +9,33 @@ transport) and `docs/VISION.md` for why.
 ## Layout
 
 - `app/` — the Compose UI and app module (`com.sphinx.peel`).
+  - `account/` — `Account` (pure helpers over sphinxrs: generate, validate,
+    the word check), `SecretStore` and `PinBox` (the twelve words sealed
+    under a PIN, ported from PeelCore's `SecretStore.swift`: PBKDF2 at
+    2,500,000 iterations, AES-GCM, same byte layout as the Mac/iPhone
+    Keychain blob). Kept in the app-private file store, not wrapped in
+    Android Keystore yet.
+  - `ui/onboarding`, `ui/lock`, `ui/home` — new account or restore, the PIN
+    lock screen, and a placeholder account screen (shows the derived
+    pubkey; no server connection yet). Ported from PeelCore's
+    `Onboarding.swift` and `PinPad.swift`, minus the invite step and the
+    restore-progress screen, which need the account engine.
+  - `ui/components` — `PinPad`, `NumberedWords`, `WordEntry`,
+    `WordCheckBoxes`: the shared pieces those screens are built from.
 - `sphinxrs/` — the generated UniFFI Kotlin bindings to the Rust core
   (package `uniffi.sphinxrs`) plus the native `libsphinxrs.so` for
   `arm64-v8a` and `x86_64`. Generated, not hand-written; see below to
   rebuild it.
+
+## What's not here yet
+
+There is no account engine: no storage, no MQTT, no server connection. An
+account made or restored here is real (the same core, the same twelve
+words, properly sealed under a PIN) but local only — nothing is sent
+anywhere, and the home screen is a placeholder that re-derives the
+account's own pubkey to prove the bridge works, not a chat list. See the
+`peel` repository's `docs/PLAN.md` for the architecture this grows into
+next.
 
 ## Build
 

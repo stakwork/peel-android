@@ -6,6 +6,7 @@ coreKtx = "1.18.0"
 activityCompose = "1.12.4"
 lifecycleRuntimeKtx = "2.10.0"
 jna = "5.19.1"
+junit = "4.13.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -17,6 +18,7 @@ androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 # AGP 9+ compiles Kotlin itself; no org.jetbrains.kotlin.android plugin.
