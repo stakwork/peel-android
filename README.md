@@ -26,8 +26,18 @@ transport) and `docs/VISION.md` for why.
     owns) and `setting` (this account's own config) tables, one SQLite
     file per account, written through a single `Commit` per transaction.
     Ported from PeelCore's `Storage.swift` / `Storage+Writes.swift`; no
-    `message`, `contact` or `tribe` tables yet, and nothing calls it yet —
-    the engine that will is next.
+    `message`, `contact` or `tribe` tables yet.
+  - `engine/` — `Engine`: the core contract (docs/PLAN.md, "Why") — a core
+    call takes the seed, a unique time and the whole state, and returns
+    what changed, committed to `Storage` before the call returns. Ported
+    from PeelCore's `Engine.swift`, scoped to what `Storage` holds: no
+    message, contact, tribe or payment bookkeeping yet, so this covers a
+    fraction of what the Mac/iPhone `commit` does. `StateCodec` is the
+    core's MessagePack state-map format; `UniqueClock`, the per-account
+    clock every call needs. `ServerAddress` and `Transport` (the MQTT
+    connection, on the HiveMQ MQTT client) are ready but unused: nothing
+    in `Engine` makes a server call yet, so there is nothing to connect
+    for. Not exercised against a broker — see "What's not here yet".
 - `sphinxrs/` — the generated UniFFI Kotlin bindings to the Rust core
   (package `uniffi.sphinxrs`) plus the native `libsphinxrs.so` for
   `arm64-v8a` and `x86_64`. Generated, not hand-written; see below to
@@ -35,14 +45,22 @@ transport) and `docs/VISION.md` for why.
 
 ## What's not here yet
 
-There is no account engine: no MQTT, no server connection, and nothing
-yet calls `Storage`. An account made or restored here is real (the same
-core, the same twelve words, properly sealed under a PIN) but local
-only — nothing is sent anywhere, and the home screen is a placeholder
-that re-derives the
-account's own pubkey to prove the bridge works, not a chat list. See the
-`peel` repository's `docs/PLAN.md` for the architecture this grows into
-next.
+No server call: `Engine` can run the core's local-only calls (right now,
+just `initialSetup`) and commit what they return, but nothing in it talks
+to a broker, so `Transport` has never connected to anything, real or
+local. An account made or restored here is real (the same core, the same
+twelve words, properly sealed under a PIN) but local only, and the home
+screen is a placeholder that re-derives the account's own pubkey to prove
+the bridge works, not a chat list. See the `peel` repository's
+`docs/PLAN.md` for the architecture this grows into next.
+
+Also not here: anything that needs the native sphinxrs library to test
+against (a plain JVM unit test, even under Robolectric, has no macOS build
+of it to load — only the Android `.so`s), so `Account` and `Engine`'s own
+logic are exercised only through what's pure Kotlin (`StateCodec`,
+`ServerAddress`, the word-splitting helpers). Building a host `.dylib` and
+pointing JNA's `jna.library.path` at it would unlock real unit tests for
+the rest; not done, since it's a test-infrastructure decision on its own.
 
 ## Build
 

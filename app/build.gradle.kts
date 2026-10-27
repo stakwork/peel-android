@@ -29,10 +29,18 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packaging {
+        // Netty (pulled in by the HiveMQ MQTT client) ships these in
+        // several of its jars; Android's packaging can only keep one.
+        resources.excludes += "META-INF/INDEX.LIST"
+        resources.excludes += "META-INF/io.netty.versions.properties"
+    }
 }
 
 dependencies {
     implementation(project(":sphinxrs"))
+    implementation(libs.hivemq.mqtt.client)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
