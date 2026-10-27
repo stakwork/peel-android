@@ -68,4 +68,23 @@ class StorageTest {
         assertEquals(byteArrayOf(3).toList(), state["c"]?.toList())
         assertEquals("1", storage.value(Setting.WORDS_CONFIRMED))
     }
+
+    @Test
+    fun `deleteAccount wipes state, and the same instance starts clean afterwards`() {
+        // "Forget this account" (HomeScreen) relies on exactly this: the
+        // next account made on this device must not inherit the previous
+        // one's coreState through the same Storage instance.
+        val storage = newStorage()
+        storage.apply(
+            Storage.Commit(state = mapOf("my_scid" to byteArrayOf(1)), settings = mapOf(Setting.ALIAS to "Tom")),
+        )
+
+        storage.deleteAccount()
+
+        assertEquals(emptyMap<String, ByteArray>(), storage.loadCoreState())
+        assertNull(storage.value(Setting.ALIAS))
+
+        storage.apply(Storage.Commit(settings = mapOf(Setting.ALIAS to "Ann")))
+        assertEquals("Ann", storage.value(Setting.ALIAS))
+    }
 }

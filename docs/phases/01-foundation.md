@@ -8,8 +8,15 @@ support), a working `sphinxrs` FFI bridge (UniFFI Kotlin bindings, native
 onboarding (new account or restore), PIN-sealed mnemonic storage, a lock
 screen, the `Storage` key-value layer (`coreState`, `setting`), and an
 `Engine` that runs one core call (`initialSetup`) and commits what it
-returns. `Transport` (MQTT, HiveMQ client) exists and compiles against the
-real library but has never connected to anything.
+returns. Onboarding now calls that `Engine.initialSetup` itself (new
+account or restore, right after sealing the mnemonic), so creating or
+restoring an account prepares real core state, not just a sealed mnemonic
+sitting next to an empty database; the home screen opens the same `Engine`
+and shows its `accountKey` and `isRegistered` (always false so far — no
+server has run to set it). "Forget this account" wipes both `SecretStore`
+and `Storage`, so a new account on the same device starts from nothing.
+`Transport` (MQTT, HiveMQ client) exists and compiles against the real
+library but has never connected to anything.
 
 **Open:** no server connection — `Engine` makes no call that needs one, so
 `Transport` is unexercised. No chat UI, no `message`/`contact`/`tribe`
@@ -85,6 +92,23 @@ permissions. Compiles and type-checks against the real library; not
 connected to a broker, real or local — `Engine` makes no call that needs
 one yet.
 
+**Onboarding meets the Engine.** Onboarding and `Engine`/`Storage` were
+built in the same session but never actually touched each other:
+`OnboardingScreen` sealed the mnemonic and stopped there. Closed the gap:
+`OnboardingScreen` now builds an `Engine` and calls `initialSetup` right
+after `SecretStore.save`, off the main thread with it (same
+`Dispatchers.Default` block — it's a core call plus a transaction, not
+free). `Engine` picked up `deviceID` along the way (read-or-create, like
+`Engine.swift`'s `init`), since `initialSetup` needs one and nothing had
+owned it yet. `HomeScreen` now opens the real `Engine` instead of
+re-deriving a pubkey by hand, and shows `isRegistered` honestly — false,
+since nothing has connected to a server to set it. Forgetting an account
+had to learn to wipe `Storage` too: with two separate stores keyed by the
+same default account name, forgetting only the mnemonic would have let a
+freshly created account inherit the previous one's `coreState` — a
+different seed instead of none at all. `Storage.deleteAccount` (close the
+helper, `Context.deleteDatabase`) and a test for it closes that.
+
 ## Done
 
 - Gradle project: `app` (Compose UI) and `sphinxrs` (generated UniFFI
@@ -96,15 +120,17 @@ one yet.
 - `account/SecretStore.kt`: `PinBox` (PBKDF2 + AES-GCM, `peel`'s
   Keychain blob format) and a file-backed `SecretStore`.
 - `ui/onboarding`, `ui/lock`, `ui/home`: new account, restore, PIN
-  lock, a placeholder account screen.
+  lock, an account screen that opens a real `Engine`.
 - `storage/Storage.kt`, `storage/Setting.kt`: `coreState` and `setting`,
-  one SQLite file per account, atomic `Commit`.
+  one SQLite file per account, atomic `Commit`, `deleteAccount`.
 - `engine/StateCodec.kt`, `engine/UniqueClock.kt`, `engine/Engine.kt`: the
-  core contract envelope, one call wired (`initialSetup`).
+  core contract envelope, `deviceID`, one call wired (`initialSetup`) —
+  and now actually called, from onboarding.
 - `engine/ServerAddress.kt`, `engine/Transport.kt`: MQTT connection on
   the HiveMQ client, not yet exercised.
-- Tests: `PinBoxTest`, `AccountTest`, `StorageTest` (Robolectric),
-  `StateCodecTest`, `ServerAddressTest`. 22 tests, all passing.
+- Tests: `PinBoxTest`, `AccountTest`, `StorageTest` (Robolectric, now
+  including `deleteAccount`), `StateCodecTest`, `ServerAddressTest`. 23
+  tests, all passing.
 
 ## Learned
 
@@ -127,3 +153,8 @@ one yet.
 - Netty (via the HiveMQ MQTT client) ships `META-INF/INDEX.LIST` and
   `META-INF/io.netty.versions.properties` in multiple jars; Android's
   resource merging needs both excluded explicitly.
+- Two stores that both default to the same account name (`SecretStore`,
+  `Storage`) look like one account from the outside, but "forget the
+  account" has to clear both on purpose — nothing enforces that they stay
+  in sync, and leaving one behind doesn't fail loudly, it just quietly
+  hands the next account someone else's `coreState`.

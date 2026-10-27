@@ -11,7 +11,9 @@ import android.database.sqlite.SQLiteOpenHelper
 /// tribes come later, once there is an engine and a server connection to
 /// fill them from.
 class Storage(context: Context, account: String = "default") {
-    private val helper = Helper(context.applicationContext, "peel-$account.db")
+    private val appContext = context.applicationContext
+    private val dbName = "peel-$account.db"
+    private val helper = Helper(appContext, dbName)
 
     /// Every opaque entry the core owns, for the state a core call needs
     /// passed back in.
@@ -73,6 +75,15 @@ class Storage(context: Context, account: String = "default") {
     }
 
     fun close() = helper.close()
+
+    /// Wipes this account's whole database. "Forget this account" (dev)
+    /// needs this, not just `SecretStore.deleteMnemonic`: without it, the
+    /// next account made on this device would start from the previous
+    /// one's `coreState` (a different seed entirely), rather than empty.
+    fun deleteAccount() {
+        helper.close()
+        appContext.deleteDatabase(dbName)
+    }
 
     private class Helper(context: Context, name: String) : SQLiteOpenHelper(context, name, null, VERSION) {
         override fun onCreate(db: SQLiteDatabase) {

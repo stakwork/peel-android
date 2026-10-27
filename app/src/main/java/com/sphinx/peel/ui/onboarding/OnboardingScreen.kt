@@ -30,6 +30,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.SecretStore
+import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.NumberedWords
 import com.sphinx.peel.ui.components.PinPad
 import com.sphinx.peel.ui.components.WordCheck
@@ -50,12 +52,13 @@ private sealed class Step {
 
 /// New account (PIN, the twelve words) or restore (the words, PIN), as
 /// PeelCore's Onboarding.swift asks them. There is no "invite" step and no
-/// restore-progress screen yet: those need the account engine and its
-/// server connection, which Android doesn't have yet (see peel-android's
-/// README). This covers what is local-only: generating or validating the
-/// twelve words, and sealing them under a PIN with `SecretStore`.
+/// restore-progress screen yet: those need a server connection, which
+/// Android doesn't have yet (see peel-android's README). What is local —
+/// generating or validating the twelve words, sealing them under a PIN
+/// with `SecretStore`, and preparing the core's own state for them with
+/// `Engine.initialSetup` — all happens here before `onAccountReady`.
 @Composable
-fun OnboardingScreen(secretStore: SecretStore, onAccountReady: (mnemonic: String) -> Unit) {
+fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady: (mnemonic: String) -> Unit) {
     var path by remember { mutableStateOf(Path.NEW_ACCOUNT) }
     var step by remember { mutableStateOf<Step>(Step.Welcome) }
     var enteredWords by remember { mutableStateOf(List(12) { "" }) }
@@ -86,14 +89,20 @@ fun OnboardingScreen(secretStore: SecretStore, onAccountReady: (mnemonic: String
                 when (path) {
                     Path.NEW_ACCOUNT -> {
                         val generated = Account.generateMnemonic()
-                        withContext(Dispatchers.Default) { secretStore.save(generated, pin) }
+                        withContext(Dispatchers.Default) {
+                            secretStore.save(generated, pin)
+                            Engine(generated, storage).initialSetup(inviteCode = null)
+                        }
                         mnemonic = generated
                         shownWords = Account.wordsIn(generated)
                         check = WordCheck()
                         step = Step.ShowWords
                     }
                     Path.RESTORE -> {
-                        withContext(Dispatchers.Default) { secretStore.save(mnemonic, pin) }
+                        withContext(Dispatchers.Default) {
+                            secretStore.save(mnemonic, pin)
+                            Engine(mnemonic, storage).initialSetup(inviteCode = null)
+                        }
                         onAccountReady(mnemonic)
                     }
                 }

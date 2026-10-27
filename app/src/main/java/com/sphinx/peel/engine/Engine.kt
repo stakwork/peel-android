@@ -3,6 +3,7 @@ package com.sphinx.peel.engine
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
+import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import uniffi.sphinxrs.RunReturn
@@ -27,6 +28,13 @@ class Engine(mnemonic: String, val storage: Storage) {
     private val mutex = Mutex()
     private val clock = UniqueClock(storage.value(Setting.CLOCK)?.toLongOrNull() ?: 0)
     private var state: Map<String, ByteArray> = storage.loadCoreState()
+
+    /// This device among the account's: the core's device, and (once device
+    /// requests exist) the one a request names. One per install, made once
+    /// and kept. Ported from Engine.swift's `init`.
+    val deviceID: String = storage.value(Setting.DEVICE_ID) ?: UUID.randomUUID().toString().also {
+        storage.apply(Storage.Commit(settings = mapOf(Setting.DEVICE_ID to it)))
+    }
 
     /// This account's key (child index 0), which will sign every message
     /// it sends and its connection to the broker, once there is one.
@@ -65,8 +73,10 @@ class Engine(mnemonic: String, val storage: Storage) {
 
     /// The core's own state for a fresh (or re-run) account: no server
     /// connection yet, so nothing is sent anywhere, this only prepares what
-    /// a register would need. Ported from PeelCore's `Account.signup`'s
+    /// a register would need. `isRegistered` stays false until a real
+    /// connection completes one: the server, not this call, is what grants
+    /// `my_scid`/`server_pubkey`. Ported from PeelCore's `Account.signup`'s
     /// first step.
-    suspend fun initialSetup(device: String, inviteCode: String?): RunReturn =
-        run { time, stateBytes -> coreInitialSetup(seed, time, stateBytes, device, inviteCode) }
+    suspend fun initialSetup(inviteCode: String?): RunReturn =
+        run { time, stateBytes -> coreInitialSetup(seed, time, stateBytes, deviceID, inviteCode) }
 }
