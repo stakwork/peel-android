@@ -8,7 +8,33 @@ import android.database.sqlite.SQLiteOpenHelper
 /// One contact as `message`/`contact` know it: a pubkey, and whatever name
 /// and photo its own messages have revealed so far (names and photos are
 /// not core state — PeelCore's `contact` table comment says the same).
-data class ContactRow(val pubkey: String, val alias: String?, val photoUrl: String?, val ready: Boolean)
+/// `isTribe` tells a tribe from a direct contact — see `Engine.contactHint`
+/// for how it's actually detected (a tribes server marking what it
+/// forwards, not anything the chat itself declares).
+data class ContactRow(
+    val pubkey: String,
+    val alias: String?,
+    val photoUrl: String?,
+    val isTribe: Boolean,
+    val ready: Boolean,
+)
+
+/// One row the dashboard shows: a chat (a ready contact or a discovered
+/// tribe) and its newest message, if it has one yet. The Android shape of
+/// PeelCore's `Conversation` (`Models.swift`) and `Storage.conversations()`.
+data class ConversationRow(
+    val chat: String,
+    val alias: String?,
+    val photoUrl: String?,
+    val isTribe: Boolean,
+    val lastContent: String?,
+    val lastTimestamp: Long?,
+    val lastFromMe: Boolean?,
+) {
+    /// The alias, or the chat's own key trimmed to 12 characters — same
+    /// fallback as `Conversation.name`.
+    val name: String get() = alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
+}
 
 /// One stored message, trimmed to `message` v1's columns (PeelCore's
 /// `Storage+Migrations.swift`): no reply/thread/media fields yet, those
@@ -97,6 +123,41 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
+    /// Every stored message's `chat`, `fromMe` and `sender` — what
+    /// `Engine.contactHint` needs, and nothing it doesn't: `backfillContactsIfNeeded`
+    /// re-derives `contact` rows from these without needing a whole
+    /// `MessageRow` (`uuid`/`body`/etc. stay unset; nothing reads them off
+    /// a backfilled row).
+    fun messageSenders(): List<MessageRow> {
+        val rows = mutableListOf<MessageRow>()
+        helper.readableDatabase
+            // Oldest first, same order a restore's own pages arrive in:
+            // `upsertContact`'s "newest message wins" only holds if this
+            // processes them in that order too, not whatever SQLite's
+            // default row order happens to be.
+            .query("message", arrayOf("chat", "fromMe", "sender"), null, null, null, null, "id ASC")
+            .use { cursor ->
+                while (cursor.moveToNext()) {
+                    rows.add(
+                        MessageRow(
+                            uuid = null,
+                            serverIndex = null,
+                            type = 0,
+                            chat = cursor.getString(0),
+                            fromMe = cursor.getInt(1) != 0,
+                            sender = cursor.getString(2),
+                            body = null,
+                            msat = null,
+                            timestamp = null,
+                            tag = null,
+                            paymentHash = null,
+                        ),
+                    )
+                }
+            }
+        return rows
+    }
+
     /// One page of history, stored `INSERT OR IGNORE`: a message a page
     /// repeats (two runs overlapping at a boundary) is simply skipped by
     /// its `uuid`, same as PeelCore's unique `uuid` column does.
@@ -131,14 +192,30 @@ class Storage(context: Context, account: String = "default") {
     /// far — a blank field here means "unknown so far", not "cleared", so
     /// it never overwrites a value already stored (same reasoning as
     /// PeelCore's `contact` migration, which only ever takes the newest row).
-    fun upsertContact(pubkey: String, alias: String?, photoUrl: String?) {
+    /// `ready` defaults false (only `markContactsReady` sets a direct
+    /// contact ready); a tribe passes `ready = true` itself — nothing else
+    /// ever confirms one the way the core confirms a direct contact's key
+    /// exchange, so being seen at all is as ready as a tribe gets here.
+    ///
+    /// Once a chat is a tribe, `alias`/`photoUrl` are never written again,
+    /// whatever this call is asked to set them to: a tribe's own name and
+    /// photo never come from a message (`Engine.contactHint`'s doc
+    /// comment), and not every one of a tribe's messages carries the
+    /// `host` field that identifies it as one — a real restore has some
+    /// that don't (delivery/control messages, by the look of them) — so a
+    /// caller cannot always know, from one message alone, that this is a
+    /// tribe it should not attribute a name to. Enforcing it here, once,
+    /// is simpler than requiring every caller to re-check first.
+    fun upsertContact(pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean = false) {
         val db = helper.writableDatabase
         val existing = readContact(db, pubkey)
+        val tribe = isTribe || existing?.isTribe == true
         val values = ContentValues().apply {
             put("pubkey", pubkey)
-            put("alias", alias ?: existing?.alias)
-            put("photoUrl", photoUrl ?: existing?.photoUrl)
-            put("ready", if (existing?.ready == true) 1 else 0)
+            put("alias", if (tribe) existing?.alias else (alias ?: existing?.alias))
+            put("photoUrl", if (tribe) existing?.photoUrl else (photoUrl ?: existing?.photoUrl))
+            put("isTribe", if (tribe) 1 else 0)
+            put("ready", if (ready || existing?.ready == true) 1 else 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -146,7 +223,8 @@ class Storage(context: Context, account: String = "default") {
     /// Marks contacts the core itself now recognises (`listContacts`) —
     /// "ready" the way PeelCore's `contact.ready` is: the core holds their
     /// key, so this is a real conversation, not just a name seen in a
-    /// message.
+    /// message. Never a tribe: `listContacts` is the core's own direct-contact
+    /// registry, tribes aren't in it.
     fun markContactsReady(pubkeys: List<String>) {
         if (pubkeys.isEmpty()) return
         val db = helper.writableDatabase
@@ -158,6 +236,7 @@ class Storage(context: Context, account: String = "default") {
                     put("pubkey", pubkey)
                     put("alias", existing?.alias)
                     put("photoUrl", existing?.photoUrl)
+                    put("isTribe", if (existing?.isTribe == true) 1 else 0)
                     put("ready", 1)
                 }
                 db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
@@ -168,12 +247,56 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
-    private fun readContact(db: SQLiteDatabase, pubkey: String): ContactRow? {
-        db.query("contact", arrayOf("pubkey", "alias", "photoUrl", "ready"), "pubkey = ?", arrayOf(pubkey), null, null, null)
-            .use { cursor ->
-                if (!cursor.moveToFirst()) return null
-                return ContactRow(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getInt(3) != 0)
+    /// The dashboard's rows: every ready contact or tribe, with its newest
+    /// message if it has one, newest chat first. A chat with no message
+    /// yet (just key-exchanged, say) sorts last — SQLite treats `NULL` as
+    /// lowest, which is what a `DESC` newest-first order wants here.
+    fun conversations(): List<ConversationRow> {
+        val rows = mutableListOf<ConversationRow>()
+        helper.readableDatabase.rawQuery(
+            """
+            SELECT
+                c.pubkey, c.alias, c.photoUrl, c.isTribe,
+                (SELECT body FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
+                (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
+                (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1)
+            FROM contact c
+            WHERE c.ready = 1
+            ORDER BY (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1) DESC
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows.add(
+                    ConversationRow(
+                        chat = cursor.getString(0),
+                        alias = cursor.getString(1),
+                        photoUrl = cursor.getString(2),
+                        isTribe = cursor.getInt(3) != 0,
+                        lastContent = cursor.getString(4),
+                        lastTimestamp = if (cursor.isNull(5)) null else cursor.getLong(5),
+                        lastFromMe = if (cursor.isNull(6)) null else cursor.getInt(6) != 0,
+                    ),
+                )
             }
+        }
+        return rows
+    }
+
+    private fun readContact(db: SQLiteDatabase, pubkey: String): ContactRow? {
+        db.query(
+            "contact", arrayOf("pubkey", "alias", "photoUrl", "isTribe", "ready"),
+            "pubkey = ?", arrayOf(pubkey), null, null, null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            return ContactRow(
+                pubkey = cursor.getString(0),
+                alias = cursor.getString(1),
+                photoUrl = cursor.getString(2),
+                isTribe = cursor.getInt(3) != 0,
+                ready = cursor.getInt(4) != 0,
+            )
+        }
     }
 
     fun close() = helper.close()
@@ -191,6 +314,7 @@ class Storage(context: Context, account: String = "default") {
         override fun onCreate(db: SQLiteDatabase) {
             v1(db)
             v2(db)
+            v3(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -198,6 +322,7 @@ class Storage(context: Context, account: String = "default") {
         // every step once; an existing one runs only what it's missing).
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             if (oldVersion < 2) v2(db)
+            if (oldVersion < 3) v3(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -242,8 +367,17 @@ class Storage(context: Context, account: String = "default") {
             )
         }
 
+        // `isTribe`: whether a tribes server, not the chat itself, was
+        // ever seen forwarding something in it (`Engine.contactHint`).
+        // PeelCore's own v6 adds a whole `tribe` table (price, escrow,
+        // membership, roles); this is only the one bit the dashboard needs
+        // to sort a chat into the right section.
+        private fun v3(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE contact ADD COLUMN isTribe INTEGER NOT NULL DEFAULT 0")
+        }
+
         companion object {
-            const val VERSION = 2
+            const val VERSION = 3
         }
     }
 }

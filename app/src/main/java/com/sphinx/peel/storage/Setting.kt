@@ -21,4 +21,11 @@ enum class Setting(val key: String) {
     /// all twelve to restore. Never the words themselves. An account with
     /// no record has not been checked.
     WORDS_CONFIRMED("wordsConfirmed"),
+
+    /// "1" once `Engine.backfillContactsIfNeeded` has re-derived `contact`
+    /// rows (tribes especially) from whatever `message` already held —
+    /// needed once, for history a restore stored before that detection
+    /// existed; never again after, so a real restore's own inserts aren't
+    /// redundantly re-scanned on every launch.
+    CONTACTS_BACKFILLED("contactsBackfilled"),
 }

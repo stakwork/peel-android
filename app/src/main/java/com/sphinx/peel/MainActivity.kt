@@ -18,7 +18,7 @@ import com.sphinx.peel.account.FileSecretStore
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.Storage
-import com.sphinx.peel.ui.home.HomeScreen
+import com.sphinx.peel.ui.dashboard.MainTabs
 import com.sphinx.peel.ui.lock.LockScreen
 import com.sphinx.peel.ui.onboarding.OnboardingScreen
 import com.sphinx.peel.ui.onboarding.RestoringAccountScreen
@@ -71,6 +71,6 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage) {
         }
         Screen.Lock -> LockScreen(secretStore, storage) { engine -> screen = Screen.Home(engine) }
         is Screen.Restoring -> RestoringAccountScreen(current.engine) { screen = Screen.Home(current.engine) }
-        is Screen.Home -> HomeScreen(current.engine, storage, secretStore) { screen = Screen.Onboarding }
+        is Screen.Home -> MainTabs(current.engine, storage, secretStore) { screen = Screen.Onboarding }
     }
 }

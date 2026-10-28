@@ -25,7 +25,8 @@ Read `docs/VISION.md` next, then the phase below.
 ```
 ┌──────────────────────────────────┐
 │ app/ui/ (Compose)                │
-│ onboarding, lock, home            │
+│ onboarding, lock, dashboard       │
+│ (Chats/Payments/You/Search tabs)  │
 ├──────────────────────────────────┤
 │ app/account/                     │
 │ Account (pure helpers), PIN-     │
@@ -104,11 +105,16 @@ fills, trimmed):
 
 - `message`: one row per message a restore or a live fetch brings back.
 - `contact`: a pubkey, its alias/photo (parsed from its own messages, not
-  core state — names and photos never are), and whether the core itself
-  now recognises it (`ready`).
+  core state — names and photos never are, and never for a tribe, whose
+  real name/photo come from the tribes server, not built yet), whether
+  it's a tribe (`isTribe`, Phase 4 — the signal is a tribes server
+  marking what it forwards, not anything the chat itself declares), and
+  whether the core (or, for a tribe, just being seen at all) now
+  recognises it (`ready`).
 
-No `chatState`, `tribe`, `payment`, `invoice` or `deviceRequest` tables
-yet; they come with the features that need them.
+No `chatState`, `tribe` (the rich kind — price, escrow, membership,
+roles), `payment`, `invoice` or `deviceRequest` tables yet; they come
+with the features that need them.
 
 ### Identity and secrets
 
@@ -137,6 +143,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 1 | Foundation: project scaffold, the sphinxrs FFI bridge, onboarding, PIN-sealed storage, the Storage/Engine/Transport skeleton | built; see the file for what's open | [phases/01-foundation.md](phases/01-foundation.md) |
 | 2 | Connecting: `Engine.connect`, the config-fetched broker address, a real register attempt against production | built; see the file for what's open | [phases/02-connecting.md](phases/02-connecting.md) |
 | 3 | Restoring: `contact`/`message` tables, `Engine.start`'s contacts-then-messages pipeline, the restore screens | built; see the file for what's open | [phases/03-restoring.md](phases/03-restoring.md) |
+| 4 | Dashboard: live message storage, tribe detection, the Chats list and tab bar | built; see the file for what's open | [phases/04-dashboard.md](phases/04-dashboard.md) |
 
 ## Open questions
 

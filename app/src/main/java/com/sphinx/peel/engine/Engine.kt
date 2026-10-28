@@ -26,6 +26,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.sphinxrs.Msg
 import uniffi.sphinxrs.RunReturn
+import uniffi.sphinxrs.agentSeed as coreAgentSeed
 import uniffi.sphinxrs.fetchFirstMsgsPerKey as coreFetchFirstMsgsPerKey
 import uniffi.sphinxrs.fetchMsgsBatch as coreFetchMsgsBatch
 import uniffi.sphinxrs.getMsgsCounts as coreGetMsgsCounts
@@ -101,6 +102,15 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// doing right now. Ported from Engine+Account.swift (`isRegistered`).
     val isRegistered: Boolean
         get() = state.containsKey("my_scid") && state.containsKey("server_pubkey")
+
+    /// This account's agent — a second Sphinx account the same twelve
+    /// words derive (HKDF over this seed, "agent seed 1"), which every
+    /// device of this account already has a contact record for from
+    /// signup. Ported from `Engine+AgentAccount.swift`'s `agentPubkey()`:
+    /// just the key, to find its chat among `conversations()` and show it
+    /// specially — not `agentAccount()`'s full bridge/device-request setup,
+    /// which is its own much larger feature.
+    val agentPubkey: String = pubkeyFromSeed(coreAgentSeed(seed, 1u), 0u, clock.next(), network)
 
     /// Runs one core call against the current state, commits what it
     /// returns, and publishes whatever network work the result asks for
@@ -232,9 +242,46 @@ class Engine(mnemonic: String, val storage: Storage) {
                     commitLocked(result, handleTime)
                     result
                 }
+                // Every inbound message, live or a restore's own page answer
+                // alike: whichever `askAndAwait` is waiting on this one (if
+                // any) reads the same already-stored result once it gets it
+                // below, not a second copy — `storeMessages` is the one
+                // place this happens now.
+                storeMessages(handled)
                 inboundResults.emit(handled)
             }
         }
+    }
+
+    /// `result.msgs` as rows, stored — and, for whichever of them are an
+    /// incoming message naming its own sender, the contact that reveals.
+    /// Shared by the live listener and a restore's pages: a message is a
+    /// message either way.
+    private fun storeMessages(result: RunReturn) {
+        val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
+        if (rows.isEmpty()) return
+        storage.insertMessages(rows)
+        for (row in rows) {
+            if (row.fromMe) continue
+            val hint = contactHint(row) ?: continue
+            storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
+        }
+    }
+
+    /// Re-derives `contact` rows (tribes especially, and any wrongly-mixed
+    /// alias/photo a tribe's own messages left behind) from `message`
+    /// history that was stored before `contactHint` knew about tribes at
+    /// all — once per account, gated by `Setting.CONTACTS_BACKFILLED`. A
+    /// restore made from here on needs no backfill, it goes through the
+    /// current `contactHint` as it happens.
+    private fun backfillContactsIfNeeded() {
+        if (storage.value(Setting.CONTACTS_BACKFILLED) == "1") return
+        for (row in storage.messageSenders()) {
+            if (row.fromMe) continue
+            val hint = contactHint(row) ?: continue
+            storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
+        }
+        storage.apply(Storage.Commit(settings = mapOf(Setting.CONTACTS_BACKFILLED to "1")))
     }
 
     /// Sends one ask (under the lock, like any `run`) and waits, outside
@@ -277,6 +324,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         if (started) return
         started = true
         scope.launch {
+            backfillContactsIfNeeded()
             connectionStateFlow.value = ConnectionState.Connecting
             try {
                 val config = ServerConfig.fetch(network)
@@ -345,9 +393,8 @@ class Engine(mnemonic: String, val storage: Storage) {
             val result = askAndAwait(historyWaitMs, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
             } ?: break
-            val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
-            if (rows.isNotEmpty()) storage.insertMessages(rows)
-            for (row in rows) if (!row.fromMe) contactHint(row)?.let { storage.upsertContact(it.pubkey, it.alias, it.photoUrl) }
+            // Already stored: the same listener that delivered this result
+            // to askAndAwait ran it through `storeMessages` first.
             if (phase == HistoryPhase.CONTACTS) {
                 storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
             }
@@ -398,19 +445,40 @@ class Engine(mnemonic: String, val storage: Storage) {
         )
     }
 
-    /// A contact's name/photo, if `row` is their own message naming
-    /// themself — the same shape PeelCore's `contact` v2 migration derives
-    /// from the message table (`sender.pubkey == chat`).
+    /// What `row` reveals about the chat it's filed under. Ported from
+    /// PeelCore's `Engine+Tribes.swift` (`discoveredTribe`): a tribes
+    /// server, not a person, sets `host` on what it forwards — "Set by a
+    /// tribes server on the joins it forwards" is that file's own comment
+    /// on the field — so its mere presence is the signal, nobody else ever
+    /// sends one. `host` has to be checked *first*: a tribe's own messages
+    /// also carry `sender.pubkey == chat` (every member's message does,
+    /// since the tribe forwards them all under its own channel identity —
+    /// confirmed on a real restore: one chat, messages from "Tom_T", then
+    /// "Paul", then others, all sharing one pubkey), so without checking
+    /// `host` first this read a tribe exactly like a direct contact and
+    /// took whichever member happened to post last as if it were the
+    /// tribe's own name and photo. A tribe's *real* name and photo are not
+    /// in any message at all — PeelCore reads those from the tribes server
+    /// itself (`TribeInfo.fetch`, its own HTTP call, not built here yet) —
+    /// so a tribe shows by its pubkey (`ConversationRow.name`'s fallback)
+    /// until that exists.
     private fun contactHint(row: MessageRow): ContactRow? {
         val sender = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
-        val pubkey = sender.optString("pubkey").takeIf { it.isNotEmpty() } ?: return null
-        if (pubkey != row.chat) return null
-        return ContactRow(
-            pubkey = pubkey,
-            alias = sender.optString("alias").takeIf { it.isNotEmpty() },
-            photoUrl = sender.optString("photo_url").takeIf { it.isNotEmpty() },
-            ready = false,
-        )
+        val host = sender.optString("host").takeIf { it.isNotEmpty() }
+        if (host != null) {
+            return ContactRow(pubkey = row.chat, alias = null, photoUrl = null, isTribe = true, ready = true)
+        }
+        val pubkey = sender.optString("pubkey").takeIf { it.isNotEmpty() }
+        if (pubkey == row.chat) {
+            return ContactRow(
+                pubkey = row.chat,
+                alias = sender.optString("alias").takeIf { it.isNotEmpty() },
+                photoUrl = sender.optString("photo_url").takeIf { it.isNotEmpty() },
+                isTribe = false,
+                ready = false,
+            )
+        }
+        return null
     }
 
     private fun parseCounts(json: String?): MessageCounts? {

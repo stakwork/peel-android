@@ -24,6 +24,10 @@ data class PeelPalette(
     val buttonText: Color,
     /// PrimaryRed: only for actions that destroy something.
     val destructive: Color,
+    /// PrimaryGreen: connected, and a message the server confirmed.
+    val confirmed: Color,
+    /// Needs a look: not connected, a retry pending.
+    val attention: Color,
 )
 
 private val LightPeelPalette = PeelPalette(
@@ -37,6 +41,8 @@ private val LightPeelPalette = PeelPalette(
     button = Color(0xFF3F68E0),
     buttonText = Color(0xFFFFFFFF),
     destructive = Color(0xFFED7474),
+    confirmed = Color(0xFF49C998),
+    attention = Color(0xFFA86400),
 )
 
 private val DarkPeelPalette = PeelPalette(
@@ -50,6 +56,8 @@ private val DarkPeelPalette = PeelPalette(
     button = Color(0xFF618AFF),
     buttonText = Color(0xFF0E1620),
     destructive = Color(0xFFED7474),
+    confirmed = Color(0xFF49C998),
+    attention = Color(0xFFFFBC58),
 )
 
 val LocalPeelPalette = compositionLocalOf { LightPeelPalette }

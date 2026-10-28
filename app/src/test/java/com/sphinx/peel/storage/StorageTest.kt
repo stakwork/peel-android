@@ -87,4 +87,76 @@ class StorageTest {
         storage.apply(Storage.Commit(settings = mapOf(Setting.ALIAS to "Ann")))
         assertEquals("Ann", storage.value(Setting.ALIAS))
     }
+
+    @Test
+    fun `conversations lists only ready chats, newest message first`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.upsertContact("bob", "Bob", null, isTribe = false, ready = false) // not ready: excluded
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "1", serverIndex = 1, type = 0, chat = "alice", fromMe = false, sender = null, body = "hi", msat = null, timestamp = 100, tag = null, paymentHash = null),
+                MessageRow(uuid = "2", serverIndex = 2, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 200, tag = null, paymentHash = null),
+            ),
+        )
+
+        val conversations = storage.conversations()
+
+        assertEquals(1, conversations.size)
+        assertEquals("alice", conversations[0].chat)
+        assertEquals("hey", conversations[0].lastContent)
+        assertEquals(200L, conversations[0].lastTimestamp)
+        assertEquals(true, conversations[0].lastFromMe)
+    }
+
+    @Test
+    fun `a chat with no messages yet still shows, with nothing to preview`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+
+        val conversations = storage.conversations()
+
+        assertEquals(1, conversations.size)
+        assertNull(conversations[0].lastContent)
+        assertNull(conversations[0].lastTimestamp)
+    }
+
+    @Test
+    fun `upsertContact never overwrites a known field with an unknown one`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", "https://example.com/a.jpg", isTribe = false, ready = true)
+        storage.upsertContact("alice", null, null, isTribe = false)
+
+        val conversations = storage.conversations()
+
+        assertEquals("Alice", conversations[0].alias)
+        assertEquals("https://example.com/a.jpg", conversations[0].photoUrl)
+        assertEquals(true, conversations[0].isTribe == false) // unchanged, still a direct contact
+    }
+
+    @Test
+    fun `a tribe's name and photo never come from a message, even one with no host`() {
+        // A real restore has tribe messages that don't carry the `host`
+        // field (delivery/control messages) — a later one of those must
+        // not attribute its own `pubkey == chat` match's alias/photo to
+        // the tribe, the way it would for a genuine direct contact.
+        val storage = newStorage()
+        storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)
+        storage.upsertContact("tribe1", alias = "Paul", photoUrl = "https://example.com/paul.jpg", isTribe = false)
+
+        val conversations = storage.conversations()
+
+        assertNull(conversations[0].alias)
+        assertNull(conversations[0].photoUrl)
+        assertEquals(true, conversations[0].isTribe)
+    }
+
+    @Test
+    fun `ConversationRow falls back to the chat's own key when there is no alias`() {
+        val row = ConversationRow(
+            chat = "03abcdefabcdefabcdef", alias = null, photoUrl = null, isTribe = false,
+            lastContent = null, lastTimestamp = null, lastFromMe = null,
+        )
+        assertEquals("03abcdefabcd", row.name)
+    }
 }

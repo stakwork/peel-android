@@ -1,4 +1,4 @@
-package com.sphinx.peel.ui.home
+package com.sphinx.peel.ui.you
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,17 +33,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/// Stands in for the real chat list until there is somewhere to show what
-/// a connection fetches (the `contact`/`message` tables exist now, since
-/// `Engine.runRestore` fills them, but nothing reads them into a list
-/// yet). Proves the account is real, not just stored: it opens the same
-/// `Engine` onboarding (or the lock screen) already started, and shows
-/// what it knows — the account's own key, and whatever
-/// `Engine.connectionState` reports. There is no "Connect" button any
-/// more: by the time this screen can appear, `Engine.start()` has already
-/// been called once, wherever the engine was made.
+/// The You tab: this account's own key, whether it's connected, and
+/// "Forget this account". Everything PeelCore's real You tab has beyond
+/// that — the profile card, settings, balance — is further out; this is
+/// what `HomeScreen` was before the dashboard existed, moved here rather
+/// than rewritten, since this is still exactly what it shows.
 @Composable
-fun HomeScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
+fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
     var confirmingForget by remember { mutableStateOf(false) }
@@ -90,14 +86,6 @@ fun HomeScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onFor
             )
         }
 
-        Spacer(Modifier.height(32.dp))
-        Text(
-            "No messages or contacts to show yet: restoring fills the database, " +
-                "but nothing reads it into a list here yet.",
-            color = Theme.colors.secondaryText,
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-        )
         Spacer(Modifier.height(40.dp))
         Button(
             onClick = { confirmingForget = true },
