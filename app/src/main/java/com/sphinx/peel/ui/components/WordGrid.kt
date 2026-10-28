@@ -10,14 +10,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
@@ -26,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -72,13 +72,35 @@ fun NumberedWords(
     }
 }
 
-private val wordFieldColors
-    @Composable get() = TextFieldDefaults.colors(
-        focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
-        unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
-        focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+/// One word's input: no Material chrome of its own (no background, no
+/// forced minimum height) — `NumberedWords`' row already draws the field's
+/// background and rounded corner, and a plain `TextField` here was tall
+/// enough on its own to push text past the row's 48dp height and clip
+/// descenders (g, p, y) against it.
+@Composable
+private fun WordField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    imeAction: ImeAction,
+    focusRequester: FocusRequester,
+    keyboardActions: KeyboardActions,
+    modifier: Modifier = Modifier,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.focusRequester(focusRequester),
+        singleLine = true,
+        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Default, color = Theme.colors.text),
+        cursorBrush = SolidColor(Theme.colors.accent),
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+            imeAction = imeAction,
+        ),
+        keyboardActions = keyboardActions,
     )
+}
 
 /// The twelve words, typed or pasted in. Ported from PeelCore's
 /// PhoneControls.swift (`WordEntry`): a paste button fills every box at
@@ -99,7 +121,7 @@ fun WordEntry(words: List<String>, onWordsChange: (List<String>) -> Unit, modifi
         }) { Text("Paste") }
 
         NumberedWords(places = words.indices.toList()) { index ->
-            TextField(
+            WordField(
                 value = words[index],
                 onValueChange = { text ->
                     val parts = Account.wordsIn(text)
@@ -114,20 +136,12 @@ fun WordEntry(words: List<String>, onWordsChange: (List<String>) -> Unit, modifi
                         focusRequesters[index + parts.size].requestFocus()
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequesters[index]),
-                singleLine = true,
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Default),
-                colors = wordFieldColors,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                    imeAction = if (index == words.size - 1) ImeAction.Done else ImeAction.Next,
-                ),
+                imeAction = if (index == words.size - 1) ImeAction.Done else ImeAction.Next,
+                focusRequester = focusRequesters[index],
                 keyboardActions = KeyboardActions(onNext = {
                     if (index + 1 < focusRequesters.size) focusRequesters[index + 1].requestFocus()
                 }),
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }
@@ -151,23 +165,16 @@ fun WordCheckBoxes(check: WordCheck, onSubmit: () -> Unit, modifier: Modifier = 
     val focusRequesters = remember(check) { List(check.positions.size) { FocusRequester() } }
 
     NumberedWords(places = check.positions, modifier = modifier) { index ->
-        TextField(
+        WordField(
             value = check.answers[index],
             onValueChange = { check.answers[index] = Account.wordsIn(it).firstOrNull() ?: it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(focusRequesters[index]),
-            singleLine = true,
-            colors = wordFieldColors,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                imeAction = if (index == check.positions.size - 1) ImeAction.Done else ImeAction.Next,
-            ),
+            imeAction = if (index == check.positions.size - 1) ImeAction.Done else ImeAction.Next,
+            focusRequester = focusRequesters[index],
             keyboardActions = KeyboardActions(
                 onNext = { if (index + 1 < focusRequesters.size) focusRequesters[index + 1].requestFocus() },
                 onDone = { onSubmit() },
             ),
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
