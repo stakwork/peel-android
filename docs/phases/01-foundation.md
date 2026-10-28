@@ -111,6 +111,15 @@ freshly created account inherit the previous one's `coreState` — a
 different seed instead of none at all. `Storage.deleteAccount` (close the
 helper, `Context.deleteDatabase`) and a test for it closes that.
 
+**Clipped descenders in the recovery-word boxes.** Found on a real
+device, restoring a real account: letters with descenders (g, p, y) were
+cut off at the bottom of each numbered word box. Material3's `TextField`
+carries its own ~56dp minimum height and internal content padding, which
+didn't fit inside the 48dp row `NumberedWords` already draws a background
+and corner radius for. Replaced it with a bare `BasicTextField` (no
+chrome of its own) behind a small shared `WordField` helper, used by both
+`WordEntry` and `WordCheckBoxes`.
+
 ## Done
 
 - Gradle project: `app` (Compose UI) and `sphinxrs` (generated UniFFI
@@ -160,3 +169,9 @@ helper, `Context.deleteDatabase`) and a test for it closes that.
   account" has to clear both on purpose — nothing enforces that they stay
   in sync, and leaving one behind doesn't fail loudly, it just quietly
   hands the next account someone else's `coreState`.
+- Material3's `TextField` is not a plain text box: it has its own
+  minimum height and padding baked in for a label/placeholder layout it
+  isn't using here, and that's invisible until a real device clips real
+  text against a container sized for something shorter. `BasicTextField`
+  inside an already-styled container avoids fighting a second set of
+  chrome for one that was never wanted.

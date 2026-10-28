@@ -16,6 +16,14 @@ the broker sends back through the core's `handle`, stopping early once
 that calls it and shows one of: connecting, registered, connected without
 a registration answer yet, or the error.
 
+**Verified for real**, not just compiled: on a Pixel running GrapheneOS,
+restoring an existing account from its twelve words (one already in use
+on the Mac/iPhone apps, with zero local history on this device) and
+tapping "Connect to server" reached production and came back "Connected
+and registered with the server" — the config fetch, the TLS/MQTT login,
+`initialSetup`'s register, and the server's answer all round-tripped for
+an account this device had never seen before.
+
 **Open:** this is "does the account reach the server and get registered,"
 not the online pipeline `peel`'s `Engine.cameOnline()` runs next —
 `fetchPings`, read/mute sync, and (for a restored account) the
@@ -74,6 +82,15 @@ the register, and watch for up to ten seconds for *anything* that, once
 run through `handle`, sets `my_scid`/`server_pubkey` in local state. If
 that happens, the account that owns these twelve words is, right now, a
 real account the production server recognizes.
+
+**Confirmed against production, on real hardware.** Restored an account
+already in use on `peel`'s Mac/iPhone apps onto a Pixel running
+GrapheneOS, with nothing local but the twelve words — no prior
+`coreState` on this device at all. "Connect to server" came back
+"Connected and registered with the server" on the first try: the config
+fetch, the TLS handshake, the signed login, and the register round trip
+through `initialSetup` all worked end to end against the real broker, not
+a mock.
 
 ## Done
 
