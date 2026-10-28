@@ -142,6 +142,11 @@ private fun RestoreLineRow(line: Line) {
                     modifier = Modifier.fillMaxWidth(),
                     color = Theme.colors.accent,
                     trackColor = Theme.colors.divider,
+                    // Material3's default draws a small dot at the
+                    // track's end (its "stop indicator") regardless of
+                    // actual progress; this bar has nothing at the end
+                    // to mark.
+                    drawStopIndicator = {},
                 )
             }
         }
