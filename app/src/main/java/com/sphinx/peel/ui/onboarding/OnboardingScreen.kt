@@ -45,7 +45,7 @@ import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.NumberedWords
-import com.sphinx.peel.ui.components.PinPad
+import com.sphinx.peel.ui.components.PinBoxes
 import com.sphinx.peel.ui.components.WordCheck
 import com.sphinx.peel.ui.components.WordCheckBoxes
 import com.sphinx.peel.ui.components.WordEntry
@@ -193,7 +193,7 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             totalSteps = 2,
             onBack = ::back,
         ) {
-            PinPad(
+            PinBoxes(
                 pin = pin,
                 onPinChange = { pin = it },
                 onComplete = { step = Step.ConfirmPin },
@@ -209,7 +209,7 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             totalSteps = 2,
             onBack = ::back,
         ) {
-            PinPad(
+            PinBoxes(
                 pin = confirmation,
                 onPinChange = { confirmation = it },
                 onComplete = { finishPin() },

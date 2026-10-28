@@ -120,6 +120,21 @@ and corner radius for. Replaced it with a bare `BasicTextField` (no
 chrome of its own) behind a small shared `WordField` helper, used by both
 `WordEntry` and `WordCheckBoxes`.
 
+**The wrong PIN screen, in two ways.** Two separate problems, found from
+actually looking at a device rather than the diff. First, onboarding's
+PIN step used the full drawn `PinPad` (the lock screen's circular
+keypad) with no width modifier, so it wrapped its content and sat at the
+left edge instead of centering — the second, deeper problem: `PinPad`
+never belonged in onboarding at all. Reading the actual Swift source
+found two distinct components where this port had used one — `PinPad.swift`'s
+doc comment says plainly it's "the PIN as the lock screen asks for
+it... styled like the system's passcode keys," while onboarding uses
+`PinBoxes` (`PhoneControls.swift`): an invisible real text field wired
+to the OS's own number-pad keyboard, under six boxes that just show a
+dot once a digit lands. Built `PinBoxes` to match and swapped onboarding
+to it; `PinPad` now stays exactly where it was always meant to be, the
+lock screen.
+
 ## Done
 
 - Gradle project: `app` (Compose UI) and `sphinxrs` (generated UniFFI
@@ -131,7 +146,10 @@ chrome of its own) behind a small shared `WordField` helper, used by both
 - `account/SecretStore.kt`: `PinBox` (PBKDF2 + AES-GCM, `peel`'s
   Keychain blob format) and a file-backed `SecretStore`.
 - `ui/onboarding`, `ui/lock`, `ui/home`: new account, restore, PIN
-  lock, an account screen that opens a real `Engine`.
+  lock, an account screen that opens a real `Engine`. Onboarding's PIN
+  step uses `ui/components/PinPad.kt`'s `PinBoxes` (system keyboard,
+  boxed dots); the lock screen keeps `PinPad`'s drawn keypad — the same
+  split PeelCore's own `PinBoxes`/`PinPad` make.
 - `storage/Storage.kt`, `storage/Setting.kt`: `coreState` and `setting`,
   one SQLite file per account, atomic `Commit`, `deleteAccount`.
 - `engine/StateCodec.kt`, `engine/UniqueClock.kt`, `engine/Engine.kt`: the
@@ -175,3 +193,8 @@ chrome of its own) behind a small shared `WordField` helper, used by both
   text against a container sized for something shorter. `BasicTextField`
   inside an already-styled container avoids fighting a second set of
   chrome for one that was never wanted.
+- A porting note that later turned out wrong ("ported from PinPad.swift")
+  is worth re-checking against the actual current source the moment
+  something about the result looks off, not patching around — the real
+  problem here wasn't sizing, it was having copied the wrong component
+  for the screen in the first place.
