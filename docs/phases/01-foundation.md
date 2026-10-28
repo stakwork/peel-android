@@ -18,11 +18,13 @@ and `Storage`, so a new account on the same device starts from nothing.
 `Transport` (MQTT, HiveMQ client) exists and compiles against the real
 library but has never connected to anything.
 
-**Open:** no server connection — `Engine` makes no call that needs one, so
-`Transport` is unexercised. No chat UI, no `message`/`contact`/`tribe`
-tables. `Account` and `Engine` have no unit tests: both need the native
-`sphinxrs` library, and there is no host (macOS) build of it for a plain
-JVM test (even under Robolectric) to load, only the Android `.so`s.
+**Open (as of this phase; see [phases/02-connecting.md](02-connecting.md)
+for what changed next):** no server connection — `Engine` makes no call
+that needs one, so `Transport` is unexercised. No chat UI, no
+`message`/`contact`/`tribe` tables. `Account` and `Engine` have no unit
+tests: both need the native `sphinxrs` library, and there is no host
+(macOS) build of it for a plain JVM test (even under Robolectric) to
+load, only the Android `.so`s.
 
 **Decided:** `SQLiteOpenHelper` over Room/SQLDelight for `Storage` — two
 key-value tables don't need an ORM, and it avoids pulling KSP into AGP 9's

@@ -1,6 +1,6 @@
 # Peel for Android
 
-Last updated 2026-10-27. This is the architecture and the phase index, the
+Last updated 2026-10-28. This is the architecture and the phase index, the
 same role `peel`'s `docs/PLAN.md` plays for Mac and iPhone. Each phase has
 its own file under `docs/phases/` with what is done, what is open and what
 is decided; update it when you finish something, same rule as there.
@@ -34,20 +34,24 @@ Read `docs/VISION.md` next, then the phase below.
                │
 ┌──────────────▼──────────────────────────────────────────┐
 │ app/engine/Engine — runs core calls, commits the state   │
-│ they return; the network work they ask for is not        │
-│ performed yet (no engine call needs it so far)            │
+│ they return; `connect` additionally logs in and runs the  │
+│ network work a result asks for (register, subscribe,      │
+│ publish) — not yet the online pipeline past that (no      │
+│ message/contact sync, no reconnect)                        │
 │       │                                                   │
 │       ├── app/storage/Storage (SQLite): coreState,        │
 │       │   setting                                         │
-│       └── app/engine/Transport (MQTT, HiveMQ client):      │
-│           built, never connected                          │
+│       ├── app/engine/Transport (MQTT, HiveMQ client):      │
+│       │   connects for real, one attempt at a time         │
+│       └── app/engine/ServerConfig: the broker address,     │
+│           fetched live, not hardcoded                      │
 └──────────────┬────────────────────────────────────────────┘
                │ sphinxrs (generated Kotlin bindings, UniFFI)
 ┌──────────────▼──────────────────────────────────────────┐
 │ Rust core: stakwork/sphinx via sphinx-rs/sphinx-ffi      │
 │ keys, onions, key exchange, tribes, invoices, routing    │
 └─────────────────────────────────────────────────────────┘
-               │ MQTT over TLS (not connected yet)
+               │ MQTT over TLS
         broker + mixer (the LSP), tribes server, memes,
         LiveKit, hub (push), config endpoint
 ```
@@ -57,10 +61,12 @@ Read `docs/VISION.md` next, then the phase below.
 Same contract `peel`'s PLAN.md describes: the core is a library of pure
 functions, each taking the seed, a unique time and the whole state (a
 MessagePack map), returning what changed — state to save or delete,
-topics to subscribe, payloads to publish, messages that arrived. Android's
-`Engine.run` is the whole of it so far: run the call, commit the returned
-state before anything else can run. It does not yet perform the network
-work a result asks for, because no engine call wired up yet asks for any.
+topics to subscribe, payloads to publish, messages that arrived.
+`Engine.run` commits what a call returns before anything else can run;
+`Engine.connect` additionally performs the network half of one call's
+result (subscribe, publish, and whatever answers come back over
+`Transport`) — still only for `initialSetup`, the one call wired up so
+far.
 
 Reference implementations, in order of authority:
 
@@ -116,6 +122,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | # | Phase | Status | File |
 |---|-------|--------|------|
 | 1 | Foundation: project scaffold, the sphinxrs FFI bridge, onboarding, PIN-sealed storage, the Storage/Engine/Transport skeleton | built; see the file for what's open | [phases/01-foundation.md](phases/01-foundation.md) |
+| 2 | Connecting: `Engine.connect`, the config-fetched broker address, a real register attempt against production | built; see the file for what's open | [phases/02-connecting.md](phases/02-connecting.md) |
 
 ## Open questions
 

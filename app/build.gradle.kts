@@ -38,6 +38,15 @@ android {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    // Robolectric's sandboxed classloader (ServerConfigTest, StorageTest)
+    // can leave the JVM's java.security provider list in a state that
+    // breaks a later, plain test in the same fork — PinBoxTest's PBKDF2
+    // started throwing NoSuchAlgorithmException only once a Robolectric
+    // test ran first in the same JVM. One fork per test class avoids it.
+    forkEvery = 1
+}
+
 dependencies {
     implementation(project(":sphinxrs"))
     implementation(libs.hivemq.mqtt.client)
