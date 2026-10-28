@@ -71,6 +71,10 @@ result (subscribe, publish, and whatever answers come back over
 — `getMsgsCounts`, `fetchFirstMsgsPerKey`, `fetchMsgsBatch` — committing
 each one's state the same way `run` always has, plus (new in Phase 3)
 storing the messages and contacts each one's `RunReturn` carries.
+`Engine.sendMessage` (Phase 5) is the first call this account originates
+rather than only receives: still through `run`, so it still
+commits+publishes under the one lock, but its own row is built by hand
+from what was just sent rather than read back out of the result.
 
 Reference implementations, in order of authority:
 
@@ -144,6 +148,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 2 | Connecting: `Engine.connect`, the config-fetched broker address, a real register attempt against production | built; see the file for what's open | [phases/02-connecting.md](phases/02-connecting.md) |
 | 3 | Restoring: `contact`/`message` tables, `Engine.start`'s contacts-then-messages pipeline, the restore screens | built; see the file for what's open | [phases/03-restoring.md](phases/03-restoring.md) |
 | 4 | Dashboard: live message storage, tribe detection, the Chats list and tab bar | built; see the file for what's open | [phases/04-dashboard.md](phases/04-dashboard.md) |
+| 5 | Conversation: the chat screen, grouped message rows, sending a text message | built; see the file for what's open | [phases/05-conversation.md](phases/05-conversation.md) |
 
 ## Open questions
 

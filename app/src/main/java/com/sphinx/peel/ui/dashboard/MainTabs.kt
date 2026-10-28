@@ -45,17 +45,26 @@ private enum class MainTab { CHATS, PAYMENTS, YOU, SEARCH }
 @Composable
 fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
     var tab by remember { mutableStateOf(MainTab.CHATS) }
+    // An open chat replaces the whole tab area, bar included — PeelCore's
+    // `ConversationScreen` hides the tab bar the same way; Back returns to
+    // whichever tab was open, not necessarily Chats.
+    var openChat by remember { mutableStateOf<String?>(null) }
 
     Column(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f)) {
-            when (tab) {
-                MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize())
-                MainTab.PAYMENTS -> NotBuiltYet("Payments")
-                MainTab.YOU -> YouScreen(engine, storage, secretStore, onForgotten)
-                MainTab.SEARCH -> NotBuiltYet("Search")
+        val chat = openChat
+        if (chat != null) {
+            ConversationScreen(engine, storage, chat, onBack = { openChat = null })
+        } else {
+            Box(Modifier.weight(1f)) {
+                when (tab) {
+                    MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
+                    MainTab.PAYMENTS -> NotBuiltYet("Payments")
+                    MainTab.YOU -> YouScreen(engine, storage, secretStore, onForgotten)
+                    MainTab.SEARCH -> NotBuiltYet("Search")
+                }
             }
+            BottomBar(tab) { tab = it }
         }
-        BottomBar(tab) { tab = it }
     }
 }
 

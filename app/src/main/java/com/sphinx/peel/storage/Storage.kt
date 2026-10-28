@@ -51,6 +51,11 @@ data class MessageRow(
     val timestamp: Long?,
     val tag: String?,
     val paymentHash: String?,
+    /// The `message` table's own row id — 0 for a row not read from it yet
+    /// (one just sent, or built by a test), never a real stored id: SQLite's
+    /// own `AUTOINCREMENT` starts at 1. A stable key for a message list; see
+    /// `messages(in:)`.
+    val id: Long = 0,
 )
 
 /// Everything Peel keeps on disk for one account: `coreState` (opaque
@@ -155,6 +160,39 @@ class Storage(context: Context, account: String = "default") {
                     )
                 }
             }
+        return rows
+    }
+
+    /// One chat's messages, oldest first — what a conversation screen
+    /// shows. Not paged yet: fine for how little history a real account
+    /// here has per chat so far, revisit once a busy tribe makes "load
+    /// more" worth building.
+    fun messages(chat: String): List<MessageRow> {
+        val rows = mutableListOf<MessageRow>()
+        helper.readableDatabase.query(
+            "message",
+            arrayOf("id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag", "paymentHash"),
+            "chat = ?", arrayOf(chat), null, null, "timestamp ASC, id ASC",
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows.add(
+                    MessageRow(
+                        id = cursor.getLong(0),
+                        uuid = cursor.getString(1),
+                        serverIndex = if (cursor.isNull(2)) null else cursor.getLong(2),
+                        type = cursor.getInt(3),
+                        chat = cursor.getString(4),
+                        fromMe = cursor.getInt(5) != 0,
+                        sender = cursor.getString(6),
+                        body = cursor.getString(7),
+                        msat = if (cursor.isNull(8)) null else cursor.getLong(8),
+                        timestamp = if (cursor.isNull(9)) null else cursor.getLong(9),
+                        tag = cursor.getString(10),
+                        paymentHash = cursor.getString(11),
+                    ),
+                )
+            }
+        }
         return rows
     }
 

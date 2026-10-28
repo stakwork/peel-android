@@ -36,6 +36,7 @@ import uniffi.sphinxrs.initialSetup as coreInitialSetup
 import uniffi.sphinxrs.listContacts as coreListContacts
 import uniffi.sphinxrs.pubkeyFromSeed
 import uniffi.sphinxrs.rootSignMs as coreRootSignMs
+import uniffi.sphinxrs.send as coreSend
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
 import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 
@@ -265,6 +266,46 @@ class Engine(mnemonic: String, val storage: Storage) {
             val hint = contactHint(row) ?: continue
             storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
         }
+    }
+
+    /// Sends a plain text message to a contact or a tribe. Ported from
+    /// PeelCore's `Engine+Messages.swift` (`sendText`/`deliver`), trimmed
+    /// to one message with no reply/thread, device-request or
+    /// payment-threshold handling — and no price: every send goes at 0
+    /// msat regardless of what a tribe actually charges, since nothing
+    /// here reads a tribe's price yet (`TribeInfo.pricePerMessage`, not
+    /// fetched); a tribe that charges for messages may refuse this until
+    /// that exists.
+    ///
+    /// Stores the sent row itself, not through `storeMessages`: `send`'s
+    /// own `RunReturn.msgs` entry is confirmation, not a message to run
+    /// through `contactHint` — PeelCore's own `deliver` reads only its
+    /// `uuid`/`tag`/`paymentHash` too, building the rest of the row from
+    /// what it just sent (the body, the chat, now), not from that entry.
+    suspend fun sendMessage(chat: String, text: String, isTribe: Boolean): MessageRow {
+        check(transport != null) { "Not connected." }
+        val body = JSONObject().put("content", text).toString()
+        val myAlias = storage.value(Setting.ALIAS) ?: ""
+        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val result = run { time, stateBytes ->
+            coreSend(seed, time, chat, 0u, body, stateBytes, myAlias, myPhoto, 0u, isTribe)
+        }
+        val sent = result.msgs.firstOrNull()
+        val row = MessageRow(
+            uuid = sent?.uuid,
+            serverIndex = null,
+            type = 0,
+            chat = chat,
+            fromMe = true,
+            sender = null,
+            body = body,
+            msat = null,
+            timestamp = System.currentTimeMillis(),
+            tag = sent?.tag,
+            paymentHash = sent?.paymentHash,
+        )
+        storage.insertMessages(listOf(row))
+        return row
     }
 
     /// Re-derives `contact` rows (tribes especially, and any wrongly-mixed

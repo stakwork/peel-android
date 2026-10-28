@@ -110,6 +110,24 @@ class StorageTest {
     }
 
     @Test
+    fun `messages returns one chat's rows, oldest first, leaving other chats out`() {
+        val storage = newStorage()
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "1", serverIndex = 1, type = 0, chat = "alice", fromMe = false, sender = null, body = "hi", msat = null, timestamp = 200, tag = null, paymentHash = null),
+                MessageRow(uuid = "2", serverIndex = 2, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 100, tag = null, paymentHash = null),
+                MessageRow(uuid = "3", serverIndex = 3, type = 0, chat = "bob", fromMe = false, sender = null, body = "yo", msat = null, timestamp = 150, tag = null, paymentHash = null),
+            ),
+        )
+
+        val messages = storage.messages("alice")
+
+        assertEquals(2, messages.size)
+        assertEquals("hey", messages[0].body)
+        assertEquals("hi", messages[1].body)
+    }
+
+    @Test
     fun `a chat with no messages yet still shows, with nothing to preview`() {
         val storage = newStorage()
         storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)

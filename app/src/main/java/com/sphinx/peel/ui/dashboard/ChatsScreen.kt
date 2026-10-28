@@ -55,7 +55,7 @@ import kotlinx.coroutines.withContext
 /// each ending in its actions. No Unread section and no search yet — see
 /// `docs/phases/04-dashboard.md` for what that needs first.
 @Composable
-fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier) {
+fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
@@ -109,7 +109,9 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 20.dp)) {
                 item { SectionHeader("Tribes", expanded = tribesOpen) { tribesOpen = !tribesOpen } }
                 if (tribesOpen) {
-                    items(sections.tribes, key = { "tribe-${it.chat}" }) { ChatRow(it) }
+                    items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
+                        ChatRow(conversation) { onOpenChat(conversation.chat) }
+                    }
                     sections.allTribesCount?.let { count ->
                         item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
                     }
@@ -121,8 +123,10 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier)
 
                 item { SectionHeader("Direct messages", expanded = directOpen) { directOpen = !directOpen } }
                 if (directOpen) {
-                    agentConversation?.let { item(key = "agent") { AgentChatRow() } }
-                    items(sections.direct, key = { "direct-${it.chat}" }) { ChatRow(it) }
+                    agentConversation?.let { item(key = "agent") { AgentChatRow { onOpenChat(engine.agentPubkey) } } }
+                    items(sections.direct, key = { "direct-${it.chat}" }) { conversation ->
+                        ChatRow(conversation) { onOpenChat(conversation.chat) }
+                    }
                     sections.allDirectCount?.let { count ->
                         item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
                     }
@@ -200,8 +204,11 @@ private fun SectionHeader(title: String, expanded: Boolean, onToggle: () -> Unit
 }
 
 @Composable
-private fun ChatRow(conversation: ConversationRow) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         ConversationAvatar(conversation, size = 44.dp)
         Spacer(Modifier.width(12.dp))
         Text(
@@ -219,8 +226,11 @@ private fun ChatRow(conversation: ConversationRow) {
 /// stored alias/photo would otherwise get, and the "AGENT" tag beside its
 /// name — PeelCore's `ChatListRow(isAgent: true)`.
 @Composable
-private fun AgentChatRow() {
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun AgentChatRow(onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         PeelLogo(size = 44.dp)
         Spacer(Modifier.width(12.dp))
         Text("Peel", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
