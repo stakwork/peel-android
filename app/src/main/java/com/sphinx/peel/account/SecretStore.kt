@@ -5,9 +5,8 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.security.SecureRandom
 import javax.crypto.Cipher
-import javax.crypto.SecretKeyFactory
+import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 /// Where an account's twelve words live, locked with the account's PIN.
@@ -39,7 +38,7 @@ internal object PinBox {
     /// About 0.4 s on an M-series Mac; this phone's cost will differ, but
     /// the derivation is meant to be slow on purpose. Fixed for this
     /// version: a blob claiming another count is refused rather than obeyed.
-    private const val ITERATIONS = 2_500_000
+    internal const val ITERATIONS = 2_500_000
 
     private val random = SecureRandom()
 
@@ -85,11 +84,32 @@ internal object PinBox {
         }
     }
 
-    private fun derive(pin: String, salt: ByteArray): SecretKeySpec {
-        val spec = PBEKeySpec(pin.toCharArray(), salt, ITERATIONS, 256)
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val keyBytes = factory.generateSecret(spec).encoded
-        return SecretKeySpec(keyBytes, "AES")
+    /// RFC 8018 PBKDF2-HMAC-SHA256, by hand, rather than
+    /// `SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")`: Android's
+    /// own implementation of that algorithm name is measured several
+    /// times slower than iOS's CommonCrypto for the same iteration count
+    /// (a 6-second unlock here against a sub-second one there, for the
+    /// identical 2,500,000) — object overhead inside its per-iteration
+    /// loop, not anything about the algorithm itself. PBKDF2's output is
+    /// fixed by the spec, not the provider, so this produces the exact
+    /// same key, only without that overhead. PINs here are always six
+    /// ASCII digits, so the password-to-bytes step has no encoding
+    /// ambiguity to worry about (UTF-8, Latin-1 and a straight char cast
+    /// all agree on the digits '0'–'9').
+    internal fun derive(pin: String, salt: ByteArray): SecretKeySpec {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(pin.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val hashLength = mac.macLength
+        val block = ByteArray(salt.size + 4)
+        salt.copyInto(block)
+        block[block.size - 1] = 1 // one 256-bit block is enough for a 256-bit key
+        var u = mac.doFinal(block)
+        val result = u.copyOf()
+        for (iteration in 1 until ITERATIONS) {
+            u = mac.doFinal(u)
+            for (i in 0 until hashLength) result[i] = (result[i].toInt() xor u[i].toInt()).toByte()
+        }
+        return SecretKeySpec(result, "AES")
     }
 }
 

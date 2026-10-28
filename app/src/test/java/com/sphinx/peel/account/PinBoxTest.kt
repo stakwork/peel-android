@@ -1,5 +1,8 @@
 package com.sphinx.peel.account
 
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
@@ -39,5 +42,16 @@ class PinBoxTest {
         val sealed = PinBox.seal(mnemonic, "123456")
         sealed[sealed.size - 1] = (sealed[sealed.size - 1].toInt() xor 1).toByte()
         assertThrows(SecretStoreFailure.WrongPin::class.java) { PinBox.open(sealed, "123456") }
+    }
+
+    @Test
+    fun `derive matches the standard PBKDF2WithHmacSHA256 provider`() {
+        // PinBox.derive is hand-rolled for speed (SecretStore.kt's
+        // comment explains why); this is what proves it still computes
+        // the one correct RFC 8018 answer, not just "a" key.
+        val salt = ByteArray(16) { it.toByte() }
+        val spec = PBEKeySpec("123456".toCharArray(), salt, PinBox.ITERATIONS, 256)
+        val expected = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        assertArrayEquals(expected, PinBox.derive("123456", salt).encoded)
     }
 }

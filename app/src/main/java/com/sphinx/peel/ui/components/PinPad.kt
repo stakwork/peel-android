@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -216,5 +217,9 @@ fun PinPrompt(
             Text(detail ?: " ", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
         }
         PinPad(pin = pin, onPinChange = onPinChange, onComplete = onComplete, enabled = !working)
+        // PBKDF2 at a deliberately slow iteration count (SecretStore.kt)
+        // runs on every unlock; with no indicator here it just looked
+        // frozen for however long that takes on this device.
+        if (working) CircularProgressIndicator(color = Theme.colors.accent)
     }
 }

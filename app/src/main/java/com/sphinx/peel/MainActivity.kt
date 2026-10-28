@@ -3,7 +3,9 @@ package com.sphinx.peel
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -29,8 +31,13 @@ class MainActivity : ComponentActivity() {
         val storage = Storage(applicationContext)
         setContent {
             PeelTheme {
+                // The background paints the whole screen, behind the system
+                // bars too (edge-to-edge is mandatory from API 35); only the
+                // content inside is pushed clear of them.
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    PeelApp(secretStore, storage)
+                    Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+                        PeelApp(secretStore, storage)
+                    }
                 }
             }
         }

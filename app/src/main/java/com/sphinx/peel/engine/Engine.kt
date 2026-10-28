@@ -9,13 +9,14 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -41,20 +42,34 @@ import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 /// described in `peel`'s docs/PLAN.md ("The core contract" — each call
 /// takes the seed, a unique time and the whole state, and returns what
 /// changed). Ported from PeelCore's Engine.swift, scoped to what Storage
-/// holds so far (`coreState` and `setting`): no messages, contacts, tribes
-/// or payments, so `run` and `connect` here commit a fraction of what the
-/// Mac/iPhone `commit` does.
+/// holds so far (`coreState`, `setting`, `contact`, `message`): no tribe
+/// membership, payments or reply/thread handling, so `run` and `connect`
+/// here commit a fraction of what the Mac/iPhone `commit` does.
 class Engine(mnemonic: String, val storage: Storage) {
     val seed: String = Account.seedOf(mnemonic)
     val network: String = storage.value(Setting.NETWORK) ?: "bitcoin"
 
     /// Guards `state` and `clock` the way Swift's `actor` isolates Engine:
     /// only one core call runs at a time, and the next one always sees the
-    /// previous one's committed state.
+    /// previous one's committed state. `state` is also read from
+    /// [isRegistered] by callers that are not holding the lock (the
+    /// register wait in `connect`), so it needs to be visible across
+    /// threads on its own; `@Volatile` gives it that without needing the
+    /// lock just to read it.
     private val mutex = Mutex()
     private val clock = UniqueClock(storage.value(Setting.CLOCK)?.toLongOrNull() ?: 0)
-    private var state: Map<String, ByteArray> = storage.loadCoreState()
+    @Volatile private var state: Map<String, ByteArray> = storage.loadCoreState()
     private var transport: Transport? = null
+    private var listenerStarted = false
+
+    /// Every `handle`d inbound message, for whoever is waiting on one —
+    /// `connect`'s register wait, and `askAndAwait`'s history/counts
+    /// waits. One persistent collector of `Transport.inbound()`
+    /// (`startListening`) feeds this for as long as the connection lives,
+    /// rather than each waiter collecting the transport itself: MQTT
+    /// publishes the server sends before a given collector attaches are
+    /// gone for good, so there can only be the one.
+    private val inboundResults = MutableSharedFlow<RunReturn>(extraBufferCapacity = 64)
 
     /// Owns `start`'s background work so it outlives whatever screen
     /// launched it — the restore screen's "Open Peel" leaves it running,
@@ -87,15 +102,18 @@ class Engine(mnemonic: String, val storage: Storage) {
     val isRegistered: Boolean
         get() = state.containsKey("my_scid") && state.containsKey("server_pubkey")
 
-    /// Runs one core call against the current state and commits what it
-    /// returns before this suspends again, so no other call on this engine
-    /// ever runs against stale state. Ported from PeelCore's Engine.swift
-    /// (`run`); its message/contact/tribe/payment bookkeeping is not here,
-    /// Storage doesn't hold those tables yet.
+    /// Runs one core call against the current state, commits what it
+    /// returns, and publishes whatever network work the result asks for
+    /// (its subscriptions, its register, any topic/payload pairs) —
+    /// before this suspends again, so no other call on this engine ever
+    /// runs against stale state. Ported from PeelCore's Engine.swift
+    /// (`run`, which always both commits and publishes); its
+    /// message/contact/tribe/payment bookkeeping is not here.
     suspend fun run(call: (time: String, state: ByteArray) -> RunReturn): RunReturn = mutex.withLock {
         val time = clock.next()
         val result = call(time, StateCodec.encode(state))
         commitLocked(result, time)
+        publishLocked(result)
         result
     }
 
@@ -120,6 +138,26 @@ class Engine(mnemonic: String, val storage: Storage) {
         )
     }
 
+    /// The publish half of `run`: whatever a result's `subscriptionTopics`,
+    /// `registerTopic`/`registerPayload` and generic `topics`/`payloads`
+    /// ask for, in that order. Ported from PeelCore's `Engine.publish(_
+    /// result:)`, trimmed to its "now" case — the `later`/`afterPay`
+    /// timing `publishPlan` otherwise adds is specific to money sends,
+    /// which nothing here makes yet. A no-op before any connection exists
+    /// (`transport` is nil): `initialSetup` run offline during onboarding
+    /// has nothing to publish to.
+    private suspend fun publishLocked(result: RunReturn) {
+        val connection = transport ?: return
+        if (result.subscriptionTopics.isNotEmpty()) connection.subscribe(result.subscriptionTopics)
+        val registerTopic = result.registerTopic
+        val registerPayload = result.registerPayload
+        if (registerTopic != null && registerPayload != null) connection.publish(registerTopic, registerPayload)
+        for (i in result.topics.indices) {
+            val payload = result.payloads.getOrNull(i) ?: continue
+            connection.publish(result.topics[i], payload)
+        }
+    }
+
     /// The core's own state for a fresh (or re-run) account: no server
     /// connection yet, so nothing is sent anywhere, this only prepares what
     /// a register would need. `isRegistered` stays false until a real
@@ -132,68 +170,87 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// Connects to `server` and attempts to register (or, for an account
     /// restored from its words with no local history yet, re-register —
     /// the server answers by its signature, not by what this device
-    /// remembers). Ported from the first few steps of PeelCore's
-    /// `Engine.establish()`: a fresh signed-timestamp login, `initialSetup`
-    /// and the topics its `RunReturn` names, then up to [registerWaitMs] of
-    /// whatever the broker sends back, fed through the core's `handle` the
-    /// way a live message would be. Everything `establish()` does after
-    /// that — `cameOnline`'s ping/read-sync/history-resume pipeline, the
-    /// keep-alive loop, reconnect-on-drop — is not here: this proves the
-    /// account reaches the server and gets registered, it does not bring
-    /// the account online for messaging (there is nowhere to put a message
-    /// yet; Storage has no `message` table).
-    suspend fun connect(server: ServerAddress, inviteCode: String? = null): RunReturn = mutex.withLock {
-        val networkTime = clock.next()
-        commitLocked(coreSetNetwork(network), networkTime)
+    /// remembers). Ported from PeelCore's `Engine.establish()`: a fresh
+    /// signed-timestamp login, `initialSetup` and the topics its
+    /// `RunReturn` names, then up to [registerWaitMs] of whatever the
+    /// broker sends back. Starts the one persistent inbound listener
+    /// (`startListening`) this engine ever has — not just for the
+    /// register wait: `askAndAwait` (the restore pipeline) depends on it
+    /// still running long after this function returns. Everything
+    /// `establish()` does past registering — `cameOnline`'s ping/read-sync
+    /// half, the keep-alive loop, reconnect-on-drop — is not here.
+    suspend fun connect(server: ServerAddress, inviteCode: String? = null): RunReturn {
+        val setup = mutex.withLock {
+            val networkTime = clock.next()
+            commitLocked(coreSetNetwork(network), networkTime)
 
-        val loginTime = clock.next()
-        val xpub = coreXpubFromSeed(seed, loginTime, network)
-        val signature = coreRootSignMs(seed, loginTime, network)
-        val connection = Transport(server, clientID = xpub, username = loginTime, password = signature)
-        connection.connect()
-        transport = connection
-
-        coroutineScope {
-            // Started before `initialSetup` is even sent, same order as
-            // PeelCore's `establish()` (its `listener` Task precedes its
-            // register publish): whatever answers the register — or
-            // anything else the broker already has queued — arrives here,
-            // not as a return value, the usual MQTT asymmetry. Each one
-            // goes through `handle` and gets committed like any other core
-            // result; this stops as soon as one of them sets
-            // `my_scid`/`server_pubkey`, or after [registerWaitMs],
-            // whichever comes first.
-            val listening = launch {
-                withTimeoutOrNull(registerWaitMs) {
-                    connection.inbound()
-                        .onEach { message ->
-                            val handleTime = clock.next()
-                            val handled = coreHandle(
-                                message.topic, message.payload, seed, handleTime, StateCodec.encode(state),
-                                storage.value(Setting.ALIAS) ?: "", storage.value(Setting.PHOTO_URL) ?: "",
-                            )
-                            commitLocked(handled, handleTime)
-                        }
-                        .takeWhile { !isRegistered }
-                        .collect {}
-                }
-            }
+            val loginTime = clock.next()
+            val xpub = coreXpubFromSeed(seed, loginTime, network)
+            val signature = coreRootSignMs(seed, loginTime, network)
+            val connection = Transport(server, clientID = xpub, username = loginTime, password = signature)
+            connection.connect()
+            transport = connection
+            // Before the register publish, not after: the same small race
+            // this already had (a very fast answer could still beat the
+            // collector actually attaching), not a new one.
+            startListening()
 
             val setupTime = clock.next()
             val setup = coreInitialSetup(seed, setupTime, StateCodec.encode(state), deviceID, inviteCode)
             commitLocked(setup, setupTime)
-
-            if (setup.subscriptionTopics.isNotEmpty()) connection.subscribe(setup.subscriptionTopics)
-            val registerTopic = setup.registerTopic
-            val registerPayload = setup.registerPayload
-            if (registerTopic != null && registerPayload != null) connection.publish(registerTopic, registerPayload)
+            publishLocked(setup)
 
             val tribeTopicTime = clock.next()
             val tribeTopic = coreGetTribeManagementTopic(seed, tribeTopicTime, StateCodec.encode(state))
             connection.subscribe(listOf(tribeTopic))
 
-            listening.join()
             setup
+        }
+
+        withTimeoutOrNull(registerWaitMs) { inboundResults.first { isRegistered } }
+        return setup
+    }
+
+    /// Starts the one collector `Transport.inbound()` ever gets for this
+    /// engine: each message goes through the core's `handle` and gets
+    /// committed like any other result, then broadcast on
+    /// [inboundResults]. Idempotent, and safe to call while already
+    /// holding `mutex` — it only launches the collector, the collector
+    /// itself acquires the lock per message, same as any other caller.
+    private fun startListening() {
+        if (listenerStarted) return
+        listenerStarted = true
+        val connection = transport ?: return
+        scope.launch {
+            connection.inbound().collect { message ->
+                val handled = mutex.withLock {
+                    val handleTime = clock.next()
+                    val result = coreHandle(
+                        message.topic, message.payload, seed, handleTime, StateCodec.encode(state),
+                        storage.value(Setting.ALIAS) ?: "", storage.value(Setting.PHOTO_URL) ?: "",
+                    )
+                    commitLocked(result, handleTime)
+                    result
+                }
+                inboundResults.emit(handled)
+            }
+        }
+    }
+
+    /// Sends one ask (under the lock, like any `run`) and waits, outside
+    /// it, for an inbound result matching `expect` — the shape every
+    /// restore call takes: the real answer is not the ask's own return
+    /// value, it is whatever the server publishes back later. Null on
+    /// [timeoutMs] with nothing matching.
+    private suspend fun askAndAwait(
+        timeoutMs: Long,
+        expect: (RunReturn) -> Boolean,
+        ask: suspend () -> RunReturn,
+    ): RunReturn? = withTimeoutOrNull(timeoutMs) {
+        coroutineScope {
+            val waiter = async { inboundResults.first(expect) }
+            ask()
+            waiter.await()
         }
     }
 
@@ -255,8 +312,10 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// restore, not a resumable general-purpose history cursor.
     private suspend fun runRestore() {
         try {
-            val countsResult = run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
-            val counts = parseCounts(countsResult.msgsCounts)
+            val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
+                run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
+            }
+            val counts = parseCounts(countsAnswer?.msgsCounts)
             if (counts != null && counts.firstForEachKey > 0) {
                 page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
                     coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
@@ -276,12 +335,16 @@ class Engine(mnemonic: String, val storage: Storage) {
 
     /// One phase's pages, back to back, each one committed (state, the
     /// messages it carried, the contacts they reveal) before the next is
-    /// asked for. Stops on an empty page — the server has nothing more for
-    /// this phase — or once `next` passes `end`.
+    /// asked for. Stops on no answer in [historyWaitMs] (PeelCore's
+    /// watchdog, simplified to "stop" rather than "resume later"), an
+    /// empty page (the server has nothing more for this phase), or once
+    /// `next` passes `end`.
     private suspend fun page(phase: HistoryPhase, end: Long?, call: (String, ByteArray, ULong) -> RunReturn) {
         var next = 0uL
         while (true) {
-            val result = run { time, stateBytes -> call(time, stateBytes, next) }
+            val result = askAndAwait(historyWaitMs, expect = { it.msgsTotal != null }) {
+                run { time, stateBytes -> call(time, stateBytes, next) }
+            } ?: break
             val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
             if (rows.isNotEmpty()) storage.insertMessages(rows)
             for (row in rows) if (!row.fromMe) contactHint(row)?.let { storage.upsertContact(it.pubkey, it.alias, it.photoUrl) }
@@ -289,7 +352,7 @@ class Engine(mnemonic: String, val storage: Storage) {
                 storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
             }
             val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
-            val progress = RestoreCount(((reached ?: next) ).toLong(), end)
+            val progress = RestoreCount((reached ?: next).toLong(), end)
             restoreProgressFlow.update {
                 if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
             }
@@ -371,6 +434,10 @@ class Engine(mnemonic: String, val storage: Storage) {
 
     companion object {
         private const val registerWaitMs = 10_000L
+
+        /// How long one history ask (counts, or a page) waits for its
+        /// answer — PeelCore's own watchdog is 30s (`Engine.historyStall`).
+        private const val historyWaitMs = 30_000L
         private val HISTORY_PAGE_SIZE: UInt = 100u
     }
 }

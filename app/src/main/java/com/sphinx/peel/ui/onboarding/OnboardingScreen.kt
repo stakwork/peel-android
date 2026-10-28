@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -216,6 +217,12 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
                 enabled = !working,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (working) {
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    CircularProgressIndicator(color = Theme.colors.accent)
+                }
+            }
         }
         Step.ShowWords -> StepScaffold(
             title = "Write down your twelve words",
