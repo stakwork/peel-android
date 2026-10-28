@@ -262,7 +262,6 @@ class Engine(mnemonic: String, val storage: Storage) {
         if (rows.isEmpty()) return
         storage.insertMessages(rows)
         for (row in rows) {
-            if (row.fromMe) continue
             val hint = contactHint(row) ?: continue
             storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
         }
@@ -271,17 +270,16 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// Re-derives `contact` rows (tribes especially, and any wrongly-mixed
     /// alias/photo a tribe's own messages left behind) from `message`
     /// history that was stored before `contactHint` knew about tribes at
-    /// all — once per account, gated by `Setting.CONTACTS_BACKFILLED`. A
-    /// restore made from here on needs no backfill, it goes through the
-    /// current `contactHint` as it happens.
+    /// all — once per account per `BACKFILL_VERSION`, gated by
+    /// `Setting.CONTACTS_BACKFILLED`. A restore made from here on needs no
+    /// backfill, it goes through the current `contactHint` as it happens.
     private fun backfillContactsIfNeeded() {
-        if (storage.value(Setting.CONTACTS_BACKFILLED) == "1") return
+        if (storage.value(Setting.CONTACTS_BACKFILLED) == BACKFILL_VERSION) return
         for (row in storage.messageSenders()) {
-            if (row.fromMe) continue
             val hint = contactHint(row) ?: continue
             storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
         }
-        storage.apply(Storage.Commit(settings = mapOf(Setting.CONTACTS_BACKFILLED to "1")))
+        storage.apply(Storage.Commit(settings = mapOf(Setting.CONTACTS_BACKFILLED to BACKFILL_VERSION)))
     }
 
     /// Sends one ask (under the lock, like any `run`) and waits, outside
@@ -328,6 +326,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             connectionStateFlow.value = ConnectionState.Connecting
             try {
                 val config = ServerConfig.fetch(network)
+                config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
                 val server = ServerAddress.named(config.defaultLsp)
                 connect(server)
                 connectionStateFlow.value = if (isRegistered) {
@@ -340,6 +339,28 @@ class Engine(mnemonic: String, val storage: Storage) {
                 return@launch
             }
             if (restoreProgressFlow.value.restoring) runRestore()
+            refreshTribeNames()
+        }
+    }
+
+    /// Each known tribe's real name and photo, from its own registry —
+    /// `TribeInfo.fetch`, PeelCore's `refreshTribes` trimmed to a single
+    /// pass over whatever is missing a name, not the periodic background
+    /// recheck that keeps a joined tribe's edits current (not built yet,
+    /// so a renamed/re-pictured tribe here stays stale until the next
+    /// restart). No tribe host recorded (offline on first run, or the
+    /// config call failed) leaves every tribe showing by its pubkey, same
+    /// as before this existed.
+    private suspend fun refreshTribeNames() {
+        val host = storage.value(Setting.TRIBE_HOST) ?: return
+        for (tribe in storage.conversations()) {
+            if (!tribe.isTribe || tribe.alias != null) continue
+            val info = try {
+                TribeInfo.fetch(tribe.chat, host)
+            } catch (e: Exception) {
+                continue
+            }
+            storage.updateTribeInfo(tribe.chat, info.name, info.img)
         }
     }
 
@@ -459,9 +480,24 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// took whichever member happened to post last as if it were the
     /// tribe's own name and photo. A tribe's *real* name and photo are not
     /// in any message at all — PeelCore reads those from the tribes server
-    /// itself (`TribeInfo.fetch`, its own HTTP call, not built here yet) —
-    /// so a tribe shows by its pubkey (`ConversationRow.name`'s fallback)
-    /// until that exists.
+    /// itself (`TribeInfo.record`, its own HTTP call).
+    ///
+    /// Called on `fromMe` rows too, same as `discoveredTribe`'s own
+    /// `trustSender || message.fromMe` — a tribe echoing one of *our own*
+    /// messages back to us carries `host` exactly the way a member's does,
+    /// and on a real account that is sometimes the *only* message a given
+    /// tribe chat has (confirmed directly: a handful of this account's
+    /// tribes had exactly one stored message, `fromMe`, carrying `host`).
+    /// Skipping every `fromMe` row, as an earlier version of both callers
+    /// did, missed those entirely. The direct-contact branch below stays
+    /// safe for a `fromMe` row too: `sender.pubkey == chat` is actually
+    /// common for our own sent messages (confirmed against a real
+    /// account's history — a `fromMe` row's `sender` field seems to carry
+    /// the *chat partner's* own cached identity, not ours), but that just
+    /// extracts a direct contact's own alias/photo from our side of the
+    /// conversation, the same information a received message would also
+    /// give — nothing a tribe's own forwarding identity would produce
+    /// without `host`, which the branch above already claims first.
     private fun contactHint(row: MessageRow): ContactRow? {
         val sender = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
         val host = sender.optString("host").takeIf { it.isNotEmpty() }
@@ -501,6 +537,11 @@ class Engine(mnemonic: String, val storage: Storage) {
     }
 
     companion object {
+        /// Bump whenever `backfillContactsIfNeeded`'s own logic changes in
+        /// a way that fixes data an older version could have gotten
+        /// wrong — this is the third such fix (see `Setting.CONTACTS_BACKFILLED`).
+        private const val BACKFILL_VERSION = "3"
+
         private const val registerWaitMs = 10_000L
 
         /// How long one history ask (counts, or a page) waits for its

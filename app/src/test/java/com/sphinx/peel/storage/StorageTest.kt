@@ -152,6 +152,46 @@ class StorageTest {
     }
 
     @Test
+    fun `updateTribeInfo fills in a known tribe's real name and photo`() {
+        val storage = newStorage()
+        storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)
+
+        storage.updateTribeInfo("tribe1", "The Watercooler", "https://example.com/tribe.jpg")
+
+        val conversations = storage.conversations()
+        assertEquals("The Watercooler", conversations[0].alias)
+        assertEquals("https://example.com/tribe.jpg", conversations[0].photoUrl)
+    }
+
+    @Test
+    fun `updateTribeInfo does nothing for a pubkey that isn't a known tribe`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+
+        storage.updateTribeInfo("alice", "Not Alice", null)
+
+        val conversations = storage.conversations()
+        assertEquals("Alice", conversations[0].alias)
+    }
+
+    @Test
+    fun `a tribe's stale name is wiped the moment a later message reveals it's a tribe`() {
+        // The actual order a real restore hit: a `host`-less message for
+        // the chat processed first (looking exactly like a direct
+        // contact naming itself), only later followed by the message
+        // that actually reveals it's a tribe.
+        val storage = newStorage()
+        storage.upsertContact("tribe1", alias = "Paul", photoUrl = "https://example.com/paul.jpg", isTribe = false, ready = true)
+        storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)
+
+        val conversations = storage.conversations()
+
+        assertNull(conversations[0].alias)
+        assertNull(conversations[0].photoUrl)
+        assertEquals(true, conversations[0].isTribe)
+    }
+
+    @Test
     fun `ConversationRow falls back to the chat's own key when there is no alias`() {
         val row = ConversationRow(
             chat = "03abcdefabcdefabcdef", alias = null, photoUrl = null, isTribe = false,

@@ -197,25 +197,53 @@ class Storage(context: Context, account: String = "default") {
     /// ever confirms one the way the core confirms a direct contact's key
     /// exchange, so being seen at all is as ready as a tribe gets here.
     ///
-    /// Once a chat is a tribe, `alias`/`photoUrl` are never written again,
-    /// whatever this call is asked to set them to: a tribe's own name and
-    /// photo never come from a message (`Engine.contactHint`'s doc
-    /// comment), and not every one of a tribe's messages carries the
-    /// `host` field that identifies it as one — a real restore has some
-    /// that don't (delivery/control messages, by the look of them) — so a
-    /// caller cannot always know, from one message alone, that this is a
-    /// tribe it should not attribute a name to. Enforcing it here, once,
-    /// is simpler than requiring every caller to re-check first.
+    /// Once a chat is a tribe, `alias`/`photoUrl` are unconditionally
+    /// `null` — never written from a message, whatever this call is asked
+    /// to set them to, and never *kept* from one either: a tribe's own
+    /// name and photo come from the tribes server itself
+    /// (`Engine.contactHint`'s doc comment), not from any message, so
+    /// there is no "newest message's alias" for a tribe to fall back to
+    /// in the first place. This matters because not every one of a
+    /// tribe's own messages carries the `host` field that identifies it
+    /// as one — a real restore has some that don't (delivery/control
+    /// messages, by the look of them) — so one of those can be the first
+    /// call seen for a chat, writing a member's name in as if it belonged
+    /// to the chat itself, before a later call reveals it's a tribe.
+    /// Always nulling here (rather than only at the moment `isTribe`
+    /// turns true) fixes that regardless of call order, and also heals a
+    /// row a previous, buggier version of this method already got wrong
+    /// — confirmed on a real account (`docs/phases/04-dashboard.md`) — the
+    /// next time anything calls this for that pubkey.
     fun upsertContact(pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean = false) {
         val db = helper.writableDatabase
         val existing = readContact(db, pubkey)
         val tribe = isTribe || existing?.isTribe == true
         val values = ContentValues().apply {
             put("pubkey", pubkey)
-            put("alias", if (tribe) existing?.alias else (alias ?: existing?.alias))
-            put("photoUrl", if (tribe) existing?.photoUrl else (photoUrl ?: existing?.photoUrl))
+            put("alias", if (tribe) null else (alias ?: existing?.alias))
+            put("photoUrl", if (tribe) null else (photoUrl ?: existing?.photoUrl))
             put("isTribe", if (tribe) 1 else 0)
             put("ready", if (ready || existing?.ready == true) 1 else 0)
+        }
+        db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /// A tribe's real name and photo, from its own registry
+    /// (`Engine.TribeInfo.fetch`) — the one legitimate source
+    /// `upsertContact` itself refuses to accept them from (a message).
+    /// No-op for a pubkey not already known as a tribe: this never turns
+    /// a direct contact into one, only fills in what a known tribe's
+    /// `contactHint` could never have, by design.
+    fun updateTribeInfo(pubkey: String, name: String, photoUrl: String?) {
+        val db = helper.writableDatabase
+        val existing = readContact(db, pubkey) ?: return
+        if (!existing.isTribe) return
+        val values = ContentValues().apply {
+            put("pubkey", pubkey)
+            put("alias", name)
+            put("photoUrl", photoUrl)
+            put("isTribe", 1)
+            put("ready", if (existing.ready) 1 else 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }

@@ -22,10 +22,25 @@ enum class Setting(val key: String) {
     /// no record has not been checked.
     WORDS_CONFIRMED("wordsConfirmed"),
 
-    /// "1" once `Engine.backfillContactsIfNeeded` has re-derived `contact`
-    /// rows (tribes especially) from whatever `message` already held —
-    /// needed once, for history a restore stored before that detection
-    /// existed; never again after, so a real restore's own inserts aren't
-    /// redundantly re-scanned on every launch.
+    /// The backfill's own version number, as a string, once
+    /// `Engine.backfillContactsIfNeeded` has re-derived `contact` rows
+    /// (tribes especially) from whatever `message` already held — needed
+    /// once, for history a restore stored before that detection existed;
+    /// never again after, so a real restore's own inserts aren't
+    /// redundantly re-scanned on every launch. Bumping the version a
+    /// fresh backfill checks against (`Engine.BACKFILL_VERSION`) re-runs
+    /// it once more on a device that already ran an older, buggier pass
+    /// — this has already happened twice: once when a first version left
+    /// a tribe's `alias`/`photoUrl` stale if a `host`-less message
+    /// reached `Storage.upsertContact` before the one that revealed it
+    /// was a tribe, and again when that version turned out to still skip
+    /// every `fromMe` message, missing tribes whose only stored message
+    /// was one of our own, echoed back with `host`
+    /// (`docs/phases/04-dashboard.md`).
     CONTACTS_BACKFILLED("contactsBackfilled"),
+
+    /// The tribes registry this account's tribes are listed on
+    /// (`ServerConfig.tribeHost`), recorded once so a tribe's name/photo
+    /// can be asked for later without the public config call every time.
+    TRIBE_HOST("tribeHost"),
 }

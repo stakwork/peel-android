@@ -25,6 +25,17 @@ bar is Chats/Payments/You/Search in the real shape (three tabs in a pill,
 Search its own circle); Chats and You (the account screen Phase 2/3 built,
 moved here) are real, Payments and Search are honest placeholders.
 
+**Also built, in a second pass on the same real account:** a tribe's real
+name and photo now come from its own registry (`Engine.TribeInfo.fetch`,
+`GET https://<tribeHost>/tribes/<pubkey>`), not from any message — Android
+had none of this before; a tribe showed by its pubkey always. Found and
+fixed a second real bug in `contactHint`'s callers: both skipped every
+`fromMe` message outright, but PeelCore's own `discoveredTribe` explicitly
+considers `fromMe` too (`trustSender || message.fromMe`) — and on this
+account several tribes' *only* stored message was one of this account's
+own, echoed back by the tribe carrying `host`, so skipping every `fromMe`
+row missed those tribes entirely, not just mis-sorted them. See Journal.
+
 **Open:**
 
 - No Unread section, no mute levels, no read-state badges at all —
@@ -35,11 +46,25 @@ moved here) are real, Payments and Search are honest placeholders.
   own search is `ChatSections` again with a query, so it's a small
   addition once there's a reason to prioritise it over everything else
   still open.
-- A tribe's real name and photo are not available at all — they come from
-  the tribes server itself (`TribeInfo.fetch`, its own HTTP call to the
-  `tribe_host` `ServerConfig` already reads), not from any message. A
-  tribe shows by its pubkey (`ConversationRow.name`'s fallback) until that
-  call exists.
+- A tribe's name/photo are fetched once, the first time it has none, with
+  no periodic recheck — PeelCore's own `refreshTribes` keeps a joined
+  tribe's edits current in the background; a tribe renamed or
+  re-pictured after this account first saw it stays stale here until the
+  app restarts. No retry or backoff either: a fetch that fails (offline,
+  the registry briefly down) is tried again next launch, not sooner.
+- The raw count of tribe-signalling chats in this account's own history
+  (17, by a direct count of `host`-bearing messages) is still higher than
+  what iOS reports (15) even after the `fromMe` fix. The likely remaining
+  gap: PeelCore's `discoveredTribe` also requires `trustSender` for a
+  non-`fromMe` message outside a live child-index match — which itself
+  requires `state["c/<claimed>"]` to already exist, i.e. the *core's own*
+  record of having decoded something from that signer before, not just
+  the claim in that one message's own JSON. `Engine.mapMessage`'s own
+  doc comment already names this simplification deliberately (a
+  restore's pages are an authenticated fetch, unlike a live raw publish
+  anyone could spoof), so this is a known, accepted gap, not something
+  this round changed — flagged here in case the count still doesn't
+  match once this fix is retested.
 - Join a tribe / Create a tribe / Add contact / Invite someone are drawn,
   same place as the real app, and do nothing — each opens a real flow
   that isn't built.
@@ -112,6 +137,35 @@ chat is marked a tribe, whatever a caller asks it to set them to, with a
 test exactly for that (a tribe row given a later "update" with a
 person's name and photo, asserting both are still null afterward).
 
+**"Still 9 tribes, not 15, and some have no name."** Re-read
+`Engine+Tribes.swift` and `Engine.swift`'s whole `message(from:)`/`commit`
+loop line by line before touching anything, since the first round's fix
+had already looked right and still undercounted. Two separate things
+were true at once. First, the easy one: a tribe's real name was never
+going to appear — PeelCore reads it from `TribeInfo.fetch` (`GET
+/tribes/<pubkey>` on the tribes host), nowhere near a message, and
+nothing on Android called it yet. Second, the one that actually explained
+the missing tribes: `discoveredTribe`'s own guard is
+`trustSender || message.fromMe` — it explicitly looks at this account's
+*own* messages too, not just what other members sent — but both of
+Android's callers (`storeMessages`, `backfillContactsIfNeeded`) skipped
+every `fromMe` row before `contactHint` ever saw it. Checked directly
+against the account's own stored history rather than guess: three tribes
+had exactly one message total, `fromMe`, carrying `host` (this account's
+own join or post, echoed back by the tribe) — the *only* evidence those
+chats were tribes at all, and it was being thrown away before
+`contactHint` ran. A broader query found the same pattern mixed into
+several more tribes that also had other members' messages: the `fromMe`
+row was skipped same as before, it just happened not to be the only
+evidence for those. Dropping the skip fixes both. Checked whether this
+could misfire on a genuine 1:1: `contactHint`'s direct-contact branch
+fires when `sender.pubkey == chat`, and that turns out to be *true* for
+44% of this account's own `fromMe` messages generally (its `sender`
+field seems to carry the chat partner's identity, not necessarily ours) —
+but since `host` is still checked first, this is harmless for a real
+contact: it just extracts the same alias/photo a received message from
+them would, from our own side of the conversation.
+
 **The agent's chat needed its own identity, derived, not looked up.**
 PeelCore finds the agent's chat by deriving its pubkey
 (`Sphinxrs.agentSeed(seed, 1)` → `pubkeyFromSeed`) and matching it
@@ -133,13 +187,19 @@ Kotlin code can't also be in the oracle it's checked against.
 ## Done
 
 - `engine/Engine.kt`: `storeMessages` shared by `page` and the inbound
-  listener; `contactHint` checks `host` before `pubkey == chat`;
-  `backfillContactsIfNeeded`, gated by `Setting.CONTACTS_BACKFILLED`;
-  `agentPubkey`.
+  listener; `contactHint` checks `host` before `pubkey == chat`, called
+  on `fromMe` rows too; `backfillContactsIfNeeded`, gated by
+  `Setting.CONTACTS_BACKFILLED`/`BACKFILL_VERSION` (now 3, across the two
+  fixes above); `agentPubkey`; `refreshTribeNames`, a tribe's name/photo
+  from its own registry once it has none.
+- `engine/TribeInfo.kt`: `GET /tribes/<pubkey>` on the account's tribes
+  host, trimmed to `name`/`img`.
 - `storage/Storage.kt`: `contact.isTribe` (v3 migration);
   `upsertContact` enforces "a tribe's name/photo never come from a
-  message" itself; `conversations()` (the newest-message-per-chat query);
-  `messageSenders()` (the backfill's read).
+  message" itself; `updateTribeInfo`, the one call that's allowed to set
+  them (no-op for a pubkey not already a known tribe); `conversations()`
+  (the newest-message-per-chat query); `messageSenders()` (the backfill's
+  read).
 - `ui/components/Avatar.kt`: `PersonHue` (the real hash-to-colour
   algorithm, tested against an independent implementation), `Avatar`
   (photo, or initials on a hue, circle or rounded square),
@@ -154,9 +214,9 @@ Kotlin code can't also be in the oracle it's checked against.
 - `MainActivity.kt` now routes into `MainTabs`, not a bare account screen.
 - Coil (`coil-compose`, `coil-network-okhttp`) and
   `material-icons-extended`, new dependencies this phase needed.
-- Tests: `PersonHueTest`, `ChatSectionsTest`, and new `StorageTest` cases
-  for `conversations()` and the tribe-name invariant. 37 tests, all
-  passing.
+- Tests: `PersonHueTest`, `ChatSectionsTest`, and `StorageTest` cases for
+  `conversations()`, the tribe-name invariant and `updateTribeInfo`. 40
+  tests, all passing.
 
 ## Learned
 
@@ -166,6 +226,19 @@ Kotlin code can't also be in the oracle it's checked against.
   direct contact's own messages and every tribe message alike, so
   checking it first made every tribe look like a direct contact whose
   name kept changing.
+- A blanket "skip our own messages" guard, reasonable where a bug is
+  first noticed, can throw away the only evidence for something else
+  entirely — here, several tribes' sole stored message was one of this
+  account's own, echoed back carrying the one field that revealed it was
+  a tribe at all. Checking the reference implementation's actual guard
+  (`trustSender || message.fromMe`) rather than assuming "skip `fromMe`"
+  was obviously safe would have caught this the first time.
+- When Android's own count doesn't match the reference app's, counting
+  raw signals directly in the stored data (here, chats with a
+  `host`-bearing message) separates "my classification logic is wrong"
+  from "the reference app is filtering on something my data doesn't even
+  carry yet" — the second kind isn't fixable by changing the
+  classification, only by porting the thing it's filtering on.
 - Not every message belonging to a tribe necessarily carries the one
   field that marks it as a tribe's — delivery/control messages in a real
   restore didn't. A classification that depends on a field only being
