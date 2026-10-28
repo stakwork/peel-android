@@ -9,11 +9,15 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.FileSecretStore
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.Engine
@@ -71,6 +75,30 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage) {
         }
         Screen.Lock -> LockScreen(secretStore, storage) { engine -> screen = Screen.Home(engine) }
         is Screen.Restoring -> RestoringAccountScreen(current.engine) { screen = Screen.Home(current.engine) }
-        is Screen.Home -> MainTabs(current.engine, storage, secretStore) { screen = Screen.Onboarding }
+        is Screen.Home -> {
+            ResumeOnForeground(current.engine)
+            MainTabs(current.engine, storage, secretStore) { screen = Screen.Onboarding }
+        }
+    }
+}
+
+/// Calls `Engine.resume()` each time the app returns to the foreground —
+/// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up,
+/// triggered the Android way. Skips the very first `ON_RESUME`: the
+/// lifecycle is already resumed when this observer is added (right after
+/// `start()` just ran, making this screen reachable at all), so Android
+/// replays that event into it immediately, and `resume()` would only
+/// race `start()`'s own first connection.
+@Composable
+private fun ResumeOnForeground(engine: Engine) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(engine, lifecycleOwner) {
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            if (first) first = false else engine.resume()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 }

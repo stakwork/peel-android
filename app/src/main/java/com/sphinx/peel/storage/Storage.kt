@@ -163,6 +163,26 @@ class Storage(context: Context, account: String = "default") {
         return rows
     }
 
+    /// The highest `serverIndex` any stored message carries, or null for
+    /// no message at all yet — where a catch-up sync resumes from
+    /// (`Engine.catchUpMessages`), one past this. Every message a restore
+    /// or a live receive stores carries its own server index, so the
+    /// highest one stored already *is* "every message below this has
+    /// been handled," with no separate marker to keep in sync by hand.
+    /// One gap: `Engine.sendMessage`'s own optimistic row has none (its
+    /// uuid is already taken when the real echo, carrying one, tries to
+    /// store under it — `insertMessages`' `INSERT OR IGNORE` keeps the
+    /// first), so this can understate how far caught up a chat with
+    /// recent sends of its own really is, and a catch-up may re-ask for a
+    /// little more than strictly new. Harmless beyond the extra round
+    /// trip: a message already stored (by uuid) is ignored again.
+    fun maxServerIndex(): Long? {
+        helper.readableDatabase.rawQuery("SELECT MAX(serverIndex) FROM message", null).use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) return null
+            return cursor.getLong(0)
+        }
+    }
+
     /// One chat's messages, oldest first — what a conversation screen
     /// shows. Not paged yet: fine for how little history a real account
     /// here has per chat so far, revisit once a busy tribe makes "load

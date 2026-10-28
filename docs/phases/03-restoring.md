@@ -52,6 +52,23 @@ for it on a real screen where it's obvious, it had no test of its own
 and `Theme.colors.background` vs `Theme.colors.fieldFill` read the same
 in code review.
 
+**Also built, once a chat screen (Phase 5) made the gap obvious:**
+`Engine` now does what PeelCore's own `cameOnline` does on *every*
+successful connection, not only a fresh restore's — `catchUpMessages`
+asks `fetchMsgsBatch` for everything from where this device's own
+history stands (`Storage.maxServerIndex`, read back from what is
+already stored rather than kept as a separate setting) forward, and
+`resume()` (called from `MainActivity`'s lifecycle observer on every
+return to the foreground) reconnects and runs it again. Before this, a
+message that arrived while the app was closed, or while it sat
+backgrounded with its connection quietly dropped, was never fetched —
+only restoring an account's full history, once, ever asked the server
+for anything; after that first restore, this device only ever heard
+whatever arrived over a live connection it happened to still be holding.
+See the Journal for how that was found and the real bug underneath it
+(`startListening`'s one-time guard, which made *any* reconnect broken,
+not just the missing catch-up).
+
 **Open:** restoring 11,653 messages at 100 per page is on the order of
 120 sequential ask-then-wait round trips, one at a time — real, and
 noticeably slower than the iPhone app's own restore of the same account.
@@ -64,11 +81,20 @@ is its own large system (see the Journal). This phase stores real
 contacts and messages correctly for the direct-message case; a tribe's
 messages land as a generic chat under the tribe's own pubkey, not a
 `tribe` row with membership/roles. No chat UI reads `contact`/`message`
-yet — `HomeScreen` still says so explicitly. No reconnect-on-drop, no
-keep-alive, no resumable restore (a restore that fails partway starts
-over from the beginning next time, not from where it stopped —
-PeelCore's `HistoryCursor` tracks a resumable cursor; this phase's
-`Engine.page` does not). An incoming message's claimed sender is trusted
+yet — `HomeScreen` still says so explicitly. No resumable restore (a
+restore that fails partway starts over from the beginning next time, not
+from where it stopped — PeelCore's `HistoryCursor` tracks a resumable
+cursor; this phase's `Engine.page` does not). No keep-alive and no way
+to *detect* a dropped connection (no ping, no HiveMQ connection-state
+callback): `resume()` always disconnects and reconnects on its own,
+regardless of whether the old connection was actually still good, rather
+than finding out first — a correct but wasteful substitute for the
+"notice the drop" PeelCore's keep-alive loop actually does. No gap
+tracking either (PeelCore's `HistoryCursor.liveAbove`): a live message
+that arrives above a gap this device hasn't caught up on yet is simply
+stored where it lands, same as always, rather than held until the
+catch-up underneath it fills in — not reachable without the same
+reconnect/overlap machinery. An incoming message's claimed sender is trusted
 directly during a restore, not checked against `state["c/<pubkey>"]`
 first the way PeelCore's live-message path does — reasonable only
 because this runs over the restore's own authenticated history fetch,
@@ -244,6 +270,46 @@ that needed care — padding the `Surface` itself instead pushed its
 background color in too, leaving the status bar area showing the
 window's own default (light) background rather than the app's dark one.
 
+**"A lot of messages are missing compared to iOS/Mac."** Reported once a
+real chat screen existed to actually notice it in (Phase 5) — this phase
+originally shipped `start()` calling `runRestore()` only when
+`Setting.NEEDS_RESTORE` was still `"1"`, exactly once per account ever.
+Re-read `Engine+History.swift`'s `resumeHistory()` to check: it runs on
+*every* `cameOnline()`, not only a fresh account's, and for one already
+restored it calls `syncMessages()` — a `fetchMsgsBatch` from
+`history.from` (`Setting.historyFrom`, persisted) forward, no
+`getMsgsCounts` needed first. Android had nothing at all for this case:
+once `NEEDS_RESTORE` flips to `"0"`, every later `start()` just connects
+and waits for whatever MQTT happens to deliver live — anything that
+arrived while this device had no live connection open to hear it (the
+app closed, or just not yet launched that session) was gone for good.
+Ported as `catchUpMessages`, reusing the existing `page()` loop with a
+new starting index instead of always `0`. Skipped persisting a separate
+`historyFrom` setting: every stored message already carries its own
+`serverIndex`, so `Storage.maxServerIndex() + 1` *is* that marker, with
+one accepted gap noted on that function itself (a sent message's own
+optimistic row has no index until its echo, which `INSERT OR IGNORE`
+then discards — makes a catch-up redo a little more work than strictly
+needed, never less).
+
+**Catch-up alone wasn't enough — found a second, worse bug while adding
+it.** The user also asked about the app being backgrounded and brought
+back to the foreground, not just relaunched. Wiring a reconnect for that
+(`Engine.resume()`, called from a `MainActivity` lifecycle observer on
+`ON_RESUME`) surfaced that `startListening`'s `listenerStarted` guard was
+a one-time flag on the `Engine` instance, never reset — meaning *any*
+second `connect()` on the same `Engine` (which `resume()`'s reconnect is
+the first thing in this codebase to ever actually do) would silently
+never attach a listener to the new `Transport` at all. Not just a missed
+catch-up: every `askAndAwait` after a reconnect — any history page, any
+future send's confirmation — would sit out its full timeout waiting on a
+broadcast nothing was listening to produce, live messages included.
+Fixed by clearing the flag in `disconnect()`, so a reconnect's `connect()`
+starts a fresh collector the way the very first one did. Would never
+have been exercised by `start()` alone, since that only ever connects
+once per `Engine` instance; `resume()` existing at all is what forced it
+into the open.
+
 ## Done
 
 - `storage/Storage.kt`: `contact` and `message` tables (DB version 2, a
@@ -259,6 +325,13 @@ window's own default (light) background rather than the app's dark one.
   (`startListening`) broadcasting on a `SharedFlow` (`inboundResults`)
   that `askAndAwait` waits on — the actual fix for the restore pipeline,
   which asks the server and gets its answer back later, not synchronously.
+  `catchUpMessages` (run on every connection once restored, not only a
+  fresh one), `resume()` (reconnect + catch up, for a lifecycle observer
+  to call), `connectAndRegister` (the connect-and-handle-errors half of
+  `start()`, shared with `resume()`); `disconnect()` now resets
+  `listenerStarted` so a reconnect's listener actually attaches.
+- `storage/Storage.kt`: `maxServerIndex()` — where a catch-up resumes
+  from, read back from what is already stored rather than a separate setting.
 - `ui/onboarding/OnboardingScreen.kt`: step indicator, back button and
   back navigation; builds the account's one `Engine` and calls `start()`;
   a loading spinner on `ConfirmPin` while it does.
@@ -277,10 +350,22 @@ window's own default (light) background rather than the app's dark one.
 - `MainActivity.kt`: `Screen.Restoring`/`Screen.Home` now carry the one
   `Engine` made for the account, instead of each screen building its own;
   `safeDrawingPadding` so content clears the status/navigation bars on
-  every screen, in one place.
+  every screen, in one place; `ResumeOnForeground`, a lifecycle observer
+  that calls `Engine.resume()` on every `ON_RESUME` after the first.
 
 ## Learned
 
+- "Restore once, then live messages only" quietly assumes the app is
+  never closed and never loses its connection between launches — worth
+  checking a reference implementation's own `cameOnline`/equivalent for
+  whether it treats *every* connection as a chance to catch up, not only
+  the first, before shipping a port that only does the latter.
+- A guard meant to make a function idempotent *within one connection's
+  lifetime* (`startListening`'s `listenerStarted`) can quietly become a
+  guard against ever running again *at all* once something finally
+  calls the enclosing function a second time — the bug was real the
+  whole time, just never exercised, because nothing before `resume()`
+  ever reconnected the same `Engine` instance more than once.
 - Android's bundled SQLite's JSON1 extension is not something to lean on
   below a known-good API level; parsing JSON in Kotlin at write time
   sidesteps the question entirely for the handful of fields this needed.

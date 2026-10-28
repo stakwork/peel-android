@@ -38,8 +38,11 @@ Read `docs/VISION.md` next, then the phase below.
 │ they return; `start()` connects, and for a restored       │
 │ account pages through its contacts and messages,          │
 │ publishing connectionState/restoreProgress as StateFlows   │
-│ for any screen to read — not yet the full online           │
-│ pipeline (no live message handling, no reconnect)          │
+│ for any screen to read. Every connection (not only a       │
+│ fresh restore's) catches up on history since; `resume()`   │
+│ reconnects and catches up again on returning to the        │
+│ foreground — not yet a real keep-alive (no way to detect    │
+│ a drop short of reconnecting blind)                         │
 │       │                                                   │
 │       ├── app/storage/Storage (SQLite): coreState,        │
 │       │   setting, contact, message                       │

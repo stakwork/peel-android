@@ -343,6 +343,12 @@ class Engine(mnemonic: String, val storage: Storage) {
     suspend fun disconnect() = mutex.withLock {
         transport?.close()
         transport = null
+        // So the next `connect()` starts a fresh collector on the new
+        // Transport: without this, `startListening` stayed a no-op after
+        // the first connection forever, and a reconnect's own
+        // `askAndAwait` calls (`resume`'s catch-up) would wait out their
+        // full timeout for an answer nothing was ever listening to deliver.
+        listenerStarted = false
     }
 
     /// Stops whatever `start` has running — "Forget this account" needs
@@ -364,23 +370,49 @@ class Engine(mnemonic: String, val storage: Storage) {
         started = true
         scope.launch {
             backfillContactsIfNeeded()
-            connectionStateFlow.value = ConnectionState.Connecting
-            try {
-                val config = ServerConfig.fetch(network)
-                config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
-                val server = ServerAddress.named(config.defaultLsp)
-                connect(server)
-                connectionStateFlow.value = if (isRegistered) {
-                    ConnectionState.Connected
-                } else {
-                    ConnectionState.Failed("No registration answer came back in time.")
-                }
-            } catch (e: Exception) {
-                connectionStateFlow.value = ConnectionState.Failed(e.message ?: "Could not connect to the server.")
-                return@launch
-            }
-            if (restoreProgressFlow.value.restoring) runRestore()
+            if (!connectAndRegister()) return@launch
+            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             refreshTribeNames()
+        }
+    }
+
+    /// Resolves the broker and connects, exactly as `start()`'s own first
+    /// connection does — shared so `resume()` can do the same thing
+    /// without duplicating it. Updates [connectionState] either way; false
+    /// on any failure (already reported through [connectionState]), so
+    /// the caller knows not to go on to a catch-up with nothing to ask.
+    private suspend fun connectAndRegister(): Boolean {
+        connectionStateFlow.value = ConnectionState.Connecting
+        return try {
+            val config = ServerConfig.fetch(network)
+            config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
+            connect(ServerAddress.named(config.defaultLsp))
+            connectionStateFlow.value = if (isRegistered) {
+                ConnectionState.Connected
+            } else {
+                ConnectionState.Failed("No registration answer came back in time.")
+            }
+            isRegistered
+        } catch (e: Exception) {
+            connectionStateFlow.value = ConnectionState.Failed(e.message ?: "Could not connect to the server.")
+            false
+        }
+    }
+
+    /// Called whenever the app returns to the foreground, after `start()`
+    /// has already run once (`MainActivity`'s lifecycle observer) —
+    /// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up,
+    /// trimmed to what this port can actually tell: nothing here can tell
+    /// a connection that is still good from one the OS quietly killed
+    /// while backgrounded (no ping/keep-alive loop exists yet to notice),
+    /// so this always reconnects first rather than guess from `transport`
+    /// being non-null. A no-op before `start()` has ever run.
+    fun resume() {
+        if (!started) return
+        scope.launch {
+            disconnect()
+            if (!connectAndRegister()) return@launch
+            if (!restoreProgressFlow.value.restoring) catchUpMessages()
         }
     }
 
@@ -443,14 +475,38 @@ class Engine(mnemonic: String, val storage: Storage) {
         }
     }
 
+    /// Fetches every message from where this device's own history stands
+    /// forward — PeelCore's own `syncMessages`, run on *every* connection
+    /// (`cameOnline` → `resumeHistory`), not only a fresh restore's: a
+    /// message that arrived while this device had no live connection to
+    /// hear it on (closed, backgrounded, or just between `start()` calls)
+    /// is otherwise never seen again, since nothing besides a restore's
+    /// own pipeline ever asked the server for history before this existed.
+    /// Where history stands is read back from storage itself
+    /// (`Storage.maxServerIndex`) rather than kept as its own setting
+    /// (PeelCore's `Setting.historyFrom`): every message already carries
+    /// its own server index, so the highest one stored *is* that marker,
+    /// with nothing to keep in sync by hand. Unlike PeelCore's
+    /// `HistoryCursor`, nothing here tracks a gap a live message arriving
+    /// ahead of a catch-up might leave below it — not reachable yet
+    /// without the reconnect/live-overlap machinery this port doesn't have.
+    private suspend fun catchUpMessages() {
+        val start = ((storage.maxServerIndex() ?: -1L) + 1L).toULong()
+        page(HistoryPhase.MESSAGES, end = null, start = start) { time, stateBytes, next ->
+            coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
+        }
+    }
+
     /// One phase's pages, back to back, each one committed (state, the
     /// messages it carried, the contacts they reveal) before the next is
-    /// asked for. Stops on no answer in [historyWaitMs] (PeelCore's
+    /// asked for. Starts at [start] (0 for a restore's own phases; where
+    /// this device's history already stands, for a catch-up — see
+    /// `catchUpMessages`). Stops on no answer in [historyWaitMs] (PeelCore's
     /// watchdog, simplified to "stop" rather than "resume later"), an
     /// empty page (the server has nothing more for this phase), or once
     /// `next` passes `end`.
-    private suspend fun page(phase: HistoryPhase, end: Long?, call: (String, ByteArray, ULong) -> RunReturn) {
-        var next = 0uL
+    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, call: (String, ByteArray, ULong) -> RunReturn) {
+        var next = start
         while (true) {
             val result = askAndAwait(historyWaitMs, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
