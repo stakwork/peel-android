@@ -34,13 +34,14 @@ Read `docs/VISION.md` next, then the phase below.
                │
 ┌──────────────▼──────────────────────────────────────────┐
 │ app/engine/Engine — runs core calls, commits the state   │
-│ they return; `connect` additionally logs in and runs the  │
-│ network work a result asks for (register, subscribe,      │
-│ publish) — not yet the online pipeline past that (no      │
-│ message/contact sync, no reconnect)                        │
+│ they return; `start()` connects, and for a restored       │
+│ account pages through its contacts and messages,          │
+│ publishing connectionState/restoreProgress as StateFlows   │
+│ for any screen to read — not yet the full online           │
+│ pipeline (no live message handling, no reconnect)          │
 │       │                                                   │
 │       ├── app/storage/Storage (SQLite): coreState,        │
-│       │   setting                                         │
+│       │   setting, contact, message                       │
 │       ├── app/engine/Transport (MQTT, HiveMQ client):      │
 │       │   connects for real, one attempt at a time         │
 │       └── app/engine/ServerConfig: the broker address,     │
@@ -63,10 +64,12 @@ functions, each taking the seed, a unique time and the whole state (a
 MessagePack map), returning what changed — state to save or delete,
 topics to subscribe, payloads to publish, messages that arrived.
 `Engine.run` commits what a call returns before anything else can run;
-`Engine.connect` additionally performs the network half of one call's
+`Engine.connect` additionally performs the network half of `initialSetup`'s
 result (subscribe, publish, and whatever answers come back over
-`Transport`) — still only for `initialSetup`, the one call wired up so
-far.
+`Transport`). `Engine.start`'s restore pipeline wires up three more calls
+— `getMsgsCounts`, `fetchFirstMsgsPerKey`, `fetchMsgsBatch` — committing
+each one's state the same way `run` always has, plus (new in Phase 3)
+storing the messages and contacts each one's `RunReturn` carries.
 
 Reference implementations, in order of authority:
 
@@ -94,8 +97,18 @@ ported from `peel`'s `Storage+Migrations.swift` `v1`:
 Everything one engine call changes is written through a single
 `Storage.Commit` per transaction, so the account can never be
 half-updated — the same rule `peel`'s `Storage.Commit`/`apply` follows.
-No `message`, `contact`, `chatState`, `tribe`, `payment`, `invoice` or
-`deviceRequest` tables yet; they come with the features that need them.
+
+Two more, added in Phase 3 for the restore pipeline, ported from `peel`'s
+`Storage+Migrations.swift` `v1`/`v2`/`v3` (the columns a restore actually
+fills, trimmed):
+
+- `message`: one row per message a restore or a live fetch brings back.
+- `contact`: a pubkey, its alias/photo (parsed from its own messages, not
+  core state — names and photos never are), and whether the core itself
+  now recognises it (`ready`).
+
+No `chatState`, `tribe`, `payment`, `invoice` or `deviceRequest` tables
+yet; they come with the features that need them.
 
 ### Identity and secrets
 
@@ -123,6 +136,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 |---|-------|--------|------|
 | 1 | Foundation: project scaffold, the sphinxrs FFI bridge, onboarding, PIN-sealed storage, the Storage/Engine/Transport skeleton | built; see the file for what's open | [phases/01-foundation.md](phases/01-foundation.md) |
 | 2 | Connecting: `Engine.connect`, the config-fetched broker address, a real register attempt against production | built; see the file for what's open | [phases/02-connecting.md](phases/02-connecting.md) |
+| 3 | Restoring: `contact`/`message` tables, `Engine.start`'s contacts-then-messages pipeline, the restore screens | built; see the file for what's open | [phases/03-restoring.md](phases/03-restoring.md) |
 
 ## Open questions
 

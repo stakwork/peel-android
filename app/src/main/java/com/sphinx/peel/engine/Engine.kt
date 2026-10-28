@@ -1,20 +1,37 @@
 package com.sphinx.peel.engine
 
 import com.sphinx.peel.account.Account
+import com.sphinx.peel.storage.ContactRow
+import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+import uniffi.sphinxrs.Msg
 import uniffi.sphinxrs.RunReturn
+import uniffi.sphinxrs.fetchFirstMsgsPerKey as coreFetchFirstMsgsPerKey
+import uniffi.sphinxrs.fetchMsgsBatch as coreFetchMsgsBatch
+import uniffi.sphinxrs.getMsgsCounts as coreGetMsgsCounts
 import uniffi.sphinxrs.getTribeManagementTopic as coreGetTribeManagementTopic
 import uniffi.sphinxrs.handle as coreHandle
 import uniffi.sphinxrs.initialSetup as coreInitialSetup
+import uniffi.sphinxrs.listContacts as coreListContacts
 import uniffi.sphinxrs.pubkeyFromSeed
 import uniffi.sphinxrs.rootSignMs as coreRootSignMs
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
@@ -38,6 +55,20 @@ class Engine(mnemonic: String, val storage: Storage) {
     private val clock = UniqueClock(storage.value(Setting.CLOCK)?.toLongOrNull() ?: 0)
     private var state: Map<String, ByteArray> = storage.loadCoreState()
     private var transport: Transport? = null
+
+    /// Owns `start`'s background work so it outlives whatever screen
+    /// launched it — the restore screen's "Open Peel" leaves it running,
+    /// same as PeelUI's `AppModel.attach` does with its own account tasks.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var started = false
+
+    private val connectionStateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    val connectionState: StateFlow<ConnectionState> = connectionStateFlow.asStateFlow()
+
+    private val restoreProgressFlow = MutableStateFlow(
+        RestoreProgress(restoring = storage.value(Setting.NEEDS_RESTORE) == "1"),
+    )
+    val restoreProgress: StateFlow<RestoreProgress> = restoreProgressFlow.asStateFlow()
 
     /// This device among the account's: the core's device, and (once device
     /// requests exist) the one a request names. One per install, made once
@@ -171,7 +202,175 @@ class Engine(mnemonic: String, val storage: Storage) {
         transport = null
     }
 
+    /// Stops whatever `start` has running — "Forget this account" needs
+    /// this so a wiped `Storage` is never written to by a restore page
+    /// still in flight.
+    fun cancel() = scope.cancel()
+
+    /// Resolves the broker from the public config and connects, then —
+    /// only for an account restored from its words with nothing local yet
+    /// (`Setting.NEEDS_RESTORE`) — pages through its history. Runs on
+    /// [scope], not the caller's: call this once, right after the engine
+    /// is made, and read [connectionState]/[restoreProgress] from
+    /// wherever needs them. Mirrors PeelUI's `AppModel.attach` +
+    /// `Engine.start()`, minus the keep-alive/reconnect loop and the
+    /// ping/read-sync half of `cameOnline` — this gets an account
+    /// connected and, if needed, restored; staying online is later work.
+    fun start() {
+        if (started) return
+        started = true
+        scope.launch {
+            connectionStateFlow.value = ConnectionState.Connecting
+            try {
+                val config = ServerConfig.fetch(network)
+                val server = ServerAddress.named(config.defaultLsp)
+                connect(server)
+                connectionStateFlow.value = if (isRegistered) {
+                    ConnectionState.Connected
+                } else {
+                    ConnectionState.Failed("No registration answer came back in time.")
+                }
+            } catch (e: Exception) {
+                connectionStateFlow.value = ConnectionState.Failed(e.message ?: "Could not connect to the server.")
+                return@launch
+            }
+            if (restoreProgressFlow.value.restoring) runRestore()
+        }
+    }
+
+    private enum class HistoryPhase { CONTACTS, MESSAGES }
+
+    /// What `getMsgsCounts` reports, mirrored from PeelCore's
+    /// `Engine.MessageCounts`.
+    private data class MessageCounts(
+        val total: Long,
+        val firstForEachKey: Long,
+        val totalHighestIndex: Long?,
+        val firstForEachKeyHighestIndex: Long?,
+    )
+
+    /// Contacts first, then every message from the beginning — PeelCore's
+    /// `HistoryCursor.plan`, minus the live/catch-up/stall machinery
+    /// `HistoryCursor` otherwise carries: this is a single straight-through
+    /// restore, not a resumable general-purpose history cursor.
+    private suspend fun runRestore() {
+        try {
+            val countsResult = run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
+            val counts = parseCounts(countsResult.msgsCounts)
+            if (counts != null && counts.firstForEachKey > 0) {
+                page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
+                    coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
+                }
+            }
+            if (counts != null && counts.total > 0) {
+                page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
+                    coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
+                }
+            }
+            storage.apply(Storage.Commit(settings = mapOf(Setting.NEEDS_RESTORE to "0")))
+            restoreProgressFlow.update { it.copy(restoring = false, outcome = RestoreOutcome.Finished) }
+        } catch (e: Exception) {
+            restoreProgressFlow.update { it.copy(outcome = RestoreOutcome.Failed(e.message ?: "Restoring stopped.")) }
+        }
+    }
+
+    /// One phase's pages, back to back, each one committed (state, the
+    /// messages it carried, the contacts they reveal) before the next is
+    /// asked for. Stops on an empty page — the server has nothing more for
+    /// this phase — or once `next` passes `end`.
+    private suspend fun page(phase: HistoryPhase, end: Long?, call: (String, ByteArray, ULong) -> RunReturn) {
+        var next = 0uL
+        while (true) {
+            val result = run { time, stateBytes -> call(time, stateBytes, next) }
+            val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
+            if (rows.isNotEmpty()) storage.insertMessages(rows)
+            for (row in rows) if (!row.fromMe) contactHint(row)?.let { storage.upsertContact(it.pubkey, it.alias, it.photoUrl) }
+            if (phase == HistoryPhase.CONTACTS) {
+                storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
+            }
+            val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
+            val progress = RestoreCount(((reached ?: next) ).toLong(), end)
+            restoreProgressFlow.update {
+                if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
+            }
+            if (reached == null) break
+            next = reached + 1uL
+            if (end != null && next > end.toULong()) break
+        }
+    }
+
+    /// One core `Msg` as a stored row, or null for one this device cannot
+    /// file anywhere. Trimmed from PeelCore's `Engine.message(from:...)`:
+    /// the `fromMe` chat check is the same (a copy of ours names who it
+    /// went to, and must be signed by us or by that chat itself); an
+    /// incoming message's claimed sender is trusted directly rather than
+    /// checked against `state["c/<pubkey>"]` first, since this only runs
+    /// over a restore's own authenticated history fetch, not a live,
+    /// unauthenticated publish stream the way PeelCore's check guards
+    /// against. No tribe membership, replay or reply/thread handling yet.
+    private fun mapMessage(msg: Msg, ownKey: String): MessageRow? {
+        val type = msg.type ?: return null
+        val fromMe = msg.fromMe ?: false
+        val sender = msg.sender?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val claimed = sender?.optString("pubkey")?.takeIf { it.isNotEmpty() }
+        val chat = if (fromMe) {
+            val to = msg.sentTo ?: claimed?.takeIf { it != ownKey } ?: return null
+            if (claimed != ownKey && claimed != to) return null
+            to
+        } else {
+            claimed ?: return null
+        }
+        return MessageRow(
+            uuid = msg.uuid,
+            serverIndex = msg.index?.toLongOrNull(),
+            type = type.toInt(),
+            chat = chat,
+            fromMe = fromMe,
+            sender = msg.sender,
+            body = msg.message,
+            msat = msg.msat?.toLong(),
+            timestamp = msg.timestamp?.toLong(),
+            tag = msg.tag,
+            paymentHash = msg.paymentHash,
+        )
+    }
+
+    /// A contact's name/photo, if `row` is their own message naming
+    /// themself — the same shape PeelCore's `contact` v2 migration derives
+    /// from the message table (`sender.pubkey == chat`).
+    private fun contactHint(row: MessageRow): ContactRow? {
+        val sender = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
+        val pubkey = sender.optString("pubkey").takeIf { it.isNotEmpty() } ?: return null
+        if (pubkey != row.chat) return null
+        return ContactRow(
+            pubkey = pubkey,
+            alias = sender.optString("alias").takeIf { it.isNotEmpty() },
+            photoUrl = sender.optString("photo_url").takeIf { it.isNotEmpty() },
+            ready = false,
+        )
+    }
+
+    private fun parseCounts(json: String?): MessageCounts? {
+        if (json == null) return null
+        val obj = JSONObject(json)
+        return MessageCounts(
+            total = obj.optLong("total"),
+            firstForEachKey = obj.optLong("first_for_each_scid"),
+            totalHighestIndex = if (obj.has("total_highest_index")) obj.optLong("total_highest_index") else null,
+            firstForEachKeyHighestIndex =
+                if (obj.has("first_for_each_scid_highest_index")) obj.optLong("first_for_each_scid_highest_index") else null,
+        )
+    }
+
+    private fun parseContactPubkeys(json: String): List<String> {
+        val array = JSONArray(json)
+        return (0 until array.length()).mapNotNull { i ->
+            array.optJSONObject(i)?.optString("pubkey")?.takeIf { it.isNotEmpty() }
+        }
+    }
+
     companion object {
         private const val registerWaitMs = 10_000L
+        private val HISTORY_PAGE_SIZE: UInt = 100u
     }
 }

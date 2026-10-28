@@ -12,15 +12,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.SecretStoreFailure
+import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.PinPrompt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/// Asks for the PIN to open the account already sealed on this device.
-/// Ported from PeelCore's PinPad.swift (`PinPrompt` as the lock screen).
+/// Asks for the PIN to open the account already sealed on this device,
+/// then opens its `Engine` and starts it — connecting (restoring too, if
+/// an earlier restore never finished) before `onUnlocked` even fires, the
+/// same as a fresh onboarding does. Ported from PeelCore's PinPad.swift
+/// (`PinPrompt` as the lock screen).
 @Composable
-fun LockScreen(secretStore: SecretStore, onUnlocked: (mnemonic: String) -> Unit) {
+fun LockScreen(secretStore: SecretStore, storage: Storage, onUnlocked: (engine: Engine) -> Unit) {
     var pin by remember { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
     var working by remember { mutableStateOf(false) }
@@ -37,8 +42,11 @@ fun LockScreen(secretStore: SecretStore, onUnlocked: (mnemonic: String) -> Unit)
             // thread, or the keypad would freeze (SecretStore.kt).
             scope.launch {
                 try {
-                    val mnemonic = withContext(Dispatchers.Default) { secretStore.loadMnemonic(pin) }
-                    onUnlocked(mnemonic)
+                    val engine = withContext(Dispatchers.Default) {
+                        val mnemonic = secretStore.loadMnemonic(pin)
+                        Engine(mnemonic, storage).also { it.start() }
+                    }
+                    onUnlocked(engine)
                 } catch (e: SecretStoreFailure.WrongPin) {
                     problem = "Wrong PIN"
                     pin = ""

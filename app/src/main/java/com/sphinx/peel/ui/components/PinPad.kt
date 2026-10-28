@@ -30,7 +30,7 @@ fun PinDots(count: Int, modifier: Modifier = Modifier) {
                 Modifier
                     .size(14.dp)
                     .clip(CircleShape)
-                    .background(if (filled) Theme.colors.text else Theme.colors.background),
+                    .background(if (filled) Theme.colors.text else Theme.colors.fieldFill),
             )
         }
     }
