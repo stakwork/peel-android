@@ -193,7 +193,12 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             totalSteps = 2,
             onBack = ::back,
         ) {
-            PinPad(pin = pin, onPinChange = { pin = it }, onComplete = { step = Step.ConfirmPin })
+            PinPad(
+                pin = pin,
+                onPinChange = { pin = it },
+                onComplete = { step = Step.ConfirmPin },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         Step.ConfirmPin -> StepScaffold(
             title = "Enter your PIN again",
@@ -204,7 +209,13 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             totalSteps = 2,
             onBack = ::back,
         ) {
-            PinPad(pin = confirmation, onPinChange = { confirmation = it }, onComplete = { finishPin() }, enabled = !working)
+            PinPad(
+                pin = confirmation,
+                onPinChange = { confirmation = it },
+                onComplete = { finishPin() },
+                enabled = !working,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         Step.ShowWords -> StepScaffold(
             title = "Write down your twelve words",
