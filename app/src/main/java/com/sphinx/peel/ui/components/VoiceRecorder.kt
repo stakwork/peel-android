@@ -11,6 +11,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,23 +42,62 @@ class VoiceRecorder {
     var isCancelling by mutableStateOf(false)
         private set
 
-    private var stopRequested = false
-    private var cancelled = false
+    // Written from the gesture handler (the main thread), read in the
+    // recording loop on `Dispatchers.IO` — `@Volatile` so that loop is
+    // actually guaranteed to see a `release()`/`cancel()` from the
+    // other thread, not just likely to in practice.
+    @Volatile private var stopRequested = false
+    @Volatile private var cancelled = false
 
-    /// Starts recording, or does nothing if already recording. Calls
-    /// `onFinished` exactly once, off the main thread's caller (always
-    /// on `Dispatchers.Main`, safe to touch Compose state from): the
-    /// WAV bytes, or null for a permission/device failure, a recording
-    /// under `MINIMUM_DURATION_MS` (PeelCore's own "a tap, not a
-    /// message" rule), or one `cancel()` discarded.
+    /// Whether a press-and-hold session is logically open right now —
+    /// true from `start()` until the matching `release()`/`cancel()`,
+    /// set and cleared synchronously, independent of whether the
+    /// previous session's `AudioRecord` has actually finished
+    /// releasing the microphone yet (that part is still async, tracked
+    /// by `previousTeardown` below). This, not `isRecording`, is what
+    /// guards `start()` against being called twice for the same
+    /// gesture without a `release()` in between: `isRecording` only
+    /// flips back to `false` once the old recording's teardown
+    /// actually finishes, which is too late a signal for a fast
+    /// release-then-press to rely on — a second `start()` arriving
+    /// while the first was still tearing down used to be silently
+    /// dropped (the `if (isRecording) return` guard this field
+    /// replaces), losing that recording with no error at all.
+    private var sessionOpen = false
+    private var previousTeardown: Job? = null
+
+    /// Starts recording, or does nothing if a session is already open.
+    /// Calls `onFinished` exactly once, off the main thread's caller
+    /// (always on `Dispatchers.Main`, safe to touch Compose state
+    /// from): the WAV bytes, or null for a permission/device failure, a
+    /// recording under `MINIMUM_DURATION_MS` (PeelCore's own "a tap,
+    /// not a message" rule), or one `cancel()` discarded.
     fun start(scope: CoroutineScope, onFinished: (ByteArray?) -> Unit) {
-        if (isRecording) return
+        if (sessionOpen) return
+        sessionOpen = true
         stopRequested = false
         cancelled = false
+        isRecording = true
+        elapsedMs = 0L
         isCancelling = false
 
+        val waitFor = previousTeardown
+        previousTeardown = scope.launch {
+            // A fast release-then-press: the previous session's
+            // AudioRecord may still be mid-teardown on this same
+            // dispatcher. Wait for it to actually let go of the
+            // microphone before this one tries to claim it —
+            // `AudioRecord`'s own constructor can fail outright
+            // ("mic busy") if two are opened at once.
+            waitFor?.join()
+            recordAndFinish(onFinished)
+        }
+    }
+
+    private suspend fun recordAndFinish(onFinished: (ByteArray?) -> Unit) {
         val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBufferSize <= 0) {
+            withContext(Dispatchers.Main) { isRecording = false }
             onFinished(null)
             return
         }
@@ -67,20 +107,19 @@ class VoiceRecorder {
                 minBufferSize * 2,
             )
         } catch (e: SecurityException) {
+            withContext(Dispatchers.Main) { isRecording = false }
             onFinished(null)
             return
         }
         if (record.state != AudioRecord.STATE_INITIALIZED) {
             record.release()
+            withContext(Dispatchers.Main) { isRecording = false }
             onFinished(null)
             return
         }
 
-        isRecording = true
-        elapsedMs = 0L
         record.startRecording()
-
-        scope.launch(Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             val pcm = ByteArrayOutputStream()
             val chunk = ByteArray(minBufferSize)
             val startedAt = System.currentTimeMillis()
@@ -119,14 +158,19 @@ class VoiceRecorder {
 
     /// The finger lifted — the recording loop finishes on its own next
     /// read, same path as hitting `MAXIMUM_DURATION_MS` on its own.
+    /// Closes the session immediately (see `sessionOpen`'s own doc
+    /// comment) so a new `start()` right after is accepted, not dropped.
     fun release() {
+        sessionOpen = false
         stopRequested = true
     }
 
     /// Discards whatever was recorded instead of finishing it — a
     /// slide-to-cancel release, or the app backgrounded mid-recording
-    /// (PeelCore's own `.onChange(of: scenePhase)`).
+    /// (PeelCore's own `.onChange(of: scenePhase)`). Closes the session
+    /// immediately, same as `release()`.
     fun cancel() {
+        sessionOpen = false
         cancelled = true
         stopRequested = true
     }

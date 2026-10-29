@@ -27,6 +27,16 @@ data class TribeInfo(
     val escrowMsat: Long,
 ) {
     companion object {
+        /// `pubkey` doesn't match what the registry actually answered —
+        /// PeelCore's own `Engine.Failure.tribeServerMismatch`. Caught
+        /// here rather than left for a caller to notice downstream: the
+        /// result otherwise gets stored keyed by the *requested* pubkey
+        /// (`Engine.refreshTribeNames`/`Storage.updateTribeInfo`), so a
+        /// mismatched answer would silently write one tribe's name,
+        /// photo and — since this phase — *price* onto a different
+        /// tribe's own row, charging every later send to it accordingly.
+        class MismatchException(pubkey: String) : Exception("the tribes registry answered for a different tribe than $pubkey")
+
         suspend fun fetch(pubkey: String, host: String): TribeInfo = withContext(Dispatchers.IO) {
             val url = URL("https://$host/tribes/$pubkey")
             val connection = url.openConnection() as HttpURLConnection
@@ -38,13 +48,15 @@ data class TribeInfo(
                 connection.disconnect()
             }
             val root = JSONObject(body)
-            TribeInfo(
+            val info = TribeInfo(
                 pubkey = root.getString("pubkey"),
                 name = root.getString("name"),
                 img = root.optString("img").takeIf { it.isNotEmpty() },
                 pricePerMessageMsat = root.optLong("price_per_message", 0L).coerceAtLeast(0L),
                 escrowMsat = root.optLong("escrow_amount", 0L).coerceAtLeast(0L),
             )
+            if (info.pubkey != pubkey) throw MismatchException(pubkey)
+            info
         }
     }
 }

@@ -31,6 +31,25 @@ top-level field through completely untouched. A general multi-key
 registry is real future work (see "Open"), not something this shape
 should grow into by accretion.
 
+**Update (2026-10-29), from a full iOS-vs-Android audit:** one real
+bug, found by tracing `setBoostAmount` against PeelCore's own
+`setPreference`. PeelCore guarantees every write's date is strictly
+after whatever was stored before — `max(now, old.updatedAt + 1)`,
+never `now` alone — specifically so two edits land at two different
+dates even if they happen in the same wall-clock second.
+`setBoostAmount` used `now` alone. Concretely: set the boost to 10,
+immediately change your mind and set it to 20 (same second, same
+device, no other device involved at all) — the first `setBoostAmount`
+uploads `tip_amount=10@T`; the second stores `20@T`, then
+`syncBoostAmount` fetches the file it just wrote, compares `T > T`
+(false), and takes the branch that *applies the file over local* —
+silently reverting the boost back to 10 with no error and no hint
+anything happened. Fixed by giving `setBoostAmount` the same
+monotonicity guarantee: `date = max(now, oldDate + 1)`, read from
+`Setting.BOOST_AMOUNT_UPDATED_AT` before writing the new one. Not
+unit-tested — same `Engine` native-library gap the rest of this
+file's own "Done" section already names.
+
 **Open:**
 
 - Only `tip_amount` syncs. PeelCore's own registry also covers Face

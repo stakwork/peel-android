@@ -722,6 +722,22 @@ private fun senderDisplay(row: MessageRow, myAlias: String, isTribe: Boolean): T
 private fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
+/// Whether `row` counts toward a thread at all — PeelCore's own
+/// `threadMessage` SQL filter (`type IN contentSQL AND noWords = 0`),
+/// used for both the 2+-threshold check and the list of replies a
+/// thread actually shows. A control message or payment carrying a
+/// `threadUuid` (not something this port's own send paths produce, but
+/// reachable from any other Sphinx client sharing the chat) shouldn't
+/// count toward whether something is a thread at all, show up inside
+/// the open thread sheet, or be a candidate for the "N replies" row's
+/// participant avatars — same content-type check `canBoost` already
+/// uses, plus a text reply must actually have words (an attachment
+/// always counts, caption or not).
+private fun isThreadContent(row: MessageRow): Boolean {
+    if (row.type != 0 && row.type != ATTACHMENT_MESSAGE_TYPE) return false
+    return row.type == ATTACHMENT_MESSAGE_TYPE || previewContent(row).isNotBlank()
+}
+
 /// How far (in dp) a finger may slide left or up from where the mic
 /// was pressed before releasing cancels — PeelCore's own
 /// `VoiceMessage.cancelDistance` (80 points).
@@ -784,6 +800,7 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
     val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         val root = row.threadUuid ?: continue
+        if (!isThreadContent(row)) continue
         byRoot.getOrPut(root) { mutableListOf() }.add(row)
     }
     return byRoot.filterValues { it.size >= 2 }.mapValues { (_, replies) ->

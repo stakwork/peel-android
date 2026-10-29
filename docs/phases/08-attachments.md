@@ -149,6 +149,33 @@ threshold — PeelCore's own `VoiceRecordingIndicator`.
   "image" or "gif" either way), it just isn't relabeled the exact way
   PeelCore's own picker would.
 
+**Update (2026-10-29), from a full iOS-vs-Android audit:** two real
+fixes in `VoiceRecorder.kt`, both about what happens right at the
+boundary between one recording ending and the next one starting.
+
+A fast release-then-immediate-second-press could silently drop the
+second recording. `start()`'s own guard (`if (isRecording) return`)
+read a flag that only flipped back to `false` once the *entire*
+teardown finished — stopping and releasing the real `AudioRecord`, on
+a background dispatcher, after the recording loop noticed
+`stopRequested` and exited — not the instant `release()`/`cancel()`
+was called. A second press landing inside that window was simply
+ignored: no recording, no error, nothing. PeelCore's own equivalent
+(`VoiceRecorder.end`) sets its own "held" flag `false` as its very
+first, synchronous line, with no async gap at all. Fixed by splitting
+the one flag into two: a new `sessionOpen`, closed synchronously the
+instant `release()`/`cancel()` runs (this is what `start()` now
+guards against), and the existing `isRecording` (Compose state, UI
+only, still cleared once teardown actually finishes). A `start()`
+landing while the previous session is still tearing down now queues
+behind it (`previousTeardown?.join()`) instead of either colliding
+with the still-open `AudioRecord` or being dropped.
+
+`stopRequested`/`cancelled` were plain `var`s, written from the
+gesture handler on the main thread and read in a tight loop on
+`Dispatchers.IO` — nothing guaranteed the IO thread would ever
+actually observe a write from the other one. Marked `@Volatile`.
+
 ## Decided
 
 - The memes host is the one hardcoded fallback (`memes.sphinx.chat`),
@@ -409,6 +436,17 @@ happens to track movement."
   `VoiceRecorder` is not unit-tested — it wraps
   `android.media.AudioRecord`, which needs a real microphone, the same
   category of gap as `AudioPlayer`'s own `MediaPlayer` wrapper.
+
+**Also done (2026-10-29), from a full iOS-vs-Android audit:**
+
+- `ui/components/VoiceRecorder.kt`: split the one `isRecording` guard
+  into `sessionOpen` (closed synchronously by `release()`/`cancel()`,
+  what `start()` now checks) and `isRecording` (Compose state only,
+  still cleared once teardown finishes); `start()` now tracks the
+  previous session's teardown `Job` and joins it before opening a new
+  `AudioRecord` rather than colliding with one still releasing the
+  mic; `stopRequested`/`cancelled` marked `@Volatile`. No new tests —
+  same `AudioRecord`/real-microphone gap as above.
 
 ## Learned
 

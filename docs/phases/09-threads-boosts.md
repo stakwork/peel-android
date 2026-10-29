@@ -80,6 +80,61 @@ a send that would obviously fail, not something the underlying
 mechanism requires to work at all. Skipped here on purpose — see
 "Decided".
 
+**Update (2026-10-29), a second full iOS-vs-Android audit:** three more
+real fixes, all in the tribe-pricing/thread-avatar work this same day's
+earlier audit didn't yet cover.
+
+`TribeInfo.fetch` built its result straight from whatever the registry
+answered, never checking the `pubkey` field it got back actually
+matched the `pubkey` it asked for — PeelCore's own `TribeInfo.fetch`
+guards this explicitly (`guard info.pubkey == pubkey else { throw
+.tribeServerMismatch }`). The caller (`Engine.refreshTribeNames`) stores
+the result keyed by the *requested* pubkey regardless, so a registry
+answering for the wrong tribe — a caching bug, a misrouted response —
+would have silently overwritten this tribe's name, photo, and (since
+this phase's own pricing work) its *price* with another tribe's own
+data, mispricing every later send to it with no error anywhere. Fixed:
+`TribeInfo.fetch` now throws `MismatchException` when the pubkeys
+disagree, caught by `refreshTribeNames`'s own existing per-tribe
+`try`/`catch` the same way any other fetch failure already is.
+
+`tribeMessageAmountMsat`/`tribePaymentPriceMsat` added
+`pricePerMessageMsat + escrowMsat` with plain `Long` addition, which
+wraps silently on overflow rather than throwing — PeelCore's own
+`Tribe.messageAmount` uses `addingReportingOverflow`, saturating at
+`Int64.max` instead. Both fields come from the tribes registry, not
+anything this account chose; a buggy or compromised registry
+answering with a price near `Long.MAX_VALUE` would wrap the sum
+negative, which `coerceAtLeast` would then clamp back up to the floor
+— the wrong number for the wrong reason, even though it happens to
+land somewhere harmless. Fixed with a small saturating-add helper,
+`saturatingTribePrice`, shared by both functions.
+
+`threadSummaries` counted *any* row carrying a `threadUuid` toward
+whether something is a real thread, who its recent repliers are, and
+where its root bumps to — no check on message type or on whether a
+text reply actually has any content, unlike PeelCore's own
+`threadMessage` SQL filter (`type IN contentSQL AND noWords = 0`),
+applied to the same three things. Unreachable from this port's own
+send paths today (nothing here can produce a non-text/attachment
+threaded row, and the composer refuses to send blank text) — reachable
+from a message any other Sphinx client sharing the chat sends, which
+isn't bound by that restriction. Fixed with `isThreadContent(row)`
+(content-type check `canBoost` already uses, plus "a text reply must
+have actual words"), applied inside `threadSummaries`'s own grouping
+step. Left `ThreadScreen`'s own reply list unfiltered on purpose —
+once a thread is genuinely open, showing everything addressed to its
+root seemed more useful than hiding a control message from a view the
+person explicitly asked to see, and nothing confirmed iOS's own thread
+*view* (as opposed to the threshold/avatar queries) filters that list
+either.
+
+Everything else this second audit checked — both boost call sites
+computing the same amount, `canBoost` against `isBoostable`, the
+`CONFLICT_REPLACE` price-preservation fix from earlier the same day,
+`rowSortKey`'s interaction with a priced thread — matched, no further
+changes.
+
 **Open:**
 
 - No calls — Open/Join rows, the call banner, the full-screen call UI:
@@ -314,6 +369,19 @@ No new tests: `Engine.sendBoost` needs the native `sphinxrs` library
 (no host build for a plain JVM test, same gap every other `Engine`
 send function has); `canBoost` and the rest are Compose UI/pure
 functions in a screen already noted (Phase 5) as not unit-tested.
+
+**Also done (2026-10-29), the second audit's fixes:**
+
+- `engine/TribeInfo.kt`: `fetch` now throws `MismatchException` when
+  the registry's own `pubkey` field disagrees with the one requested,
+  instead of trusting the response blindly.
+- `engine/Engine.kt`: `saturatingTribePrice` — the shared, overflow-safe
+  `pricePerMessageMsat + escrowMsat` both `tribeMessageAmountMsat` and
+  `tribePaymentPriceMsat` now call instead of a plain `+`.
+- `ui/dashboard/ConversationScreen.kt`: `isThreadContent(row)`, applied
+  inside `threadSummaries`'s own grouping step.
+
+No new tests here either, same reasons as above.
 
 ## Learned
 

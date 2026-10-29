@@ -381,7 +381,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// the same as "no price", not an error.
     private fun tribeMessageAmountMsat(chat: String): Long {
         val tribe = storage.contact(chat) ?: return MESSAGE_FLOOR_MSAT
-        return (tribe.pricePerMessageMsat + tribe.escrowMsat).coerceAtLeast(MESSAGE_FLOOR_MSAT)
+        return saturatingTribePrice(tribe).coerceAtLeast(MESSAGE_FLOOR_MSAT)
     }
 
     /// What a boost pays a tribe on top of its own tip: price plus
@@ -389,7 +389,22 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// own `Tribe.paymentPriceMsat`.
     private fun tribePaymentPriceMsat(chat: String): Long {
         val tribe = storage.contact(chat) ?: return 0
-        return (tribe.pricePerMessageMsat + tribe.escrowMsat).coerceAtLeast(0)
+        return saturatingTribePrice(tribe).coerceAtLeast(0)
+    }
+
+    /// `pricePerMessageMsat + escrowMsat`, saturating at `Long.MAX_VALUE`
+    /// instead of wrapping — PeelCore's own `Tribe.messageAmount`'s
+    /// `addingReportingOverflow`. Both fields come from the tribes
+    /// registry (`TribeInfo.fetch`), not this account's own choice; a
+    /// buggy or hostile registry answering with a price near
+    /// `Long.MAX_VALUE` would otherwise wrap plain addition into a large
+    /// *negative* sum, which `coerceAtLeast` would then quietly clamp
+    /// back up to the floor — the wrong number for the wrong reason,
+    /// even though it happens to land somewhere harmless here.
+    private fun saturatingTribePrice(tribe: ContactRow): Long {
+        val price = tribe.pricePerMessageMsat
+        val escrow = tribe.escrowMsat
+        return if (price > Long.MAX_VALUE - escrow) Long.MAX_VALUE else price + escrow
     }
 
     /// Boosts someone else's message: a type 29 message naming it by
@@ -444,14 +459,27 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// background sync failing after `start()`/`resume()` is; the
     /// value is already correct on this device either way, and the
     /// next successful sync carries it).
+    ///
+    /// Dated strictly after whatever was stored before (`max(now, old +
+    /// 1)`, never `now` alone) — PeelCore's own `setPreference` keeps
+    /// this same guarantee. Without it, two choices made back to back
+    /// (tap Save, immediately change your mind, tap Save again) can
+    /// land in the same whole second; `syncBoostAmount`'s own
+    /// strictly-greater comparison against the file would then treat
+    /// that tie as "nothing new to upload," and the very next sync —
+    /// which fetches the file this device's own first choice already
+    /// reached — would silently revert the second, later choice back
+    /// to the first, on this one device, no network race needed at
+    /// all. A found-and-fixed bug, not a hypothetical.
     suspend fun setBoostAmount(sats: Long) {
         require(sats > 0) { "the boost amount must be more than zero" }
-        val now = System.currentTimeMillis() / 1000
+        val oldDate = storage.value(Setting.BOOST_AMOUNT_UPDATED_AT)?.toLongOrNull() ?: 0L
+        val date = maxOf(System.currentTimeMillis() / 1000, oldDate + 1)
         storage.apply(
             Storage.Commit(
                 settings = mapOf(
                     Setting.BOOST_AMOUNT_MSAT to (sats * 1000).toString(),
-                    Setting.BOOST_AMOUNT_UPDATED_AT to now.toString(),
+                    Setting.BOOST_AMOUNT_UPDATED_AT to date.toString(),
                 ),
             ),
         )
