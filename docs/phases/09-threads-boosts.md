@@ -21,9 +21,14 @@ an attachment aren't two rows.
 message already in a thread joins that thread; a reply to a plain
 message starts a thread at that message. Every message carrying a
 `threadUuid` is pulled out of the main list and grouped by it
-(`threadSummaries`); the root keeps its ordinary place in the chat and
-grows an "N replies" row. Tapping it opens `ThreadScreen` — the root,
-every reply in order, and a composer that always replies to the root.
+(`threadSummaries`); the root grows an "N replies" row and moves to its
+thread's newest reply's position in the list, the same as PeelCore's
+own `ChatRow.rows` (which overwrites the collapsed row's `date` with
+the thread's latest surviving message's date, not the root's own) —
+so an old message with a brand new reply jumps to where that reply
+would sit, same as the real app. Tapping it opens `ThreadScreen` — the
+root, every reply in order, and a composer that always replies to the
+root.
 
 **Open:**
 
@@ -32,13 +37,6 @@ every reply in order, and a composer that always replies to the root.
   not a UI change).
 - The thread sheet's composer is text only — no attach button, so a
   photo can't be sent into a thread yet, only the main chat.
-- The collapsed thread row keeps the root's own chronological position
-  in the list, rather than bumping to the position of its newest reply
-  the way PeelCore's own collapsed row does (`row.date = message.date`,
-  the *latest* message's date) — a real, visible difference: a thread
-  that just got a new reply won't visually "jump" to the bottom of an
-  active chat the way the real app's does. Simpler to build, and still
-  correct about *what's* shown, just not *where*.
 - No participant avatars on the "N replies" row (PeelCore shows up to
   three small overlapping avatars of who's replied) — text only.
 - No unread count specific to a thread (PeelCore's own `ThreadSummary.unread`)
@@ -91,15 +89,24 @@ normally in the main list (as `MessageRowView` already draws any
 message) with only the "N replies" row *added* beneath it, rather than
 needing a special "this is a thread root" render path.
 
-**Chose not to replicate the "bump to the newest reply" positioning.**
-PeelCore's collapsed row uses the *latest* reply's own date for where
-it sits in the list, so an old message with a brand new reply jumps to
-the bottom of an active chat. Matching that means tracking, for every
-thread, which of its own position in `displayedMessages` it should
-actually occupy — real work for a visual behavior that's secondary to
-"can you see that something has replies and open them," which is what
-actually matters for a first version. Named as an open gap rather than
-silently different.
+**Added the "bump to the newest reply" positioning after all, once it
+turned out to matter.** First built without it (see above, an earlier
+version of this doc named it an open gap); the user flagged it as
+critical once they noticed an old thread not moving when it got a new
+reply. Reading PeelCore's `ChatRow.rows` closely showed the real
+mechanism isn't a second sort pass at all — the SQL feeding it already
+drops every thread message except the newest one with words, so the
+survivor's own position in the (already timestamp-sorted) query result
+*is* the thread's position; `ChatRow.rows` just copies that survivor's
+date onto the row for its own bookkeeping. Android has no such
+filtering SQL (thread replies are filtered out of `displayedMessages`
+in Kotlin, not in the `Storage.messages` query), so the equivalent had
+to be done explicitly: `rowSortKey` gives a thread's root the later of
+its own timestamp and its thread's latest reply's timestamp, and
+`displayedMessages` is sorted by that key (a stable sort, so anything
+not in a thread keeps its original order). Same visible result, a
+different mechanism — Kotlin doesn't have the SQL layer iOS's GRDB
+query does this in.
 
 ## Done
 
@@ -110,6 +117,7 @@ silently different.
   `BoostSummary`, `boostSummaries`; `threadUuid`, `threadRoot`,
   `ThreadSummaryData`, `threadSummaries`; both kinds of row excluded
   from the main list and summarized on whatever they target instead;
+  `rowSortKey` bumps a thread's root to its latest reply's position;
   `BoostChip`, `ThreadSummaryRow`; `ThreadScreen` (the thread sheet —
   root, replies, its own composer); the main composer's `onSend` and
   the image-send path both now compute `inThread` from the reply

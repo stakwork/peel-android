@@ -217,13 +217,16 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         val boosts = remember(messages) { boostSummaries(messages) }
         // Nor is a thread's own reply ever shown inline - PeelCore's own
         // `rows(...)` collapses every message that carries a `threadUuid`
-        // behind its root's "N replies" row; the root itself keeps its
-        // ordinary place in the list (unlike PeelCore, which bumps the
-        // collapsed row to the thread's newest reply - a documented
-        // simplification, see docs/phases/09-threads-boosts.md).
+        // behind its root's "N replies" row. The root keeps its own
+        // content but moves to its newest reply's chronological spot -
+        // PeelCore's `row.date = message.date`, where `message` is the
+        // thread's latest surviving message, not the root itself - so a
+        // thread that just got a reply jumps to where that reply would
+        // sit, same as an active chat bumping to the bottom.
         val threads = remember(messages) { threadSummaries(messages) }
-        val displayedMessages = remember(messages) {
+        val displayedMessages = remember(messages, threads) {
             messages.filter { it.type != BOOST_MESSAGE_TYPE && threadUuid(it) == null }
+                .sortedBy { row -> rowSortKey(row, threads) }
         }
 
         val listState = rememberLazyListState()
@@ -519,6 +522,18 @@ private fun threadSummaries(messages: List<MessageRow>): Map<String, ThreadSumma
     return byRoot.mapValues { (_, replies) ->
         ThreadSummaryData(replyCount = replies.size, lastTimestamp = replies.mapNotNull { it.timestamp }.maxOrNull())
     }
+}
+
+/// Where a row sits once threads are collapsed — its own timestamp,
+/// unless it's a thread's root and that thread's latest reply is newer,
+/// in which case the root is sorted as if it happened then. Mirrors
+/// PeelCore's `ChatRow.rows`, which overwrites the collapsed row's
+/// `date` with the thread's newest surviving message's date rather than
+/// the root's own.
+private fun rowSortKey(row: MessageRow, threads: Map<String, ThreadSummaryData>): Long {
+    val own = row.timestamp ?: 0L
+    val latestReply = row.uuid?.let { threads[it]?.lastTimestamp } ?: return own
+    return maxOf(own, latestReply)
 }
 
 @Composable
