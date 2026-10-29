@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the attachment cache (Storage.attachmentCacheDir) is shared,
+     and only as a content:// URI handed to whatever app the person
+     picks to open a video/audio/PDF/file attachment with — see
+     Engine.downloadAttachment and ConversationScreen's AttachmentView. -->
+<paths>
+    <cache-path name="attachments" path="attachments/" />
+</paths>

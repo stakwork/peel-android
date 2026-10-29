@@ -42,6 +42,7 @@ import uniffi.sphinxrs.pubkeyFromSeed
 import uniffi.sphinxrs.read as coreMarkRead
 import uniffi.sphinxrs.rootSignMs as coreRootSignMs
 import uniffi.sphinxrs.send as coreSend
+import uniffi.sphinxrs.signBase64 as coreSignBase64
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
 import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 
@@ -68,6 +69,10 @@ class Engine(mnemonic: String, val storage: Storage) {
     @Volatile private var state: Map<String, ByteArray> = storage.loadCoreState()
     private var transport: Transport? = null
     private var listenerStarted = false
+    /// The memes server's bearer token, kept until shortly before it
+    /// expires — `downloadAttachment`'s own sign-in, independent of the
+    /// MQTT connection (`withMemes`).
+    private var memesToken: MemesServer.Token? = null
 
     /// Every `handle`d inbound message, for whoever is waiting on one —
     /// `connect`'s register wait, and `askAndAwait`'s history/counts
@@ -355,6 +360,97 @@ class Engine(mnemonic: String, val storage: Storage) {
         storage.insertMessages(listOf(row))
         return row
     }
+
+    /// Downloads and decrypts an attachment into this account's cache,
+    /// or finds it there already — PeelCore's `downloadAttachment`,
+    /// trimmed to receiving (this port never sends one yet,
+    /// `docs/phases/08-attachments.md`): no upload, no price, no "sell
+    /// it" path, and no overall cache-size eviction (PeelCore prunes its
+    /// cache at a 500MB total; Android's own cache directory is already
+    /// OS-managed under storage pressure, and every file here is always
+    /// re-derivable from the server plus its key, so that's an accepted
+    /// gap, not a silent one).
+    suspend fun downloadAttachment(row: MessageRow): DownloadedAttachment {
+        val fields = AttachmentFields.decode(row.body) ?: throw IllegalStateException("Not an attachment.")
+        val mediaToken = fields.mediaToken ?: throw IllegalStateException("This attachment has nowhere to come from yet.")
+        val token = MediaToken.parse(mediaToken)?.takeIf { MediaToken.isSafeMuid(it.muid) }
+            ?: throw IllegalStateException("This attachment is unreadable.")
+        val key = fields.ownKey ?: throw IllegalStateException("This attachment has no key.")
+        // Only ever from this account's own memes server, never a host a
+        // message happens to name — same guard as a tribe's `host`
+        // (`Engine.contactHint`'s own reasoning), applied to a server
+        // that would otherwise just be told to hand over a bearer token.
+        if (token.host != MEMES_HOST) throw IllegalStateException("This attachment is on an untrusted host.")
+        val declared = attachmentKind(fields.mediaType)
+
+        val cacheDir = storage.attachmentCacheDir()
+        val cacheFile = java.io.File(cacheDir, token.muid)
+        val nameFile = java.io.File(cacheDir, "${token.muid}.name")
+        if (cacheFile.exists()) {
+            val plain = cacheFile.readBytes()
+            val fileName = nameFile.takeIf { it.exists() }?.readText()?.takeIf { it.isNotEmpty() }
+            return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), fileName, plain.size)
+        }
+
+        val memes = MemesServer(MEMES_HOST)
+        val limit = ATTACHMENT_LIMIT + 128 // Encryption adds a header, padding and a MAC.
+        val (sealed, fileName) = withMemes(memes) { auth -> memes.download(mediaToken, auth, limit) }
+        val plain = MediaCrypto.decrypt(sealed, key)
+        cacheFile.writeBytes(plain)
+        if (fileName != null) nameFile.writeText(fileName)
+        return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), fileName, plain.size)
+    }
+
+    /// What the bytes really are, given what the sender said — PeelCore's
+    /// `AttachmentKind.verified`: the declared kind when the bytes look
+    /// like it, else a plain file, which nothing renders specially.
+    /// Video and audio are not independently checked (no container-
+    /// signature reader here yet, unlike PeelCore's own) — the declared
+    /// kind is trusted for those two.
+    private fun verifiedKind(data: ByteArray, declared: AttachmentKind): AttachmentKind {
+        val matches = when (declared) {
+            AttachmentKind.IMAGE -> runCatching {
+                android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size)
+            }.getOrNull() != null
+            AttachmentKind.PDF -> data.size >= 5 && data.copyOfRange(0, 5).toString(Charsets.US_ASCII) == "%PDF-"
+            AttachmentKind.VIDEO, AttachmentKind.AUDIO, AttachmentKind.FILE -> true
+        }
+        return if (matches) declared else AttachmentKind.FILE
+    }
+
+    /// The bearer token for `memes`, signing in again once if the server
+    /// no longer takes the one kept — PeelCore's `withMemes`.
+    private suspend fun <T> withMemes(memes: MemesServer, call: suspend (MemesServer.Token) -> T): T = try {
+        call(memesSignIn(memes, refresh = false))
+    } catch (e: MemesServer.RefusedException) {
+        if (e.isUnauthorized) call(memesSignIn(memes, refresh = true)) else throw e
+    }
+
+    /// A fresh bearer token: signing the server's challenge with the
+    /// account's own key (child index 0, the same one that signs this
+    /// account's login) — PeelCore's `memesSignIn`.
+    private suspend fun memesSignIn(memes: MemesServer, refresh: Boolean): MemesServer.Token {
+        val kept = memesToken
+        if (!refresh && kept != null && kept.isFresh) return kept
+        val (id, challengeText) = memes.challenge()
+        val bytes = challengeBytes(challengeText) ?: throw MemesServer.UnreadableException("sign-in")
+        val signature = coreSignBase64(seed, 0u, clock.next(), network, base64UrlEncode(bytes))
+        val token = memes.verify(id, signature, accountKey)
+        memesToken = token
+        return token
+    }
+
+    /// The challenge's bytes, read as PeelCore's own `challengeBytes`
+    /// reads them: cut to a multiple of four characters, either base64
+    /// alphabet.
+    private fun challengeBytes(challenge: String): ByteArray? {
+        val cut = challenge.substring(0, challenge.length - challenge.length % 4)
+        val standard = cut.replace('-', '+').replace('_', '/')
+        return runCatching { java.util.Base64.getDecoder().decode(standard) }.getOrNull()
+    }
+
+    private fun base64UrlEncode(data: ByteArray): String =
+        java.util.Base64.getEncoder().encodeToString(data).replace('+', '-').replace('/', '_')
 
     /// Marks a chat read up to its newest stored message, here and on the
     /// server so the account's other devices agree — PeelCore's
@@ -747,5 +843,19 @@ class Engine(mnemonic: String, val storage: Storage) {
         /// answer — PeelCore's own watchdog is 30s (`Engine.historyStall`).
         private const val historyWaitMs = 30_000L
         private val HISTORY_PAGE_SIZE: UInt = 100u
+
+        /// The memes server attachments come from — PeelCore's own
+        /// `defaultMemesHost`. Always this fallback: there is no
+        /// onboarding step here that lets an account record its own
+        /// (`Setting.memesHost` on PeelCore's side), same as this port's
+        /// tribe host before `Engine.start` first reads the public
+        /// config — except a memes host never comes from there either,
+        /// it is simply the one constant every account not on a local
+        /// test server uses.
+        private const val MEMES_HOST = "memes.sphinx.chat"
+
+        /// The largest attachment this device downloads — PeelCore's
+        /// own `attachmentLimit`.
+        private const val ATTACHMENT_LIMIT = 100_000_000
     }
 }

@@ -1,0 +1,143 @@
+package com.sphinx.peel.engine
+
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+
+/// The memes server: sign in with a signed challenge, download an
+/// attachment's encrypted bytes. Ported from PeelCore's
+/// `MemesServer.swift`, trimmed to receiving — no upload, no
+/// preferences file, no payment templates: this port doesn't send
+/// attachments yet (`docs/phases/08-attachments.md`).
+class MemesServer(private val host: String) {
+    data class Token(val value: String, val expiresAtMs: Long) {
+        val isFresh: Boolean get() = expiresAtMs - System.currentTimeMillis() > 60_000
+    }
+
+    class RefusedException(val status: Int, what: String) : Exception("the memes server refused $what (HTTP $status)") {
+        val isUnauthorized: Boolean get() = status == 401 || status == 403
+    }
+    class UnreadableException(what: String) : Exception("the memes server's reply to $what was unreadable")
+    class TooLargeException(val size: Int) : Exception("the attachment is larger than expected ($size bytes)")
+
+    /// `GET /ask`: an id and a challenge to sign.
+    suspend fun challenge(): Pair<String, String> = withContext(Dispatchers.IO) {
+        val connection = (URL("https://$host/ask").openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10_000
+            readTimeout = 10_000
+        }
+        val body = readText(connection, "sign-in")
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: throw UnreadableException("sign-in")
+        val id = json.optString("id").takeIf { it.isNotEmpty() }
+        val text = json.optString("challenge").takeIf { it.isNotEmpty() }
+        if (id == null || text == null) throw UnreadableException("sign-in")
+        id to text
+    }
+
+    /// `POST /verify`: the signed challenge for a bearer token. Built by
+    /// hand, same as PeelCore: the query carries the signature as is,
+    /// not re-encoded through a form body.
+    suspend fun verify(id: String, signature: String, pubkey: String): Token = withContext(Dispatchers.IO) {
+        val query = "id=${URLEncoder.encode(id, "UTF-8")}&sig=${URLEncoder.encode(signature, "UTF-8")}" +
+            "&pubkey=${URLEncoder.encode(pubkey, "UTF-8")}"
+        val connection = (URL("https://$host/verify?$query").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "multipart/form-data")
+            connectTimeout = 10_000
+            readTimeout = 10_000
+        }
+        val body = readText(connection, "the signed challenge")
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: throw UnreadableException("the signed challenge")
+        val token = json.optString("token").takeIf { it.isNotEmpty() } ?: throw UnreadableException("the signed challenge")
+        Token(token, Jwt.expiryMs(token))
+    }
+
+    /// `GET /file/<media token>`: the encrypted bytes and the file name
+    /// the server gives, refusing anything over `limit` bytes (the
+    /// whole point of the limit: never buffer more than that, not just
+    /// reject after the fact).
+    suspend fun download(mediaToken: String, token: Token, limit: Int): Pair<ByteArray, String?> =
+        withContext(Dispatchers.IO) {
+            val connection = (URL("https://$host/file/$mediaToken").openConnection() as HttpURLConnection).apply {
+                setRequestProperty("Authorization", "Bearer ${token.value}")
+                connectTimeout = 10_000
+                readTimeout = 60_000
+            }
+            val status = connection.responseCode
+            if (status != 200) {
+                connection.disconnect()
+                throw RefusedException(status, "the download")
+            }
+            val fileName = connection.getHeaderField("Content-Disposition")?.let(::fileNameFromDisposition)
+            val data = try {
+                readUpTo(connection.inputStream, limit)
+            } finally {
+                connection.disconnect()
+            }
+            data to fileName
+        }
+
+    private fun readText(connection: HttpURLConnection, what: String): String {
+        val status = connection.responseCode
+        try {
+            if (status != 200) throw RefusedException(status, what)
+            return connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /// Reads at most `limit` bytes, throwing the moment a `limit + 1`th
+    /// one shows up — never buffers more than that trying to find out.
+    private fun readUpTo(stream: java.io.InputStream, limit: Int): ByteArray {
+        val buffer = java.io.ByteArrayOutputStream(minOf(limit, 1 shl 16))
+        val chunk = ByteArray(1 shl 16)
+        var total = 0
+        while (true) {
+            val read = stream.read(chunk)
+            if (read < 0) break
+            total += read
+            if (total > limit) throw TooLargeException(total)
+            buffer.write(chunk, 0, read)
+        }
+        return buffer.toByteArray()
+    }
+
+    /// The `filename=` of a Content-Disposition header, made safe to
+    /// show: the last path component, no control characters, at most
+    /// 200 characters. Simplified from PeelCore's own (which also
+    /// strips leading dots/colons) — this is for display only, never a
+    /// path on disk (attachments cache by `muid`, never by this name).
+    private fun fileNameFromDisposition(header: String): String? {
+        val marker = "filename="
+        val index = header.indexOf(marker)
+        if (index < 0) return null
+        val raw = header.substring(index + marker.length).split(";").first().trim().trim('"')
+        val last = raw.substringAfterLast('/').substringAfterLast('\\')
+        val clean = last.filter { it.code >= 0x20 }.take(200)
+        return clean.ifEmpty { null }
+    }
+}
+
+/// Just enough of a JWT to read its `exp` claim — the memes server's
+/// bearer token, a standard `header.payload.signature` JWT.
+private object Jwt {
+    fun expiryMs(token: String): Long {
+        val parts = token.split(".")
+        if (parts.size < 2) return 0
+        return try {
+            val payload = JSONObject(String(base64UrlDecode(parts[1]), Charsets.UTF_8))
+            if (payload.has("exp")) (payload.getDouble("exp") * 1000).toLong() else 0
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    private fun base64UrlDecode(text: String): ByteArray {
+        val padded = text.replace('-', '+').replace('_', '/').let { it + "=".repeat((4 - it.length % 4) % 4) }
+        return java.util.Base64.getDecoder().decode(padded)
+    }
+}

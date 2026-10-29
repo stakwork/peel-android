@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import android.content.Intent
+import android.webkit.MimeTypeMap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -8,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,8 +27,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,9 +51,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import com.sphinx.peel.engine.AttachmentKind
+import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
@@ -140,7 +154,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
                 MessageRowView(
                     row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
-                    replyUuid = replyUuid, parent = parent,
+                    replyUuid = replyUuid, parent = parent, engine = engine,
                     onReply = { replyTo = row },
                 )
             }
@@ -206,6 +220,10 @@ private fun previewContent(row: MessageRow): String =
 private fun replyUuid(row: MessageRow): String? =
     row.body?.let { runCatching { JSONObject(it).optString("replyUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
 
+/// A message of this type carries an attachment, caption (`content`)
+/// optional — PeelCore's `MessageType.attachment`.
+private const val ATTACHMENT_TYPE = 6
+
 @Composable
 private fun MessageRowView(
     row: MessageRow,
@@ -215,6 +233,7 @@ private fun MessageRowView(
     myAlias: String,
     replyUuid: String?,
     parent: MessageRow?,
+    engine: Engine,
     onReply: () -> Unit,
 ) {
     val sender = senderJson(row)
@@ -262,17 +281,155 @@ private fun MessageRowView(
                 QuoteBox(parent = parent, myAlias = myAlias)
                 Spacer(Modifier.height(2.dp))
             }
-            Text(
-                content,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Theme.colors.text,
-                modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
-            )
+            if (row.type == ATTACHMENT_TYPE) {
+                AttachmentView(row, engine)
+                if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
+            }
+            if (content.isNotEmpty() || row.type != ATTACHMENT_TYPE) {
+                Text(
+                    content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Theme.colors.text,
+                    modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
+                )
+            }
             if (row.status == "FAILED") {
                 Text("Not delivered", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
             }
         }
     }
+}
+
+private sealed class AttachmentState {
+    data object Loading : AttachmentState()
+    data class Failed(val message: String) : AttachmentState()
+    data class Loaded(val attachment: DownloadedAttachment) : AttachmentState()
+}
+
+/// One attachment: downloads and decrypts it (`Engine.downloadAttachment`)
+/// the moment its row appears, then shows it — an image inline (Coil,
+/// from the decrypted file on disk), anything else as a named row that
+/// opens in whatever app the person has for it. No tap-to-load gate:
+/// every attachment in a chat downloads as soon as it's shown, same as
+/// a small chat's worth of images costs little either way; a busier
+/// one may want that gate later.
+@Composable
+private fun AttachmentView(row: MessageRow, engine: Engine) {
+    var state by remember(row.id, row.uuid) { mutableStateOf<AttachmentState>(AttachmentState.Loading) }
+    LaunchedEffect(row.id, row.uuid) {
+        state = try {
+            AttachmentState.Loaded(engine.downloadAttachment(row))
+        } catch (e: Exception) {
+            AttachmentState.Failed(e.message ?: "Could not load this attachment.")
+        }
+    }
+    when (val current = state) {
+        is AttachmentState.Loading -> AttachmentPlaceholder {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Theme.colors.secondaryText)
+        }
+        is AttachmentState.Failed -> AttachmentPlaceholder(isError = true) {
+            Icon(Icons.Filled.ErrorOutline, contentDescription = null, tint = Theme.colors.destructive, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(current.message, style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
+        }
+        is AttachmentState.Loaded -> AttachmentContent(current.attachment)
+    }
+}
+
+@Composable
+private fun AttachmentPlaceholder(isError: Boolean = false, content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isError) Theme.colors.destructive.copy(alpha = 0.08f) else Theme.colors.fieldFill)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+private fun AttachmentContent(attachment: DownloadedAttachment) {
+    if (attachment.kind == AttachmentKind.IMAGE) {
+        AsyncImage(
+            model = attachment.file,
+            contentDescription = attachment.fileName ?: "Image",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 240.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Theme.colors.fieldFill),
+        )
+        return
+    }
+    val context = LocalContext.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Theme.colors.fieldFill)
+            .clickable { openAttachment(context, attachment) }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(attachmentIcon(attachment.kind), contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                attachment.fileName ?: fallbackFileName(attachment.kind),
+                style = MaterialTheme.typography.bodyMedium,
+                color = Theme.colors.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(formattedSize(attachment.size), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+        }
+    }
+}
+
+private fun attachmentIcon(kind: AttachmentKind) = when (kind) {
+    AttachmentKind.VIDEO -> Icons.Filled.Videocam
+    AttachmentKind.AUDIO -> Icons.Filled.AudioFile
+    AttachmentKind.PDF -> Icons.Filled.PictureAsPdf
+    AttachmentKind.IMAGE, AttachmentKind.FILE -> Icons.AutoMirrored.Filled.InsertDriveFile
+}
+
+private fun fallbackFileName(kind: AttachmentKind) = when (kind) {
+    AttachmentKind.VIDEO -> "video"
+    AttachmentKind.AUDIO -> "audio"
+    AttachmentKind.PDF -> "file.pdf"
+    AttachmentKind.IMAGE, AttachmentKind.FILE -> "file"
+}
+
+private fun formattedSize(bytes: Int): String = when {
+    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
+    bytes >= 1_000 -> "%.0f KB".format(bytes / 1_000.0)
+    else -> "$bytes B"
+}
+
+/// Hands the file to whatever app the person has for it, as a
+/// `content://` URI (`FileProvider`, declared in the manifest) — never
+/// a raw `file://` path, which apps on recent Android refuse to open.
+private fun openAttachment(context: android.content.Context, attachment: DownloadedAttachment) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", attachment.file)
+    val mimeType = attachment.fileName
+        ?.substringAfterLast('.', "")
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+        ?: when (attachment.kind) {
+            AttachmentKind.VIDEO -> "video/*"
+            AttachmentKind.AUDIO -> "audio/*"
+            AttachmentKind.PDF -> "application/pdf"
+            AttachmentKind.IMAGE, AttachmentKind.FILE -> "*/*"
+        }
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching { context.startActivity(intent) }
 }
 
 /// The message a reply answers: who and a one-line preview — PeelCore's

@@ -87,6 +87,18 @@ class Storage(context: Context, account: String = "default") {
     private val dbName = "peel-$account.db"
     private val helper = Helper(appContext, dbName)
 
+    /// Where this account's decrypted attachments are cached, by `muid`
+    /// — Android's own cache dir, which the OS may clear under storage
+    /// pressure and which never counts as the user's data the way the
+    /// files dir would: an attachment is always re-derivable from the
+    /// memes server plus its key, so losing the cache only costs a
+    /// re-download, never data (`Engine.downloadAttachment`).
+    fun attachmentCacheDir(): java.io.File {
+        val dir = java.io.File(appContext.cacheDir, "attachments/${dbName.removeSuffix(".db")}")
+        dir.mkdirs()
+        return dir
+    }
+
     /// Every opaque entry the core owns, for the state a core call needs
     /// passed back in.
     fun loadCoreState(): Map<String, ByteArray> {
