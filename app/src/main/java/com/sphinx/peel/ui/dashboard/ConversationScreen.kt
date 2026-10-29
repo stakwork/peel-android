@@ -8,7 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -393,6 +394,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             recorder = voiceRecorder,
             onPressRecord = { onPressRecord() },
             onReleaseRecord = { voiceRecorder.release() },
+            onCancelRecord = { voiceRecorder.cancel() },
             sendingLabel = sendingLabel,
             onSend = {
                 val toSend = draft
@@ -577,6 +579,11 @@ private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("a
 /// `Engine.sendMessage` writes, and the one `mapMessage` stores as is.
 private fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
+
+/// How far (in dp) a finger may slide left or up from where the mic
+/// was pressed before releasing cancels — PeelCore's own
+/// `VoiceMessage.cancelDistance` (80 points).
+private const val VOICE_CANCEL_DISTANCE_DP = 80
 
 /// A boost: a payment on another message, named the same way a reply
 /// names what it answers (`row.replyUuid`) — PeelCore's own
@@ -1102,6 +1109,7 @@ private fun Composer(
     recorder: VoiceRecorder,
     onPressRecord: () -> Unit,
     onReleaseRecord: () -> Unit,
+    onCancelRecord: () -> Unit,
     sendingLabel: String?,
     onSend: () -> Unit,
 ) {
@@ -1165,11 +1173,23 @@ private fun Composer(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (recorder.isRecording) {
-                    Text(
-                        "Recording… ${formatDuration(recorder.elapsedMs.toInt())}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = Theme.colors.destructive,
-                    )
+                    // A red dot, the clock and the way to cancel —
+                    // PeelCore's own `VoiceRecordingIndicator`.
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(10.dp).clip(CircleShape).background(Theme.colors.destructive))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            formatDuration(recorder.elapsedMs.toInt()),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Theme.colors.text,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (recorder.isCancelling) "Release to cancel" else "‹ Slide to cancel",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (recorder.isCancelling) Theme.colors.destructive else Theme.colors.secondaryText,
+                        )
+                    }
                 } else {
                     if (text.isEmpty()) {
                         Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
@@ -1196,23 +1216,36 @@ private fun Composer(
                     Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
                 }
             } else {
-                // Press and hold to record — PeelCore's own
-                // `HoldToRecordButton`, minus its slide-to-cancel gesture
-                // (`VoiceRecorder`'s own doc comment names that gap).
+                // Press and hold to record, release to send, slide left
+                // or up to cancel — PeelCore's own `HoldToRecordButton`/
+                // `cancelDistance`. A custom pointer loop, not
+                // `detectTapGestures`: that gives a press and a release,
+                // nothing about where the finger moved in between, which
+                // the slide-to-cancel distance needs live.
                 Box(
                     Modifier
                         .size(36.dp)
                         .clip(CircleShape)
                         .background(if (recorder.isRecording) Theme.colors.destructive else Theme.colors.fieldFill)
                         .pointerInput(Unit) {
-                            detectTapGestures(onPress = {
+                            val cancelDistancePx = VOICE_CANCEL_DISTANCE_DP.dp.toPx()
+                            awaitEachGesture {
+                                val down = awaitFirstDown()
                                 onPressRecord()
+                                recorder.updateCancelling(false)
                                 try {
-                                    awaitRelease()
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                        if (change == null || !change.pressed) break
+                                        val drag = change.position - down.position
+                                        recorder.updateCancelling(-drag.x > cancelDistancePx || -drag.y > cancelDistancePx)
+                                        change.consume()
+                                    }
                                 } finally {
-                                    onReleaseRecord()
+                                    if (recorder.isCancelling) onCancelRecord() else onReleaseRecord()
                                 }
-                            })
+                            }
                         },
                     contentAlignment = Alignment.Center,
                 ) {

@@ -26,16 +26,19 @@ import kotlinx.coroutines.withContext
 /// of that is what's needed here. Not a composable itself: a plain
 /// holder a screen `remember`s once.
 ///
-/// No slide-to-cancel gesture (PeelCore's own `cancelDistance`, sliding
-/// the held mic left or up) — only press-and-hold-to-record, release-
-/// to-send. A real gap from the reference apps, scoped down the same
-/// way Phase 9 trimmed a secondary gesture while keeping the core
-/// behavior; `cancel()` still exists for the one case this app needs
-/// without a slide (the app backgrounded mid-recording).
+/// Slide-to-cancel (PeelCore's own `cancelDistance`, 80 points left or
+/// up) is the gesture's job, not this class's: the caller
+/// (`ConversationScreen`'s own `pointerInput` loop) tracks the drag and
+/// calls `updateCancelling` as it crosses the threshold, purely so the
+/// composer can show "Release to cancel" — the actual discard happens
+/// through the same `cancel()` this class already needed for the app
+/// backgrounding mid-recording.
 class VoiceRecorder {
     var isRecording by mutableStateOf(false)
         private set
     var elapsedMs by mutableStateOf(0L)
+        private set
+    var isCancelling by mutableStateOf(false)
         private set
 
     private var stopRequested = false
@@ -51,6 +54,7 @@ class VoiceRecorder {
         if (isRecording) return
         stopRequested = false
         cancelled = false
+        isCancelling = false
 
         val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBufferSize <= 0) {
@@ -103,15 +107,25 @@ class VoiceRecorder {
         }
     }
 
+    /// Whether the held finger has slid past the cancel threshold right
+    /// now — the gesture handler's own live read of the drag, not
+    /// something this class computes itself. Purely for the composer's
+    /// "Release to cancel" feedback; doesn't by itself discard anything
+    /// (the gesture handler calls `cancel()` instead of `release()` at
+    /// the end if this was true when the finger lifted).
+    fun updateCancelling(value: Boolean) {
+        isCancelling = value
+    }
+
     /// The finger lifted — the recording loop finishes on its own next
     /// read, same path as hitting `MAXIMUM_DURATION_MS` on its own.
     fun release() {
         stopRequested = true
     }
 
-    /// Discards whatever was recorded instead of finishing it — the app
-    /// backgrounded mid-recording (PeelCore's own `.onChange(of:
-    /// scenePhase)`), not a user gesture.
+    /// Discards whatever was recorded instead of finishing it — a
+    /// slide-to-cancel release, or the app backgrounded mid-recording
+    /// (PeelCore's own `.onChange(of: scenePhase)`).
     fun cancel() {
         cancelled = true
         stopRequested = true

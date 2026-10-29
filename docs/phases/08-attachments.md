@@ -52,6 +52,16 @@ PeelCore's own `OutgoingFile.init` renaming rule for a video (always
 cross-client convention every Sphinx client uses for one); anything
 else keeps its own name and declared type.
 
+**Also built, slide-to-cancel:** the one real gap named when voice
+sending first shipped. Sliding the held mic left or up 80dp
+(PeelCore's own `VoiceMessage.cancelDistance`, taken as a direct dp
+value) now discards the recording on release instead of sending it —
+a custom pointer-event loop in the mic button tracks the live drag
+(`detectTapGestures` only gives a press and a release, nothing about
+where the finger went in between), and the recording indicator shows
+"‹ Slide to cancel", switching to "Release to cancel" in red past the
+threshold — PeelCore's own `VoiceRecordingIndicator`.
+
 **Open:**
 
 - No tap-to-load gate: every attachment in a chat starts downloading
@@ -114,13 +124,6 @@ else keeps its own name and declared type.
   one-line error already used for a failed text send and whatever was
   picked or recorded is gone — nothing is kept to try again, unlike
   PeelCore's own draft-row-first design.
-- No slide-to-cancel on the voice recorder — PeelCore's own
-  `HoldToRecordButton` lets sliding the held mic left or up
-  (`VoiceMessage.cancelDistance`) discard a recording without
-  releasing; this port's `VoiceRecorder` only ever sends on release
-  (or discards if under the 1-second minimum). `cancel()` exists for
-  the one case this app still needs without the gesture (backgrounded
-  mid-recording), just not reachable from a slide.
 - The mic permission prompt is the bare system dialog, asked the
   moment the mic button is first pressed — PeelCore's own composer
   shows "Allow the microphone in Settings to record voice messages."
@@ -185,6 +188,17 @@ else keeps its own name and declared type.
   samples directly, so the WAV header is written by hand (`VoiceRecorder`'s
   own `toWav`) — the same RIFF/`fmt `/`data` layout `peel`'s own
   `WavHeader(_:)` parses in reverse.
+- The 80-point `cancelDistance` carries over as 80dp, not converted
+  through a density calculation — the same "copy the number, don't
+  derive it" choice this port already made for touch-target sizes
+  elsewhere; a point and a dp aren't identical units physically, but
+  nothing about this gesture needs pixel-exact parity with iOS, only a
+  threshold that feels right on a phone screen.
+- `isCancelling` lives on `VoiceRecorder` itself, not as local Compose
+  state in the gesture handler — the composer's recording indicator
+  and the mic button's gesture loop both need to read the same live
+  value, and `VoiceRecorder` is already the one object both of them
+  hold a reference to.
 
 ## Journal
 
@@ -285,6 +299,19 @@ and expects. `AudioRecord` (raw PCM samples, no container at all) plus
 a hand-written WAV header turned out to be the actual match for the
 format, not a step down from the "proper" API.
 
+**`detectTapGestures` was the wrong tool once the feature needed to
+know *where* the finger was, not just whether it was down.** The
+original press-and-hold used `detectTapGestures(onPress =
+...)`/`awaitRelease()` — fine for "start on press, finish on release,"
+but it never surfaces a position during the hold, which slide-to-cancel
+needs continuously, not just at the end. `awaitEachGesture` with a
+manual `awaitFirstDown`/`awaitPointerEvent` loop is the lower-level
+tool built for exactly this — reading every position change between
+down and up — and it's not more code than a hand-rolled version of the
+same loop `detectDragGestures` already wraps, just without the
+"dragging" framing that doesn't quite fit "this is a press that also
+happens to track movement."
+
 ## Done
 
 - `engine/MediaCrypto.kt`: RNCryptor v3 decrypt (PBKDF2-HMAC-SHA1 ×2,
@@ -354,18 +381,24 @@ format, not a step down from the "proper" API.
 - `ui/components/VoiceRecorder.kt`: a press-and-hold recorder on
   `AudioRecord` — 16 kHz mono 16-bit PCM, written as a plain WAV by
   hand (`toWav`); `start`/`release`/`cancel`, Compose state
-  (`isRecording`/`elapsedMs`); auto-stops and sends at 5 minutes
-  (`MAXIMUM_DURATION_MS`), discards anything under 1 second
-  (`MINIMUM_DURATION_MS`), both PeelCore's own `VoiceMessage` numbers.
+  (`isRecording`/`elapsedMs`/`isCancelling`); auto-stops and sends at
+  5 minutes (`MAXIMUM_DURATION_MS`), discards anything under 1 second
+  (`MINIMUM_DURATION_MS`), both PeelCore's own `VoiceMessage` numbers;
+  `updateCancelling` for the gesture handler's own live drag read.
 - `ui/dashboard/ConversationScreen.kt`: a "File" attach menu item
   (`ActivityResultContracts.OpenDocument`, reading the picked file's
   bytes/name/declared type through its own `ContentResolver`); the
   composer's trailing button is now Send when there's text to send,
-  else a press-and-hold mic (`detectTapGestures(onPress =
-  ...)`/`awaitRelease`) that records and sends a voice message on
-  release; the single `sendingImage: Boolean` composer param became
-  `sendingLabel: String?`, set by whichever send path is in flight
-  ("Sending photo…"/"Sending file…"/"Sending voice message…").
+  else a press-and-hold mic that records and sends a voice message on
+  release, or discards it on a slide-to-cancel release
+  (`awaitEachGesture`/`awaitFirstDown`/`awaitPointerEvent`, tracking
+  the drag against `VOICE_CANCEL_DISTANCE_DP` — PeelCore's own
+  `cancelDistance`); the recording indicator (a red dot, the clock,
+  "‹ Slide to cancel"/"Release to cancel" — PeelCore's own
+  `VoiceRecordingIndicator`); the single `sendingImage: Boolean`
+  composer param became `sendingLabel: String?`, set by whichever send
+  path is in flight ("Sending photo…"/"Sending file…"/"Sending voice
+  message…").
 - `AndroidManifest.xml`: `RECORD_AUDIO`, requested at runtime the
   first time the mic button is pressed.
 - Tests: `AttachmentTest` — `classifyOutgoingFile` relabels every
@@ -427,3 +460,12 @@ format, not a step down from the "proper" API.
   here was the lower-level one (`AudioRecord`), because the task
   wasn't "record audio," it was "produce the specific uncompressed WAV
   bytes every other Sphinx client already expects."
+- A gesture isn't just "press" or "drag" — this one was both at once
+  (a press that starts something, which then also needs its live
+  position while still held), and the Compose APIs that name
+  themselves after one or the other (`detectTapGestures`,
+  `detectDragGestures`) don't quite fit something that's genuinely
+  both. The lower-level `awaitEachGesture` loop both of those
+  convenience functions are themselves built on was the right level to
+  reach for once the shape didn't match either convenience function's
+  own assumption.
