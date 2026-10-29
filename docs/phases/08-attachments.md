@@ -1,6 +1,6 @@
-# Phase 8 — Attachments (receiving)
+# Phase 8 — Attachments
 
-## Status (2026-10-28)
+## Status (2026-10-29)
 
 **Built:** an attachment message (type 6, from anyone, in a restore, a
 catch-up or live) downloads, decrypts and shows itself the moment its
@@ -12,8 +12,7 @@ other Sphinx clients use (RNCryptor v3 — PBKDF2-HMAC-SHA1, AES-256-CBC,
 HMAC-SHA256, ported byte-for-byte and checked against an independent
 Python implementation, not just against itself), a small HTTP client
 for the memes server (sign in with a signed challenge, download by
-bearer token), and a local decrypted-file cache. Scoped to receiving
-only, on the user's explicit direction — sending is its own task.
+bearer token), and a local decrypted-file cache.
 
 **Also built, once asked whether audio actually played in place or
 just handed off like everything else:** it was the latter at first —
@@ -22,10 +21,23 @@ message in a chat screen (playing one stops whatever was already
 playing, same as any messaging app's voice notes), and
 `AudioAttachmentRow`'s Play/Pause button and draggable `Slider`.
 
+**Also built, sending's own first slice — images only, on the user's
+explicit direction:** the composer's new "+" button offers Photo (the
+system photo picker) or Camera (the system camera app, writing through
+the same `FileProvider` receiving already needed); either one re-encodes
+the picture, uploads it and sends it the moment it's picked, with
+whatever was already typed as its caption. `Engine.sendImageAttachment`
+is `MediaCrypto.encrypt`/`MemesServer.upload`/`sendMessage`'s own shape,
+one call each, with no draft-row-then-resume complexity: a failure
+throws, same as a text send, rather than leaving something to retry.
+Video, voice recording and arbitrary files are still their own future
+task, not started.
+
 **Open:**
 
-- No sending at all — this is the whole phase's scope, not an
-  afterthought. `Engine.sendMessage` still only ever sends plain text.
+- No video, voice-recording or arbitrary-file sending — only images,
+  by explicit choice, so a bigger "sending" task doesn't need to
+  re-cover what images already settled (the upload/token/body shape).
 - No tap-to-load gate: every attachment in a chat starts downloading
   the moment its row appears, images included. Fine for how little any
   one chat has so far; a very attachment-heavy tribe may want a gate
@@ -69,7 +81,20 @@ playing, same as any messaging app's voice notes), and
 - No `mediaKeyForSelf`-only row gets anything beyond what `ownKey`
   already covers (PeelCore's own fallback) — a device that bought an
   attachment on someone else's behalf (the seller side) is not a case
-  this port needs, since it never sends.
+  this port needs, since receiving never had to buy one either.
+- No pricing on a sent image either — always free, the same simplification
+  `Engine.sendMessage` already has for text in a paid tribe.
+- No preview-before-send: picking or capturing a photo sends it right
+  away, with whatever was already typed as its caption — there is no
+  staging tray to add a caption after picking, remove a picked photo,
+  or send several at once (PeelCore's own multi-file `sendAttachments`).
+- No upload progress bar, just a plain "Sending photo…" line — PeelCore
+  reports bytes transferred as it goes; this port waits for the whole
+  thing silently.
+- No retry on a failed send: a send that throws (upload refused, no
+  connection, etc.) shows the one-line error already used for a failed
+  text send and the photo is gone — nothing is kept to try again,
+  unlike PeelCore's own draft-row-first design.
 
 ## Decided
 
@@ -148,6 +173,25 @@ own container signature, not the file's name or extension, so the
 cache's extension-less `<muid>` files needed no change at all to work
 with it.
 
+**A media token is signed, not just two strings joined with a dot.**
+Expected to build an outgoing `mediaToken` by hand the way it's
+*parsed* on the receiving side (`host`, `muid`, nothing else needed to
+read it back) — but sending needs to *produce* one the server and any
+other Sphinx client will accept, and that turned out to require its
+own signature over `host`/`muid`/the recipient/an expiry, made only by
+a call that holds the seed (`Sphinxrs.makeMediaToken`, already in the
+Kotlin bindings). Read `uploadAndDeliver` in full before assuming the
+token was just string formatting — it wasn't, and skipping that check
+would have shipped a token no real client or server would accept.
+
+**Reused the receiving side's `FileProvider` rather than building a
+second one.** A photo taken with the camera needs a `content://` URI
+to write into, the same requirement attachments already solved for
+opening a *received* file externally. One more `<cache-path>` entry
+(`outgoing/`, never shared for reading by another app, only written to
+by the camera intent) in the same `file_paths.xml` was the whole
+addition.
+
 ## Done
 
 - `engine/MediaCrypto.kt`: RNCryptor v3 decrypt (PBKDF2-HMAC-SHA1 ×2,
@@ -174,14 +218,32 @@ with it.
   (`isPlaying`/`positionMs`/`durationMs`) a screen polls while playing
   (`MediaPlayer` has no position-changed callback of its own);
   `formatDuration`.
+- `engine/MediaCrypto.kt`: `newKey`/`encrypt`, the inverse of `decrypt`.
+- `engine/MemesServer.kt`: `upload` — the same multipart shape as
+  PeelCore's own, over `HttpURLConnection`.
+- `engine/Engine.kt`: `sendImageAttachment(chat, jpeg, caption, isTribe,
+  replyTo)` — encrypt, upload, `makeMediaToken`, `send`, store, cache
+  the plaintext under its own `muid` (no download round trip needed
+  for this device's own sent copy).
+- `ui/components/ImagePreparation.kt`: `prepareImageForSending` — EXIF-
+  upright, re-encoded, downscaled, metadata gone, the same "only the
+  picture goes" rule PeelCore's own picker follows.
+- `ui/dashboard/ConversationScreen.kt`: the composer's "+" button and
+  its Photo/Camera menu; `PickVisualMedia`/`TakePicture` launchers;
+  "Sending photo…" while an upload is in flight.
 - `AndroidManifest.xml`/`res/xml/file_paths.xml`: a `FileProvider`
-  scoped to just the attachment cache directory.
+  scoped to the attachment cache directory, now also an `outgoing/`
+  path for a photo on its way from the camera.
 - Tests: `MediaCryptoTest` — decrypts a blob from an independent Python
   RNCryptor-v3 implementation, refuses the wrong key, refuses a
-  too-short or wrong-version blob. 57 tests passing. `AudioPlayer`
-  itself is not unit-tested — it wraps `android.media.MediaPlayer`,
-  which needs a real device/emulator decoder, the same category of gap
-  as `Engine`'s own untestable native-library calls.
+  too-short or wrong-version blob; `encrypt` round-trips through
+  `decrypt`, never repeats itself for the same input, and a
+  Kotlin-encrypted blob was checked by hand against the same Python
+  reference in the other direction. 60 tests passing. `AudioPlayer`
+  and the picker/camera flow are not unit-tested — one wraps
+  `android.media.MediaPlayer`, the other needs a real device's photo
+  picker and camera app, both the same category of gap as `Engine`'s
+  own untestable native-library calls.
 
 ## Learned
 
@@ -209,3 +271,13 @@ with it.
   treating them identically (both "a named row") undersold what the
   second one actually needed, even though both are "attachments" by
   the same message type.
+- "Receiving" and "sending" a format are not symmetric in effort even
+  when the data shape is the same — parsing a token someone else made
+  needed two fields; producing one a server will accept needed a
+  signed call this port had no prior reason to touch. The parse side
+  being simple doesn't mean the construct side is.
+- A second infrastructure piece (the `FileProvider`) built for one
+  purpose (handing a received file to another app) was exactly what a
+  later, seemingly unrelated need (the camera's own output) turned out
+  to require — worth checking what's already in place before assuming
+  a new feature needs new plumbing.

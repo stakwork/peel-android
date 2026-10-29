@@ -7,11 +7,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/// The memes server: sign in with a signed challenge, download an
-/// attachment's encrypted bytes. Ported from PeelCore's
-/// `MemesServer.swift`, trimmed to receiving — no upload, no
-/// preferences file, no payment templates: this port doesn't send
-/// attachments yet (`docs/phases/08-attachments.md`).
+/// The memes server: sign in with a signed challenge, upload or
+/// download an attachment's encrypted bytes. Ported from PeelCore's
+/// `MemesServer.swift`, trimmed to what sending an image (and
+/// receiving anything) needs — no preferences file, no payment
+/// templates.
 class MemesServer(private val host: String) {
     data class Token(val value: String, val expiresAtMs: Long) {
         val isFresh: Boolean get() = expiresAtMs - System.currentTimeMillis() > 60_000
@@ -78,6 +78,44 @@ class MemesServer(private val host: String) {
                 connection.disconnect()
             }
             data to fileName
+        }
+
+    /// `POST /file`: the encrypted bytes, as a multipart body (one text
+    /// field, then the file) — PeelCore's `upload`/`multipart`. Returns
+    /// the muid.
+    suspend fun upload(sealed: ByteArray, fieldName: String, fileName: String, mediaType: String, token: Token): String =
+        withContext(Dispatchers.IO) {
+            val boundary = "peel-${java.util.UUID.randomUUID()}"
+            val body = java.io.ByteArrayOutputStream()
+            fun part(headers: String, content: ByteArray) {
+                body.write("--$boundary\r\n$headers\r\n\r\n".toByteArray(Charsets.UTF_8))
+                body.write(content)
+                body.write("\r\n".toByteArray(Charsets.UTF_8))
+            }
+            part("Content-Disposition: form-data; name=\"name\"", fieldName.toByteArray(Charsets.UTF_8))
+            val safeFileName = fileName.filter { it.code >= 0x20 }.replace("\"", "'")
+            part(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"$safeFileName\"\r\nContent-Type: $mediaType",
+                sealed,
+            )
+            body.write("--$boundary--\r\n".toByteArray(Charsets.UTF_8))
+            val bodyBytes = body.toByteArray()
+
+            val connection = (URL("https://$host/file").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                setRequestProperty("Authorization", "Bearer ${token.value}")
+                connectTimeout = 10_000
+                readTimeout = 60_000
+                setFixedLengthStreamingMode(bodyBytes.size)
+            }
+            connection.outputStream.use { it.write(bodyBytes) }
+            val replyText = readText(connection, "the upload")
+            val json = runCatching { JSONObject(replyText) }.getOrNull() ?: throw UnreadableException("the upload")
+            val muid = json.optString("muid").takeIf { it.isNotEmpty() && MediaToken.isSafeMuid(it) }
+                ?: throw UnreadableException("the upload")
+            muid
         }
 
     private fun readText(connection: HttpURLConnection, what: String): String {

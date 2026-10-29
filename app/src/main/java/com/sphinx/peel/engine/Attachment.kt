@@ -2,11 +2,17 @@ package com.sphinx.peel.engine
 
 import org.json.JSONObject
 
+/// A message of this type carries an attachment — PeelCore's
+/// `MessageType.attachment`. Read by `Engine`'s send and download
+/// paths and by `ConversationScreen`'s row rendering alike, so it lives
+/// here once rather than as a constant each side keeps its own copy of.
+const val ATTACHMENT_MESSAGE_TYPE = 6
+
 /// What an attachment message's JSON says — PeelCore's
-/// `AttachmentFields`, trimmed to what receiving needs: this port
-/// never sends one, so there's no `price`/reply/thread field to read
-/// back out here (`Engine.sendMessage` already writes its own `content`/
-/// `replyUuid`, nothing attachment-shaped yet).
+/// `AttachmentFields`, trimmed to what sending an image and receiving
+/// anything needs: no `price`, no "sell it" fields — this port's own
+/// `Engine.sendImageAttachment` never sets one, so there's nothing to
+/// read back out for a price this port could ever have sent.
 data class AttachmentFields(val mediaToken: String?, val mediaKey: String?, val mediaType: String?, val mediaKeyForSelf: String?) {
     /// The key this device can decrypt with: `mediaKey` (anyone's
     /// unpaid attachment, or a tribe's paid one, which keeps it), else

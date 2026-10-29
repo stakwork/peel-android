@@ -5,4 +5,7 @@
      Engine.downloadAttachment and ConversationScreen's AttachmentView. -->
 <paths>
     <cache-path name="attachments" path="attachments/" />
+    <!-- A photo just taken with the camera, on its way to being sent
+         (ConversationScreen's camera launcher) - never read back after. -->
+    <cache-path name="outgoing" path="outgoing/" />
 </paths>

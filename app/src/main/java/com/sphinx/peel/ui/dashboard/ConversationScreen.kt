@@ -2,6 +2,9 @@ package com.sphinx.peel.ui.dashboard
 
 import android.content.Intent
 import android.webkit.MimeTypeMap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -28,6 +31,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
@@ -37,6 +41,8 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
@@ -73,6 +80,7 @@ import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.components.formatDuration
+import com.sphinx.peel.ui.components.prepareImageForSending
 import com.sphinx.peel.ui.theme.Theme
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -131,6 +139,39 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     val isTribe = conversation?.isTribe ?: false
     val title = if (isAgent) "Peel" else (conversation?.name ?: chat.take(12))
     val myAlias = storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var sendingImage by remember(chat) { mutableStateOf(false) }
+    var cameraOutputUri by remember(chat) { mutableStateOf<android.net.Uri?>(null) }
+
+    fun sendImage(uri: android.net.Uri) {
+        scope.launch {
+            sendingImage = true
+            error = null
+            try {
+                val jpeg = withContext(Dispatchers.Default) { prepareImageForSending(context, uri) }
+                    ?: throw IllegalStateException("That doesn't look like an image.")
+                val caption = draft
+                val replyUuid = replyTo?.uuid
+                draft = ""
+                replyTo = null
+                engine.sendImageAttachment(chat, jpeg, caption, isTribe, replyUuid)
+                reload()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that image."
+            } finally {
+                sendingImage = false
+            }
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) sendImage(uri)
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val uri = cameraOutputUri
+        if (success && uri != null) sendImage(uri)
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -192,6 +233,15 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             placeholder = if (isAgent) "Ask Peel" else "Message $title",
             replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to previewContent(target) },
             onCancelReply = { replyTo = null },
+            onPickPhoto = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onTakePhoto = {
+                val file = java.io.File(context.cacheDir, "outgoing/camera-${System.currentTimeMillis()}.jpg")
+                file.parentFile?.mkdirs()
+                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                cameraOutputUri = uri
+                cameraLauncher.launch(uri)
+            },
+            sendingImage = sendingImage,
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
@@ -236,10 +286,6 @@ private fun previewContent(row: MessageRow): String =
 /// reply carries it the same way, PeelCore's `BodyFields.replyUuid`).
 private fun replyUuid(row: MessageRow): String? =
     row.body?.let { runCatching { JSONObject(it).optString("replyUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
-
-/// A message of this type carries an attachment, caption (`content`)
-/// optional — PeelCore's `MessageType.attachment`.
-private const val ATTACHMENT_TYPE = 6
 
 @Composable
 private fun MessageRowView(
@@ -299,11 +345,11 @@ private fun MessageRowView(
                 QuoteBox(parent = parent, myAlias = myAlias)
                 Spacer(Modifier.height(2.dp))
             }
-            if (row.type == ATTACHMENT_TYPE) {
+            if (row.type == ATTACHMENT_MESSAGE_TYPE) {
                 AttachmentView(row, engine, audioPlayer)
                 if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
             }
-            if (content.isNotEmpty() || row.type != ATTACHMENT_TYPE) {
+            if (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE) {
                 Text(
                     content,
                     style = MaterialTheme.typography.bodyMedium,
@@ -574,6 +620,9 @@ private fun Composer(
     placeholder: String,
     replyTarget: Pair<String, String>?,
     onCancelReply: () -> Unit,
+    onPickPhoto: () -> Unit,
+    onTakePhoto: () -> Unit,
+    sendingImage: Boolean,
     onSend: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -603,7 +652,25 @@ private fun Composer(
                 }
             }
         }
+        if (sendingImage) {
+            Text(
+                "Sending photo…",
+                style = MaterialTheme.typography.labelSmall,
+                color = Theme.colors.secondaryText,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            var attachMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { attachMenuOpen = true }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Add, contentDescription = "Attach", tint = Theme.colors.secondaryText)
+                }
+                DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
+                    DropdownMenuItem(text = { Text("Photo") }, onClick = { attachMenuOpen = false; onPickPhoto() })
+                    DropdownMenuItem(text = { Text("Camera") }, onClick = { attachMenuOpen = false; onTakePhoto() })
+                }
+            }
             Box(
                 Modifier
                     .weight(1f)

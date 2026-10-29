@@ -1,7 +1,9 @@
 package com.sphinx.peel.engine
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MediaCryptoTest {
@@ -48,5 +50,33 @@ class MediaCryptoTest {
         assertThrows(MediaCrypto.MalformedException::class.java) {
             MediaCrypto.decrypt(tampered, key)
         }
+    }
+
+    @Test
+    fun `encrypt then decrypt returns the original bytes`() {
+        // decrypt is already checked against an independent (Python)
+        // implementation above; encrypt reuses the same key derivation
+        // and MAC it does, so a round trip through decrypt is a real
+        // check of encrypt's own byte layout, not just self-agreement —
+        // decrypt rigidly expects that exact layout regardless of what
+        // produced it.
+        val plain = "Some bytes to round-trip through RNCryptor v3.".toByteArray(Charsets.UTF_8)
+        val sealed = MediaCrypto.encrypt(plain, key)
+        assertArrayEquals(plain, MediaCrypto.decrypt(sealed, key))
+    }
+
+    @Test
+    fun `encrypt never produces the same bytes twice for the same plaintext and key`() {
+        val plain = "repeat me".toByteArray(Charsets.UTF_8)
+        val first = MediaCrypto.encrypt(plain, key)
+        val second = MediaCrypto.encrypt(plain, key)
+        org.junit.Assert.assertFalse(first.contentEquals(second))
+    }
+
+    @Test
+    fun `newKey is 32 letters and digits`() {
+        val key = MediaCrypto.newKey()
+        assertEquals(32, key.length)
+        assertTrue(key.all { it.isLetterOrDigit() })
     }
 }

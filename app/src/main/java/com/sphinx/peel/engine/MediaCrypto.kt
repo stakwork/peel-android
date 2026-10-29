@@ -9,9 +9,6 @@ import javax.crypto.spec.SecretKeySpec
 /// The official apps' attachment encryption: RNCryptor v3 with a
 /// password (the media key, from the message's own `mediaKey`/
 /// `mediaKeyForSelf` field) — ported from PeelCore's `MediaCrypto.swift`.
-/// Decrypt only: this port receives attachments, it doesn't send them
-/// yet (`docs/phases/08-attachments.md`), so nothing here ever needs to
-/// *generate* a key or encrypt.
 object MediaCrypto {
     private const val ROUNDS = 10_000
     private const val HEADER_SIZE = 2 + 8 + 8 + 16
@@ -45,6 +42,31 @@ object MediaCrypto {
         } catch (e: Exception) {
             throw WrongKeyException()
         }
+    }
+
+    /// 32 random letters and digits — PeelCore's own `newKey`
+    /// (`Nonce(length: 32).hexString`, despite that function's name: the
+    /// alphabet it actually draws from is alphanumeric, not hex).
+    fun newKey(): String {
+        val alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        val random = java.security.SecureRandom()
+        return (1..32).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
+    }
+
+    /// The inverse of `decrypt`: a fresh encryption salt, MAC salt and
+    /// IV each time (so the same plaintext under the same key never
+    /// produces the same bytes twice), the same header layout.
+    fun encrypt(plain: ByteArray, key: String): ByteArray {
+        val random = java.security.SecureRandom()
+        val encryptionSalt = ByteArray(8).also(random::nextBytes)
+        val macSalt = ByteArray(8).also(random::nextBytes)
+        val iv = ByteArray(16).also(random::nextBytes)
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(derive(key, encryptionSalt), "AES"), IvParameterSpec(iv))
+        val cipherText = cipher.doFinal(plain)
+        val header = byteArrayOf(3, 1) + encryptionSalt + macSalt + iv
+        val messageWithoutMac = header + cipherText
+        return messageWithoutMac + hmacSha256(messageWithoutMac, derive(key, macSalt))
     }
 
     /// PBKDF2-HMAC-SHA1 over the password's own UTF-8 bytes, 32 bytes

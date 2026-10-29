@@ -38,6 +38,7 @@ import uniffi.sphinxrs.getTribeManagementTopic as coreGetTribeManagementTopic
 import uniffi.sphinxrs.handle as coreHandle
 import uniffi.sphinxrs.initialSetup as coreInitialSetup
 import uniffi.sphinxrs.listContacts as coreListContacts
+import uniffi.sphinxrs.makeMediaToken as coreMakeMediaToken
 import uniffi.sphinxrs.pubkeyFromSeed
 import uniffi.sphinxrs.read as coreMarkRead
 import uniffi.sphinxrs.rootSignMs as coreRootSignMs
@@ -399,6 +400,59 @@ class Engine(mnemonic: String, val storage: Storage) {
         cacheFile.writeBytes(plain)
         if (fileName != null) nameFile.writeText(fileName)
         return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), fileName, plain.size)
+    }
+
+    /// Sends an image: encrypts it with a fresh key, uploads it to the
+    /// memes server, then a type 6 message naming it — PeelCore's
+    /// `sendAttachment`, trimmed to one image with no price, no "sell
+    /// it" path (`Engine+Attachments.swift`'s own price plumbing), and
+    /// no retry-the-upload-later: a failure here throws, same as a text
+    /// send, rather than leaving a stored draft row behind to resume.
+    /// `jpeg` is already re-encoded, orientation corrected, metadata
+    /// gone — the caller's job (`ConversationScreen`'s picker), not
+    /// this function's: it only ever sends exactly the bytes it's given.
+    suspend fun sendImageAttachment(chat: String, jpeg: ByteArray, caption: String, isTribe: Boolean, replyTo: String? = null): MessageRow {
+        check(transport != null) { "Not connected." }
+        val key = MediaCrypto.newKey()
+        val sealed = MediaCrypto.encrypt(jpeg, key)
+        val memes = MemesServer(MEMES_HOST)
+        val muid = withMemes(memes) { auth -> memes.upload(sealed, fieldName = "image", fileName = "image.jpg", mediaType = "image/jpg", token = auth) }
+        val expiry = (System.currentTimeMillis() / 1000 + 365L * 24 * 3600).toUInt()
+        val mediaToken = coreMakeMediaToken(seed, clock.next(), StateCodec.encode(state), MEMES_HOST, muid, chat, expiry)
+        val body = JSONObject().apply {
+            put("content", caption)
+            put("mediaKeyForSelf", key)
+            put("mediaKey", key)
+            put("mediaType", "image/jpg")
+            put("mediaToken", mediaToken)
+            if (replyTo != null) put("replyUuid", replyTo)
+        }.toString()
+        val myAlias = storage.value(Setting.ALIAS) ?: ""
+        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val result = run { time, stateBytes ->
+            coreSend(seed, time, chat, ATTACHMENT_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, 0u, isTribe)
+        }
+        val sent = result.msgs.firstOrNull()
+        val row = MessageRow(
+            uuid = sent?.uuid,
+            serverIndex = null,
+            type = ATTACHMENT_MESSAGE_TYPE,
+            chat = chat,
+            fromMe = true,
+            sender = null,
+            body = body,
+            msat = null,
+            timestamp = System.currentTimeMillis(),
+            tag = sent?.tag,
+            paymentHash = sent?.paymentHash,
+            status = "PENDING",
+        )
+        storage.insertMessages(listOf(row))
+        // Our own copy goes straight into the cache, the same place a
+        // download would put it — this device never needs to download
+        // back what it just encrypted and sent.
+        java.io.File(storage.attachmentCacheDir(), muid).writeBytes(jpeg)
+        return row
     }
 
     /// What the bytes really are, given what the sender said — PeelCore's
