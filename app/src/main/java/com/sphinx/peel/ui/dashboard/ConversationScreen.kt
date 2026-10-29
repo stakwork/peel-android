@@ -320,7 +320,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         // surviving message, not the root itself - so a thread that just
         // got a reply jumps to where that reply would sit, same as an
         // active chat bumping to the bottom.
-        val threads = remember(messages, isTribe) { if (isTribe) threadSummaries(messages) else emptyMap() }
+        val threads = remember(messages, isTribe, myAlias) { if (isTribe) threadSummaries(messages, myAlias) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
             messages.filter { it.type != BOOST_MESSAGE_TYPE && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
@@ -423,8 +423,10 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
 /// message, then everything that replies to it, newest at the bottom,
 /// and its own composer — always replying to the root, PeelCore's own
 /// "a thread is flat" shape (a reply within a thread doesn't start a
-/// nested one). Text only: no attach button here yet, unlike the main
-/// screen's composer (`docs/phases/09-threads-boosts.md`).
+/// nested one). The same shared `Composer` the main screen uses, so a
+/// thread reply can carry a photo, a file or a voice message too — just
+/// always addressed at the root, whatever `replyTo`/`inThread` a reply
+/// from the main screen would otherwise carry.
 @Composable
 private fun ThreadScreen(
     engine: Engine,
@@ -440,11 +442,111 @@ private fun ThreadScreen(
 ) {
     var draft by remember(threadRootUuid) { mutableStateOf("") }
     var error by remember(threadRootUuid) { mutableStateOf<String?>(null) }
+    var sendingLabel by remember(threadRootUuid) { mutableStateOf<String?>(null) }
+    var cameraOutputUri by remember(threadRootUuid) { mutableStateOf<android.net.Uri?>(null) }
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val root = messages.firstOrNull { it.uuid == threadRootUuid }
     val replies = remember(messages, threadRootUuid) {
         messages.filter { it.threadUuid == threadRootUuid }.sortedBy { it.timestamp ?: 0L }
+    }
+
+    // A reply sent from inside a thread always targets the thread's own
+    // root (`replyTo = inThread = threadRootUuid`) — this screen keeps
+    // every thread flat, no nesting (Phase 9's own "Decided"). Every
+    // attach path here is otherwise the main composer's own
+    // `sendImage`/`sendFile`/`sendVoice`, just always addressed at the
+    // root instead of whatever `replyTo` the main screen's own reply
+    // state happens to hold.
+    fun sendImage(uri: android.net.Uri) {
+        scope.launch {
+            sendingLabel = "Sending photo…"
+            error = null
+            try {
+                val jpeg = withContext(Dispatchers.Default) { prepareImageForSending(context, uri) }
+                    ?: throw IllegalStateException("That doesn't look like an image.")
+                val caption = draft
+                draft = ""
+                engine.sendImageAttachment(chat, jpeg, caption, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
+                onSent()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that image."
+            } finally {
+                sendingLabel = null
+            }
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) sendImage(uri)
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val uri = cameraOutputUri
+        if (success && uri != null) sendImage(uri)
+    }
+
+    fun sendFile(uri: android.net.Uri) {
+        scope.launch {
+            sendingLabel = "Sending file…"
+            error = null
+            try {
+                val (bytes, pickedName, mediaType) = withContext(Dispatchers.Default) {
+                    val resolver = context.contentResolver
+                    val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+                    } ?: uri.lastPathSegment ?: "file"
+                    val data = resolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw IllegalStateException("That file could not be read.")
+                    Triple(data, name, resolver.getType(uri))
+                }
+                val caption = draft
+                draft = ""
+                engine.sendFileAttachment(chat, bytes, pickedName, mediaType, caption, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
+                onSent()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that file."
+            } finally {
+                sendingLabel = null
+            }
+        }
+    }
+
+    val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) sendFile(uri)
+    }
+
+    val voiceRecorder = remember(threadRootUuid) { VoiceRecorder() }
+    DisposableEffect(threadRootUuid) { onDispose { voiceRecorder.cancel() } }
+
+    fun sendVoice(wav: ByteArray) {
+        scope.launch {
+            sendingLabel = "Sending voice message…"
+            error = null
+            try {
+                engine.sendVoiceMessage(chat, wav, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
+                onSent()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that voice message."
+            } finally {
+                sendingLabel = null
+            }
+        }
+    }
+
+    fun startRecording() {
+        voiceRecorder.start(scope) { wav -> if (wav != null) sendVoice(wav) }
+    }
+
+    val recordPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startRecording()
+    }
+
+    fun onPressRecord() {
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) startRecording() else recordPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -508,55 +610,40 @@ private fun ThreadScreen(
             )
         }
 
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .heightIn(min = 44.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(Theme.colors.fieldFill)
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                if (draft.isEmpty()) {
-                    Text("Reply", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+        Composer(
+            text = draft,
+            onTextChange = { draft = it },
+            placeholder = "Reply",
+            replyTarget = null,
+            onCancelReply = {},
+            onPickPhoto = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onTakePhoto = {
+                val file = java.io.File(context.cacheDir, "outgoing/camera-${System.currentTimeMillis()}.jpg")
+                file.parentFile?.mkdirs()
+                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                cameraOutputUri = uri
+                cameraLauncher.launch(uri)
+            },
+            onPickFile = { fileLauncher.launch(arrayOf("*/*")) },
+            recorder = voiceRecorder,
+            onPressRecord = { onPressRecord() },
+            onReleaseRecord = { voiceRecorder.release() },
+            onCancelRecord = { voiceRecorder.cancel() },
+            sendingLabel = sendingLabel,
+            onSend = {
+                val toSend = draft
+                draft = ""
+                error = null
+                scope.launch {
+                    try {
+                        engine.sendMessage(chat, toSend, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
+                        onSent()
+                    } catch (e: Exception) {
+                        error = e.message ?: "Could not send that."
+                    }
                 }
-                BasicTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            val canSend = draft.isNotBlank()
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Theme.colors.button.copy(alpha = if (canSend) 1f else 0.4f))
-                    .clickable(enabled = canSend) {
-                        val toSend = draft
-                        draft = ""
-                        error = null
-                        scope.launch {
-                            try {
-                                engine.sendMessage(chat, toSend, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
-                                onSent()
-                            } catch (e: Exception) {
-                                error = e.message ?: "Could not send that."
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
-            }
-        }
+            },
+        )
     }
 }
 
@@ -574,6 +661,23 @@ private fun runSenderKey(row: MessageRow): String {
 private fun senderJson(row: MessageRow): JSONObject? = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() }
 
 private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("alias")?.takeIf { it.isNotEmpty() } ?: "Someone"
+
+/// A row's name, photo and avatar-colour key, one place instead of
+/// derived at each of its call sites (`MessageRowView`'s own rendering,
+/// a thread summary's participant avatars). A tribe member's hue is
+/// keyed on their alias, never their pubkey — PeelCore's own
+/// `PersonHue.colourKey` ignores pubkey for a tribe member on purpose
+/// (`Sender.init(member:)`), because a tribe's forwarded messages often
+/// carry the tribe's own shared pubkey as `sender.pubkey`, not the
+/// member's — keying on it here would make two different members land
+/// on the same colour.
+private fun senderDisplay(row: MessageRow, myAlias: String, isTribe: Boolean): Triple<String, String?, String> {
+    val sender = senderJson(row)
+    val name = if (row.fromMe) myAlias else senderAlias(row)
+    val photoUrl = if (row.fromMe) null else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
+    val hueKey = if (isTribe && !row.fromMe) name else (sender?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: row.chat)
+    return Triple(name, photoUrl, hueKey)
+}
 
 /// A message's own text, from `body`'s `content` field — the same body
 /// `Engine.sendMessage` writes, and the one `mapMessage` stores as is.
@@ -618,27 +722,48 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
 /// way PeelCore's own `links(replyTo:inThread:in:)` works it out.
 private fun threadRoot(row: MessageRow): String = row.threadUuid ?: row.replyUuid ?: row.uuid ?: ""
 
-private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Long?)
+/// One of up to three people shown as a small overlapping avatar on a
+/// thread's "N replies" row — PeelCore's own `ThreadSummary`'s
+/// participant avatars.
+private data class ThreadParticipant(val name: String, val photoUrl: String?, val hueKey: String)
+
+private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Long?, val participants: List<ThreadParticipant>)
 
 /// Every REAL thread among `messages` (2+ messages), by its root's uuid
-/// — PeelCore's own `ThreadSummary`, trimmed to what the collapsed row
-/// needs (a count and when it was last added to); no participants, no
-/// unread count (Phase 6's own read-state doesn't distinguish a
-/// thread's messages from the chat's). A single reply isn't a thread
-/// yet — PeelCore's own `threadsSQL` only builds a summary from
-/// `HAVING COUNT(*) >= 2`; one reply alone still renders as an ordinary
-/// reply, not a collapsed "1 reply" row. Call only for a tribe: a DM's
-/// timeline never collapses at all (PeelCore's `timeline(in:)` builds
-/// this dictionary `if isTribe` only), so callers pass an empty map for
-/// a DM instead of calling this.
-private fun threadSummaries(messages: List<MessageRow>): Map<String, ThreadSummaryData> {
+/// — PeelCore's own `ThreadSummary`, trimmed: no unread count (Phase
+/// 6's own read-state doesn't distinguish a thread's messages from the
+/// chat's). A single reply isn't a thread yet — PeelCore's own
+/// `threadsSQL` only builds a summary from `HAVING COUNT(*) >= 2`; one
+/// reply alone still renders as an ordinary reply, not a collapsed "1
+/// reply" row. Call only for a tribe: a DM's timeline never collapses
+/// at all (PeelCore's `timeline(in:)` builds this dictionary `if
+/// isTribe` only), so callers pass an empty map for a DM instead of
+/// calling this — which is also why `senderDisplay` is always called
+/// with `isTribe = true` here, never `false`.
+private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<String, ThreadSummaryData> {
     val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         val root = row.threadUuid ?: continue
         byRoot.getOrPut(root) { mutableListOf() }.add(row)
     }
     return byRoot.filterValues { it.size >= 2 }.mapValues { (_, replies) ->
-        ThreadSummaryData(replyCount = replies.size, lastTimestamp = replies.mapNotNull { it.timestamp }.maxOrNull())
+        // Newest repliers first, each person once — PeelCore's own
+        // avatar row shows who's *recently* replied, not whoever
+        // replied first.
+        val participants = mutableListOf<ThreadParticipant>()
+        val seen = mutableSetOf<String>()
+        for (row in replies.sortedByDescending { it.timestamp ?: 0L }) {
+            val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe = true)
+            if (seen.add(if (row.fromMe) "me" else hueKey)) {
+                participants.add(ThreadParticipant(name, photoUrl, hueKey))
+                if (participants.size == 3) break
+            }
+        }
+        ThreadSummaryData(
+            replyCount = replies.size,
+            lastTimestamp = replies.mapNotNull { it.timestamp }.maxOrNull(),
+            participants = participants,
+        )
     }
 }
 
@@ -670,16 +795,7 @@ private fun MessageRowView(
     onOpenThread: () -> Unit,
     onReply: () -> Unit,
 ) {
-    val sender = senderJson(row)
-    val name = if (row.fromMe) myAlias else senderAlias(row)
-    val photoUrl = if (row.fromMe) null else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
-    // A tribe member's hue is keyed on their alias, never their pubkey —
-    // PeelCore's own `PersonHue.colourKey` ignores pubkey for a tribe
-    // member on purpose (`Sender.init(member:)`), because a tribe's
-    // forwarded messages often carry the tribe's own shared pubkey as
-    // `sender.pubkey`, not the member's — keying on it here would make
-    // two different members land on the same colour.
-    val hueKey = if (isTribe && !row.fromMe) name else (sender?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: row.chat)
+    val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
     val content = previewContent(row)
     // The device's own 12/24-hour setting, not a hardcoded format -
     // PeelCore's `Formatting.time` honors `Date.FormatStyle`'s locale
@@ -752,18 +868,33 @@ private fun MessageRowView(
     }
 }
 
-/// "N replies", in the accent colour — PeelCore's `ThreadSummaryButton`,
-/// minus the small stack of repliers' avatars (this port tracks no
-/// per-thread participant list, Phase 9's own trimming of `ThreadSummary`).
+/// "N replies" in the accent colour, with up to three small overlapping
+/// avatars of who's recently replied — PeelCore's own
+/// `ThreadSummaryButton`.
 @Composable
 private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
-    Text(
-        if (summary.replyCount == 1) "1 reply" else "${summary.replyCount} replies",
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.SemiBold,
-        color = Theme.colors.accent,
-        modifier = Modifier.clickable(onClick = onClick).padding(vertical = 2.dp),
-    )
+    Row(
+        Modifier.clickable(onClick = onClick).padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (summary.participants.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) {
+                summary.participants.forEach { participant ->
+                    Avatar(
+                        name = participant.name, url = participant.photoUrl, size = 16.dp,
+                        hue = PersonHue.of(participant.hueKey), shape = AvatarShape.CIRCLE,
+                    )
+                }
+            }
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            if (summary.replyCount == 1) "1 reply" else "${summary.replyCount} replies",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Theme.colors.accent,
+        )
+    }
 }
 
 /// Two messages on the same device-local calendar day, by `Calendar`
@@ -1092,10 +1223,13 @@ private fun AgentTag() {
     )
 }
 
-/// The capsule text field and send button — PeelCore's `PhoneComposer`,
-/// trimmed to text only: no attach, mentions, voice or the sats bolt.
+/// The capsule text field, attach menu, mic and send button —
+/// PeelCore's `PhoneComposer`, trimmed: no `@` mentions, no sats bolt.
 /// `replyTarget` (name, preview) shows PeelCore's `ReplyingTo` above the
-/// capsule, with its own dismiss; long-pressing a row sets it.
+/// capsule, with its own dismiss; long-pressing a row sets it. Shared by
+/// the main screen and `ThreadScreen` alike, each supplying its own
+/// send/record/attach callbacks addressed wherever that screen's own
+/// reply belongs.
 @Composable
 private fun Composer(
     text: String,

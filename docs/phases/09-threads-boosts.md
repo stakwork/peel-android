@@ -46,17 +46,35 @@ reply used to collapse immediately to "1 reply" — PeelCore's own
 triggers the collapse. `threadSummaries` is now called only when
 `isTribe`, and only keeps a root whose replies number 2 or more.
 
+**Update (2026-10-29), the pending thread items:** two of the Open
+items below closed.
+
+The thread sheet now shares the exact same `Composer` the main screen
+uses — attach menu (Photo/Camera/File), the press-and-hold mic, all of
+it — instead of its own hand-rolled text-only row. Every path still
+always addresses the root (`replyTo = inThread = threadRootUuid`),
+same as the text send already did; nothing about *what* a thread
+reply can carry changed except that it's no longer limited to text.
+
+The "N replies" row now shows up to three small overlapping avatars of
+who's recently replied, PeelCore's own `ThreadSummaryButton`.
+`senderDisplay` — a row's name, photo and avatar-colour key, the exact
+derivation `MessageRowView` already did inline — is now its own
+function, since the participant list needed the same derivation a
+second time; `threadSummaries` picks the newest reply from each
+distinct person (by hue key, or "me" for anything `fromMe`), up to
+three.
+
 **Open:**
 
 - No calls — Open/Join rows, the call banner, the full-screen call UI:
   all still to come, as their own task (LiveKit, real-time connection,
   not a UI change).
-- The thread sheet's composer is text only — no attach button, so a
-  photo can't be sent into a thread yet, only the main chat.
-- No participant avatars on the "N replies" row (PeelCore shows up to
-  three small overlapping avatars of who's replied) — text only.
 - No unread count specific to a thread (PeelCore's own `ThreadSummary.unread`)
   — Phase 6's read-state tracks a chat's marker, not a thread's own.
+  Left open on purpose this round: PeelCore's own version needs its
+  own per-thread read marker, a genuinely new storage mechanism, not
+  a small addition on top of what Phase 6 already tracks.
 - A reply sent *from inside* a thread only ever replies to the thread's
   root (`replyTo = inThread = threadRootUuid` always) — PeelCore allows
   replying to any message within a thread, which can start a *nested*
@@ -99,6 +117,16 @@ triggers the collapse. `threadSummaries` is now called only when
   of `ConversationScreen`'s own list — PeelCore's `ThreadSheet` is a
   separate sheet too, with its own composer always addressed at the
   thread's root, not a filtered view of the same screen.
+  **Update (2026-10-29):** "its own composable" never meant "its own
+  composer" — once the main screen's `Composer` grew an attach menu
+  and a mic (Phase 8), `ThreadScreen`'s hand-rolled text-only row was
+  just a second, incomplete copy of the same thing. Replaced it with
+  the shared `Composer`, with `ThreadScreen` supplying its own
+  send/record/attach callbacks (every one addressed at the root)
+  the same way the main screen supplies its own. `ThreadScreen` keeps
+  its own picker/recorder state and launchers rather than sharing the
+  main screen's — the two screens are still genuinely separate
+  composables, just sharing the one UI component between them.
 
 ## Journal
 
@@ -139,6 +167,29 @@ not in a thread keeps its original order). Same visible result, a
 different mechanism — Kotlin doesn't have the SQL layer iOS's GRDB
 query does this in.
 
+**Reused the main composer instead of teaching the thread one to
+attach things too.** The instinct when a hand-rolled composer needs a
+feature another hand-rolled composer already has is to copy the
+missing piece over — the attach menu, the mic button, the gesture
+loop, the sending-label text. All of that already existed, correctly,
+in `Composer`; `ThreadScreen`'s own composer Row was never a
+deliberately different design, just an earlier, smaller version of the
+same thing written before attachments existed at all. Replacing it
+outright with the shared component, rather than porting pieces of it
+over one at a time, is what let `ThreadScreen` end up with the exact
+same slide-to-cancel and file-picker behavior the main screen has,
+with no second copy to keep in sync by hand from here on.
+
+**The participant-avatar derivation was already written once —
+finding that mattered more than writing it a second time.**
+`MessageRowView` already computed a row's name/photo/hue-key inline;
+the temptation was to write a similar-but-not-identical version for
+the thread-summary's avatars (it only needs three distinct people, not
+every row). Factoring the existing logic into `senderDisplay` first,
+then calling it from both places, kept the "tribe member keyed on
+alias, not pubkey" rule — a real, previously-fixed bug (Phase 4's
+avatar-collision fix) — from needing to be gotten right twice.
+
 ## Done
 
 - `engine/Engine.kt`: `sendMessage`/`sendImageAttachment` gained
@@ -153,6 +204,19 @@ query does this in.
   root, replies, its own composer); the main composer's `onSend` and
   the image-send path both now compute `inThread` from the reply
   target's own `threadRoot`.
+
+**Also done (2026-10-29), the pending thread items:**
+
+- `ui/dashboard/ConversationScreen.kt`: `senderDisplay(row, myAlias,
+  isTribe)` factored out of `MessageRowView`'s own inline
+  name/photo/hue-key derivation; `ThreadParticipant`; `threadSummaries`
+  now also returns up to three, newest-reply-first, by distinct
+  person; `ThreadSummaryRow` renders them as small overlapping
+  `Avatar`s before the "N replies" text. `ThreadScreen` rebuilt on the
+  shared `Composer` — its own picker/camera/file launchers, its own
+  `VoiceRecorder`, its own permission handling, every send path always
+  addressed at `threadRootUuid`; its old hand-rolled text-only
+  composer Row is gone.
 
 No new tests: everything here is Compose UI plus pure grouping
 functions over data already covered by existing `MessageRow`/body
@@ -172,3 +236,14 @@ parsing, in a screen already noted (Phase 5) as not unit-tested.
   keyed by whatever it targets, decorate the target's own row from
   that map — a reusable shape worth reaching for by default once a
   message needs to affect how a *different* row renders.
+- When two composables need the same piece of per-row derivation
+  (here, a sender's name/photo/hue), checking whether one of them
+  already computes it inline — rather than assuming a new helper is
+  needed — both avoids duplicating a rule that's already been
+  corrected once (the tribe-member hue fix) and keeps that correction
+  in exactly one place for whatever reads it next.
+- A screen's own composer catching up to a shared component's feature
+  set is often cheaper done by *replacing* the screen's version with
+  the shared one than by porting the shared one's features into it
+  piece by piece — the second approach recreates the exact
+  copy-drifts-out-of-sync problem a shared component exists to avoid.
