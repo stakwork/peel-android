@@ -121,10 +121,13 @@ fills, trimmed):
   marking what it forwards, not anything the chat itself declares), and
   whether the core (or, for a tribe, just being seen at all) now
   recognises it (`ready`).
+- `chatState` (Phase 6): each chat's own read marker and mute level —
+  synced from the server (`getReads`/`getMutes`), not decided locally;
+  `readPending` marks one moved here that hasn't reached the server yet.
 
-No `chatState`, `tribe` (the rich kind — price, escrow, membership,
-roles), `payment`, `invoice` or `deviceRequest` tables yet; they come
-with the features that need them.
+No `tribe` (the rich kind — price, escrow, membership, roles),
+`payment`, `invoice` or `deviceRequest` tables yet; they come with the
+features that need them.
 
 ### Identity and secrets
 
@@ -155,6 +158,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 3 | Restoring: `contact`/`message` tables, `Engine.start`'s contacts-then-messages pipeline, the restore screens | built; see the file for what's open | [phases/03-restoring.md](phases/03-restoring.md) |
 | 4 | Dashboard: live message storage, tribe detection, the Chats list and tab bar | built; see the file for what's open | [phases/04-dashboard.md](phases/04-dashboard.md) |
 | 5 | Conversation: the chat screen, grouped message rows, sending a text message | built; see the file for what's open | [phases/05-conversation.md](phases/05-conversation.md) |
+| 6 | Read state: unread counts, mute levels, synced read markers | built; see the file for what's open | [phases/06-read-state.md](phases/06-read-state.md) |
 
 ## Open questions
 

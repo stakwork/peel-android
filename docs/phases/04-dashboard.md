@@ -38,10 +38,8 @@ row missed those tribes entirely, not just mis-sorted them. See Journal.
 
 **Open:**
 
-- No Unread section, no mute levels, no read-state badges at all —
-  `ChatReadState`/`chatState` is a whole table and a server-sync
-  subsystem (`fetchReadsAndMutes`) this phase doesn't touch. Every chat
-  sorts by its newest message alone.
+- Unread, mute levels and read-state badges are built — see
+  [phases/06-read-state.md](06-read-state.md).
 - No search — the bottom bar's Search tab is a placeholder; PeelCore's
   own search is `ChatSections` again with a query, so it's a small
   addition once there's a reason to prioritise it over everything else

@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -37,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.ConnectionState
@@ -51,9 +54,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
-/// the large title with the connection bolt, Tribes then Direct messages,
-/// each ending in its actions. No Unread section and no search yet — see
-/// `docs/phases/04-dashboard.md` for what that needs first.
+/// the large title with the connection bolt, Unread (when there is any),
+/// then Tribes, then Direct messages, each ending in its actions. No
+/// search yet.
 @Composable
 fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
@@ -107,6 +110,14 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
             EmptyChats(restoring = restoreProgress.restoring)
         } else {
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 20.dp)) {
+                if (sections.unread.isNotEmpty()) {
+                    item { SectionHeader("Unread", expanded = true, onToggle = null) }
+                    items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
+                        ChatRow(conversation) { onOpenChat(conversation.chat) }
+                    }
+                    item { Spacer(Modifier.height(16.dp)) }
+                }
+
                 item { SectionHeader("Tribes", expanded = tribesOpen) { tribesOpen = !tribesOpen } }
                 if (tribesOpen) {
                     items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
@@ -123,7 +134,9 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
 
                 item { SectionHeader("Direct messages", expanded = directOpen) { directOpen = !directOpen } }
                 if (directOpen) {
-                    agentConversation?.let { item(key = "agent") { AgentChatRow { onOpenChat(engine.agentPubkey) } } }
+                    agentConversation?.let { agent ->
+                        item(key = "agent") { AgentChatRow(agent.shownUnread) { onOpenChat(engine.agentPubkey) } }
+                    }
                     items(sections.direct, key = { "direct-${it.chat}" }) { conversation ->
                         ChatRow(conversation) { onOpenChat(conversation.chat) }
                     }
@@ -182,10 +195,16 @@ private fun ConnectionBolt(connected: Boolean) {
     }
 }
 
+/// `onToggle` null for a section with no collapse of its own — Unread,
+/// which PeelCore never lets fold (its own `unread` array has no
+/// `shown()`/layout-driven open state at all).
 @Composable
-private fun SectionHeader(title: String, expanded: Boolean, onToggle: () -> Unit) {
+private fun SectionHeader(title: String, expanded: Boolean, onToggle: (() -> Unit)?) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 10.dp),
+        Modifier
+            .fillMaxWidth()
+            .let { if (onToggle != null) it.clickable(onClick = onToggle) else it }
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -195,16 +214,19 @@ private fun SectionHeader(title: String, expanded: Boolean, onToggle: () -> Unit
             color = Theme.colors.secondaryText,
             modifier = Modifier.weight(1f),
         )
-        Icon(
-            if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = Theme.colors.secondaryText,
-        )
+        if (onToggle != null) {
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = Theme.colors.secondaryText,
+            )
+        }
     }
 }
 
 @Composable
 private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
+    val unread = conversation.shownUnread
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -214,19 +236,42 @@ private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
         Text(
             conversation.name,
             style = MaterialTheme.typography.bodyLarge,
-            color = Theme.colors.text,
+            fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (unread > 0) Theme.colors.text else Theme.colors.secondaryText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        if (unread > 0) {
+            Spacer(Modifier.width(8.dp))
+            UnreadBadge(unread)
+        }
     }
+}
+
+/// A chat's unread count, same shape as PeelCore's `CountBadge` — a
+/// capsule, at least 22dp so a single digit still reads as a circle.
+@Composable
+private fun UnreadBadge(count: Long) {
+    Text(
+        if (count > 99) "99+" else count.toString(),
+        style = MaterialTheme.typography.labelSmall,
+        color = Theme.colors.buttonText,
+        modifier = Modifier
+            .defaultMinSize(minWidth = 22.dp, minHeight = 22.dp)
+            .clip(CircleShape)
+            .background(Theme.colors.button)
+            .wrapContentHeight(Alignment.CenterVertically)
+            .padding(horizontal = 7.dp),
+        textAlign = TextAlign.Center,
+    )
 }
 
 /// The agent's row: Peel's own logo, never the hashed-colour avatar its
 /// stored alias/photo would otherwise get, and the "AGENT" tag beside its
 /// name — PeelCore's `ChatListRow(isAgent: true)`.
 @Composable
-private fun AgentChatRow(onClick: () -> Unit) {
+private fun AgentChatRow(unread: Long, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -236,6 +281,10 @@ private fun AgentChatRow(onClick: () -> Unit) {
         Text("Peel", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
         Spacer(Modifier.width(8.dp))
         AgentTag()
+        if (unread > 0) {
+            Spacer(Modifier.weight(1f))
+            UnreadBadge(unread)
+        }
     }
 }
 

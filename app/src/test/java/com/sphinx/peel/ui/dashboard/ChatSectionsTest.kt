@@ -6,8 +6,11 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ChatSectionsTest {
-    private fun row(chat: String, isTribe: Boolean) =
-        ConversationRow(chat, alias = chat, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = null, lastFromMe = null)
+    private fun row(chat: String, isTribe: Boolean, unread: Long = 0, muted: Boolean = false) =
+        ConversationRow(
+            chat, alias = chat, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = null,
+            lastFromMe = null, unread = unread, muted = muted,
+        )
 
     @Test
     fun `splits tribes from direct messages`() {
@@ -46,5 +49,37 @@ class ChatSectionsTest {
 
         assertEquals(2, sections.direct.size)
         assertNull(sections.allDirectCount)
+    }
+
+    @Test
+    fun `an unread chat moves to Unread, direct first then tribes, out of its own section`() {
+        val rows = listOf(
+            row("t1", true, unread = 3),
+            row("d1", false),
+            row("d2", false, unread = 1),
+            row("t2", true),
+        )
+        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
+
+        assertEquals(listOf("d2", "t1"), sections.unread.map { it.chat })
+        assertEquals(listOf("t2"), sections.tribes.map { it.chat })
+        assertEquals(listOf("d1"), sections.direct.map { it.chat })
+    }
+
+    @Test
+    fun `Unread never trims, however many`() {
+        val rows = (1..8).map { row("d$it", false, unread = 1) }
+        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
+
+        assertEquals(8, sections.unread.size)
+    }
+
+    @Test
+    fun `a muted chat's unread never moves it into Unread`() {
+        val rows = listOf(row("d1", false, unread = 5, muted = true))
+        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
+
+        assertEquals(emptyList<ConversationRow>(), sections.unread)
+        assertEquals(listOf("d1"), sections.direct.map { it.chat })
     }
 }

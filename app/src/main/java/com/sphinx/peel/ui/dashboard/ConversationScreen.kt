@@ -77,6 +77,12 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     suspend fun reload() {
         conversation = withContext(Dispatchers.Default) { storage.conversations().firstOrNull { it.chat == chat } }
         messages = withContext(Dispatchers.Default) { storage.messages(chat) }
+        // Viewing a chat marks it read, here and on the server — every
+        // reload, not only the first, so a message that arrives while
+        // this screen is still open is caught too. Cheap when there is
+        // nothing new: `markRead` is a no-op past the first call for the
+        // same marker (`Storage.setRead`'s own "did anything change" check).
+        engine.markRead(chat)
     }
     LaunchedEffect(chat, restoreProgress) { reload() }
     LaunchedEffect(chat) {

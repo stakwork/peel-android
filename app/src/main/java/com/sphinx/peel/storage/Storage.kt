@@ -30,10 +30,25 @@ data class ConversationRow(
     val lastContent: String?,
     val lastTimestamp: Long?,
     val lastFromMe: Boolean?,
+    /// Someone else's messages past this chat's read marker
+    /// (`chatState.lastRead`) — PeelCore's `ChatReadState.unread`, trimmed:
+    /// every non-`fromMe` message counts, not just the content types
+    /// PeelCore's own `countsAsUnreadSQL` picks out (no boost/payment/
+    /// control-message filtering here, since this port doesn't parse
+    /// message bodies that finely yet).
+    val unread: Long = 0,
+    /// Any mute level above "all" (`chatState.muteLevel`) hides the count
+    /// — PeelCore distinguishes "mentions only" from "muted"
+    /// (`ChatReadState.shownUnread`); this port can't, since it has no
+    /// mention tracking, so both read as muted here.
+    val muted: Boolean = false,
 ) {
     /// The alias, or the chat's own key trimmed to 12 characters — same
     /// fallback as `Conversation.name`.
     val name: String get() = alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
+
+    /// What a chat row actually shows — `unread`, unless muted.
+    val shownUnread: Long get() = if (muted) 0 else unread
 }
 
 /// One stored message, trimmed to `message` v1's columns (PeelCore's
@@ -183,6 +198,126 @@ class Storage(context: Context, account: String = "default") {
         helper.readableDatabase.rawQuery("SELECT MAX(serverIndex) FROM message", null).use { cursor ->
             if (!cursor.moveToFirst() || cursor.isNull(0)) return null
             return cursor.getLong(0)
+        }
+    }
+
+    /// The highest `serverIndex` stored for one chat, or null for none —
+    /// what `markRead` moves that chat's own marker up to.
+    fun highestServerIndex(chat: String): Long? {
+        helper.readableDatabase.rawQuery(
+            "SELECT MAX(serverIndex) FROM message WHERE chat = ?", arrayOf(chat),
+        ).use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) return null
+            return cursor.getLong(0)
+        }
+    }
+
+    /// Moves a chat's read marker to `index`, never back (PeelCore's
+    /// `markRead` doc comment: "the server's may be past what is stored
+    /// here"). `pending` says whether this device could actually tell the
+    /// server just now (`Engine.markRead`: true offline, false once the
+    /// `read` call has gone out) — kept as `readPending` for
+    /// `pendingReads` to find and resend later, and can change on its own
+    /// even when `index` doesn't (flushing a pending marker once a
+    /// connection comes back resends the *same* index, only to clear the
+    /// flag). Returns whether anything actually changed, the way
+    /// PeelCore's own `setRead` returns whether the marker moved: a
+    /// caller only publishes when it did.
+    fun setRead(chat: String, index: Long, pending: Boolean): Boolean {
+        val db = helper.writableDatabase
+        val existing = readChatState(db, chat)
+        val current = existing?.lastRead ?: -1L
+        if (index < current) return false
+        if (index == current && pending == (existing?.readPending ?: false)) return false
+        val values = ContentValues().apply {
+            put("chat", chat)
+            put("lastRead", index)
+            put("readPending", if (pending) 1 else 0)
+            put("muteLevel", existing?.muteLevel ?: 0)
+        }
+        db.insertWithOnConflict("chatState", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        return true
+    }
+
+    /// Read markers set here while offline, not yet sent — PeelCore's
+    /// `pendingReads`. What `Engine.fetchReadsAndMutes`'s
+    /// `publishPendingReads` resends once a connection answers `getReads`.
+    fun pendingReads(): Map<String, Long> {
+        val reads = mutableMapOf<String, Long>()
+        helper.readableDatabase.query(
+            "chatState", arrayOf("chat", "lastRead"), "readPending != 0 AND lastRead IS NOT NULL",
+            null, null, null, null,
+        ).use { cursor ->
+            while (cursor.moveToNext()) reads[cursor.getString(0)] = cursor.getLong(1)
+        }
+        return reads
+    }
+
+    /// The server's own read markers (`RunReturn.lastRead`, decoded by the
+    /// caller), which are the truth once they answer `getReads` — applied
+    /// to every chat they name, *except* one with a marker set here that
+    /// hasn't reached the server yet (`readPending`): that one is left for
+    /// `publishPendingReads` to push forward instead of being quietly
+    /// reset backward by an answer that predates it.
+    fun applyServerReads(reads: Map<String, Long>) {
+        if (reads.isEmpty()) return
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            for ((chat, index) in reads) {
+                val existing = readChatState(db, chat)
+                if (existing?.readPending == true) continue
+                val values = ContentValues().apply {
+                    put("chat", chat)
+                    put("lastRead", index)
+                    put("readPending", 0)
+                    put("muteLevel", existing?.muteLevel ?: 0)
+                }
+                db.insertWithOnConflict("chatState", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /// The server's own mute levels (`RunReturn.muteLevels`), applied the
+    /// same way as reads — these are set from another device (or a
+    /// previous session), never from any UI this port has yet.
+    fun applyServerMutes(mutes: Map<String, Int>) {
+        if (mutes.isEmpty()) return
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            for ((chat, level) in mutes) {
+                val existing = readChatState(db, chat)
+                val values = ContentValues().apply {
+                    put("chat", chat)
+                    put("lastRead", existing?.lastRead)
+                    put("readPending", if (existing?.readPending == true) 1 else 0)
+                    put("muteLevel", level)
+                }
+                db.insertWithOnConflict("chatState", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private data class ChatStateRow(val lastRead: Long?, val readPending: Boolean, val muteLevel: Int)
+
+    private fun readChatState(db: SQLiteDatabase, chat: String): ChatStateRow? {
+        db.query(
+            "chatState", arrayOf("lastRead", "readPending", "muteLevel"),
+            "chat = ?", arrayOf(chat), null, null, null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            return ChatStateRow(
+                lastRead = if (cursor.isNull(0)) null else cursor.getLong(0),
+                readPending = cursor.getInt(1) != 0,
+                muteLevel = cursor.getInt(2),
+            )
         }
     }
 
@@ -377,7 +512,11 @@ class Storage(context: Context, account: String = "default") {
                 c.pubkey, c.alias, c.photoUrl, c.isTribe,
                 (SELECT body FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
                 (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
-                (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1)
+                (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
+                (SELECT COUNT(*) FROM message
+                    WHERE chat = c.pubkey AND fromMe = 0
+                        AND serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)),
+                COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0)
             FROM contact c
             WHERE c.ready = 1
             ORDER BY (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1) DESC
@@ -394,6 +533,8 @@ class Storage(context: Context, account: String = "default") {
                         lastContent = cursor.getString(4),
                         lastTimestamp = if (cursor.isNull(5)) null else cursor.getLong(5),
                         lastFromMe = if (cursor.isNull(6)) null else cursor.getInt(6) != 0,
+                        unread = cursor.getLong(7),
+                        muted = cursor.getInt(8) != 0,
                     ),
                 )
             }
@@ -434,6 +575,7 @@ class Storage(context: Context, account: String = "default") {
             v2(db)
             v3(db)
             v4(db)
+            v5(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -443,6 +585,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 2) v2(db)
             if (oldVersion < 3) v3(db)
             if (oldVersion < 4) v4(db)
+            if (oldVersion < 5) v5(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -506,8 +649,29 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("ALTER TABLE message ADD COLUMN status TEXT")
         }
 
+        // `chatState`: each chat's own read marker and mute level — shared
+        // across every device of the account on the server
+        // (`Sphinxrs.getReads`/`getMutes`/`read`/`mute`), not something
+        // this device decides alone. `readPending`: this device moved
+        // `lastRead` while it had no connection to publish it over; kept
+        // separate from `lastRead` itself so a reconnect's `getReads`
+        // answer (the server's own truth) never undoes a marker that
+        // simply hasn't reached the server yet (`Engine.fetchReadsAndMutes`).
+        private fun v5(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE chatState (
+                    chat TEXT PRIMARY KEY NOT NULL,
+                    lastRead INTEGER,
+                    readPending INTEGER NOT NULL DEFAULT 0,
+                    muteLevel INTEGER NOT NULL DEFAULT 0
+                )
+                """.trimIndent(),
+            )
+        }
+
         companion object {
-            const val VERSION = 4
+            const val VERSION = 5
         }
     }
 }

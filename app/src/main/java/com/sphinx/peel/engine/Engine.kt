@@ -32,11 +32,14 @@ import uniffi.sphinxrs.agentSeed as coreAgentSeed
 import uniffi.sphinxrs.fetchFirstMsgsPerKey as coreFetchFirstMsgsPerKey
 import uniffi.sphinxrs.fetchMsgsBatch as coreFetchMsgsBatch
 import uniffi.sphinxrs.getMsgsCounts as coreGetMsgsCounts
+import uniffi.sphinxrs.getMutes as coreGetMutes
+import uniffi.sphinxrs.getReads as coreGetReads
 import uniffi.sphinxrs.getTribeManagementTopic as coreGetTribeManagementTopic
 import uniffi.sphinxrs.handle as coreHandle
 import uniffi.sphinxrs.initialSetup as coreInitialSetup
 import uniffi.sphinxrs.listContacts as coreListContacts
 import uniffi.sphinxrs.pubkeyFromSeed
+import uniffi.sphinxrs.read as coreMarkRead
 import uniffi.sphinxrs.rootSignMs as coreRootSignMs
 import uniffi.sphinxrs.send as coreSend
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
@@ -280,6 +283,26 @@ class Engine(mnemonic: String, val storage: Storage) {
         if (tag != null) {
             storage.markSendStatus(tag, delivered = sentStatus.optString("status") != "FAILED")
         }
+        // Read markers and mutes, same "whatever `RunReturn` carries it"
+        // reasoning as `sentStatus` — PeelCore's `receive(_:)` special-
+        // cases the `"getreads"` topic kind to re-trigger
+        // `publishPendingReads`; this port has no per-topic dispatch at
+        // all (`startListening` reads whatever a `RunReturn` carries,
+        // generically), so `fetchReadsAndMutes` triggers that itself once
+        // its own `askAndAwait` returns, rather than from here.
+        parseIndexMap(result.lastRead)?.let { storage.applyServerReads(it) }
+        parseIndexMap(result.muteLevels)?.let { levels -> storage.applyServerMutes(levels.mapValues { it.value.toInt() }) }
+    }
+
+    /// `{"<chat>": <index>}`, as both `getReads`'s and `getMutes`' answers
+    /// are shaped (PeelCore's `Engine.reads(_:)`: absent entirely when the
+    /// server has none at all).
+    private fun parseIndexMap(json: String?): Map<String, Long>? {
+        if (json == null) return null
+        val obj = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        val map = mutableMapOf<String, Long>()
+        for (key in obj.keys()) map[key] = obj.optLong(key)
+        return map
     }
 
     /// Sends a plain text message to a contact or a tribe. Ported from
@@ -327,6 +350,43 @@ class Engine(mnemonic: String, val storage: Storage) {
         )
         storage.insertMessages(listOf(row))
         return row
+    }
+
+    /// Marks a chat read up to its newest stored message, here and on the
+    /// server so the account's other devices agree — PeelCore's
+    /// `markRead`, trimmed to its one case this port needs (no
+    /// `markUnread`, no new-contact clearing). Offline, the marker is kept
+    /// as pending (`Storage.setRead`) rather than lost, and
+    /// `fetchReadsAndMutes`'s `publishPendingReads` sends it once a
+    /// connection answers `getReads`.
+    suspend fun markRead(chat: String) {
+        val index = storage.highestServerIndex(chat) ?: return
+        val connected = transport != null
+        if (!storage.setRead(chat, index, pending = !connected)) return
+        if (connected) {
+            run { time, stateBytes -> coreMarkRead(seed, time, stateBytes, chat, index.toULong()) }
+        }
+    }
+
+    /// Read markers and mutes live on the server, shared by every device
+    /// — PeelCore's `fetchReadsAndMutes`, called once per connection
+    /// (`start`/`resume`), same as a restore's catch-up. `getReads`'s and
+    /// `getMutes`' own answers arrive asynchronously, same asymmetry as
+    /// every other history ask, and land in `storeMessages` (which
+    /// `askAndAwait`'s listener already runs every inbound `RunReturn`
+    /// through) — this only sends the asks and then flushes whatever this
+    /// device moved locally while it had nothing to send it to.
+    private suspend fun fetchReadsAndMutes() {
+        askAndAwait(historyWaitMs, expect = { it.lastRead != null }) {
+            run { time, stateBytes -> coreGetReads(seed, time, stateBytes) }
+        }
+        askAndAwait(historyWaitMs, expect = { it.muteLevels != null }) {
+            run { time, stateBytes -> coreGetMutes(seed, time, stateBytes) }
+        }
+        for ((chat, index) in storage.pendingReads()) {
+            run { time, stateBytes -> coreMarkRead(seed, time, stateBytes, chat, index.toULong()) }
+            storage.setRead(chat, index, pending = false)
+        }
     }
 
     /// Re-derives `contact` rows (tribes especially, and any wrongly-mixed
@@ -392,6 +452,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         scope.launch {
             backfillContactsIfNeeded()
             if (!connectAndRegister()) return@launch
+            fetchReadsAndMutes()
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             refreshTribeNames()
         }
@@ -433,6 +494,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
+            fetchReadsAndMutes()
             if (!restoreProgressFlow.value.restoring) catchUpMessages()
         }
     }

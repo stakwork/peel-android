@@ -2,7 +2,9 @@ package com.sphinx.peel.storage
 
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -266,5 +268,94 @@ class StorageTest {
             lastContent = null, lastTimestamp = null, lastFromMe = null,
         )
         assertEquals("03abcdefabcd", row.name)
+    }
+
+    @Test
+    fun `conversations counts messages past the read marker as unread`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "1", serverIndex = 10, type = 0, chat = "alice", fromMe = false, sender = null, body = "hi", msat = null, timestamp = 100, tag = null, paymentHash = null),
+                MessageRow(uuid = "2", serverIndex = 11, type = 0, chat = "alice", fromMe = false, sender = null, body = "there", msat = null, timestamp = 200, tag = null, paymentHash = null),
+                // Our own messages never count, however new.
+                MessageRow(uuid = "3", serverIndex = 12, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 300, tag = null, paymentHash = null),
+            ),
+        )
+
+        assertEquals(2L, storage.conversations().single().unread)
+
+        storage.setRead("alice", index = 10, pending = false)
+        assertEquals(1L, storage.conversations().single().unread)
+
+        storage.setRead("alice", index = 12, pending = false)
+        assertEquals(0L, storage.conversations().single().unread)
+    }
+
+    @Test
+    fun `a muted chat's unread count never shows`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "1", serverIndex = 10, type = 0, chat = "alice", fromMe = false, sender = null, body = "hi", msat = null, timestamp = 100, tag = null, paymentHash = null),
+            ),
+        )
+
+        val before = storage.conversations().single()
+        assertEquals(1L, before.unread)
+        assertEquals(1L, before.shownUnread)
+
+        storage.applyServerMutes(mapOf("alice" to 1))
+
+        val after = storage.conversations().single()
+        assertEquals(1L, after.unread)
+        assertEquals(0L, after.shownUnread)
+    }
+
+    @Test
+    fun `setRead never moves a chat's marker backward`() {
+        val storage = newStorage()
+        assertTrue(storage.setRead("alice", index = 10, pending = false))
+        assertFalse(storage.setRead("alice", index = 5, pending = false))
+        assertEquals(mapOf<String, Long>(), storage.pendingReads())
+    }
+
+    @Test
+    fun `setRead can clear a pending marker without moving it`() {
+        val storage = newStorage()
+        storage.setRead("alice", index = 10, pending = true)
+        assertEquals(mapOf("alice" to 10L), storage.pendingReads())
+
+        assertTrue(storage.setRead("alice", index = 10, pending = false))
+        assertEquals(mapOf<String, Long>(), storage.pendingReads())
+    }
+
+    @Test
+    fun `applyServerReads leaves a chat with a pending marker alone`() {
+        val storage = newStorage()
+        storage.setRead("alice", index = 20, pending = true)
+
+        // The server's own answer is older than what this device already
+        // moved to and hasn't sent yet - must not roll it back.
+        storage.applyServerReads(mapOf("alice" to 5))
+
+        assertEquals(mapOf("alice" to 20L), storage.pendingReads())
+    }
+
+    @Test
+    fun `applyServerReads applies directly to a chat with nothing pending`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "1", serverIndex = 10, type = 0, chat = "alice", fromMe = false, sender = null, body = "hi", msat = null, timestamp = 100, tag = null, paymentHash = null),
+            ),
+        )
+
+        storage.applyServerReads(mapOf("alice" to 10))
+
+        assertEquals(0L, storage.conversations().single().unread)
+        assertEquals(mapOf<String, Long>(), storage.pendingReads())
     }
 }
