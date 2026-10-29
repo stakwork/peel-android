@@ -368,6 +368,50 @@ class Engine(mnemonic: String, val storage: Storage) {
         return row
     }
 
+    /// Boosts someone else's message: a type 29 message naming it by
+    /// `replyUuid`, carrying `BOOST_AMOUNT_MSAT` — PeelCore's own
+    /// `quickBoost`, trimmed to its everyday one-tap path. No amount
+    /// picker and no confirmation threshold: both depend on a balance
+    /// this port doesn't track (no Payments tab, no payment history —
+    /// see `BOOST_AMOUNT_MSAT`'s own doc comment), so there's nothing
+    /// to check the amount against here; a boost that can't actually
+    /// be afforded fails the same way any other send can, surfaced as
+    /// a plain error, not predicted ahead of time. Unlike PeelCore,
+    /// never adds a tribe's own price-per-message to the total either:
+    /// that needs a `tribe` table (price, escrow) this port has never
+    /// had (`docs/PLAN.md`'s own "No tribe... tables yet") — a tribe
+    /// that charges for messages may refuse an underpriced boost the
+    /// same way it would refuse an underpriced text send.
+    suspend fun sendBoost(chat: String, targetUuid: String, isTribe: Boolean): MessageRow {
+        check(transport != null) { "Not connected." }
+        val body = JSONObject().apply {
+            put("content", "")
+            put("replyUuid", targetUuid)
+        }.toString()
+        val myAlias = storage.value(Setting.ALIAS) ?: ""
+        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val result = run { time, stateBytes ->
+            coreSend(seed, time, chat, BOOST_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, BOOST_AMOUNT_MSAT.toULong(), isTribe)
+        }
+        val sent = result.msgs.firstOrNull()
+        val row = MessageRow(
+            uuid = sent?.uuid,
+            serverIndex = null,
+            type = BOOST_MESSAGE_TYPE,
+            chat = chat,
+            fromMe = true,
+            sender = null,
+            body = body,
+            msat = BOOST_AMOUNT_MSAT,
+            timestamp = System.currentTimeMillis(),
+            tag = sent?.tag,
+            paymentHash = sent?.paymentHash,
+            status = "PENDING",
+        )
+        storage.insertMessages(listOf(row))
+        return row
+    }
+
     /// Downloads and decrypts an attachment into this account's cache,
     /// or finds it there already — PeelCore's `downloadAttachment`,
     /// trimmed to receiving (this port never sends one yet,

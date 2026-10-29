@@ -76,6 +76,8 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
+import com.sphinx.peel.engine.BOOST_AMOUNT_MSAT
+import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.MessageRow
@@ -268,6 +270,19 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         if (granted) startRecording() else recordPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
     }
 
+    fun sendBoost(target: MessageRow) {
+        val targetUuid = target.uuid ?: return
+        scope.launch {
+            error = null
+            try {
+                engine.sendBoost(chat, targetUuid, isTribe)
+                reload()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that boost."
+            }
+        }
+    }
+
     val openRoot = openThreadRoot
     if (openRoot != null) {
         ThreadScreen(
@@ -356,13 +371,15 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                 if (index == newMessageIndex) NewMessagesDivider()
                 val replyUuid = row.replyUuid
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
+                val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
                     row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                     replyUuid = replyUuid, parent = parent, engine = engine, audioPlayer = audioPlayer,
-                    boosts = row.uuid?.let { boosts[it] },
+                    boosts = rowBoosts,
                     threadSummary = row.uuid?.let { threads[it] },
                     onOpenThread = { row.uuid?.let { openThreadRoot = it } },
                     onReply = { replyTo = row },
+                    onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                 )
             }
         }
@@ -549,6 +566,24 @@ private fun ThreadScreen(
         if (granted) startRecording() else recordPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
     }
 
+    // Boosts show and can be sent inside a thread too - a boostable
+    // message doesn't stop being one just because it's shown here
+    // rather than the main list.
+    val boosts = remember(messages) { boostSummaries(messages) }
+
+    fun sendBoost(target: MessageRow) {
+        val targetUuid = target.uuid ?: return
+        scope.launch {
+            error = null
+            try {
+                engine.sendBoost(chat, targetUuid, isTribe)
+                onSent()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that boost."
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -573,10 +608,12 @@ private fun ThreadScreen(
         ) {
             if (root != null) {
                 item(key = "root") {
+                    val rootBoosts = root.uuid?.let { boosts[it] }
                     MessageRowView(
                         row = root, startsRun = true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                         replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
-                        boosts = null, threadSummary = null, onOpenThread = {}, onReply = {},
+                        boosts = rootBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
+                        onBoost = { sendBoost(root) }.takeIf { canBoost(root, rootBoosts) },
                     )
                     HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                 }
@@ -593,10 +630,12 @@ private fun ThreadScreen(
             itemsIndexed(replies, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
                 val previous = replies.getOrNull(index - 1) ?: root
                 val startsRun = previous == null || runSenderKey(previous) != runSenderKey(row)
+                val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
                     row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                     replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
-                    boosts = null, threadSummary = null, onOpenThread = {}, onReply = {},
+                    boosts = rowBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
+                    onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                 )
             }
         }
@@ -689,18 +728,12 @@ private fun previewContent(row: MessageRow): String =
 /// `VoiceMessage.cancelDistance` (80 points).
 private const val VOICE_CANCEL_DISTANCE_DP = 80
 
-/// A boost: a payment on another message, named the same way a reply
-/// names what it answers (`row.replyUuid`) — PeelCore's own
-/// `MessageType.boost`.
-private const val BOOST_MESSAGE_TYPE = 29
-
 private data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean)
 
 /// Every boost in `messages`, summed per message it boosts — PeelCore's
-/// `BoostSummary`, trimmed: no pending/unsettled/failed tracking, since
-/// this port has no payment capability at all yet and so never
-/// originates a *new* boost — only ever shows ones already in stored
-/// history, restored or live, which are already as final as they'll get.
+/// `BoostSummary`, trimmed: no pending/unsettled/failed tracking — a
+/// boost is a single send-or-fail message, same as a text send, not
+/// something with its own multi-step delivery state to track.
 private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary> {
     val byTarget = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
@@ -712,6 +745,14 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
         BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: 0L }, boostedByMe = boosts.any { it.fromMe })
     }
 }
+
+/// Someone else's content message, not yet boosted by this account —
+/// PeelCore's own `Message.isBoostable`/`ChatRow.canBoost`, trimmed:
+/// no `deleted` flag to check (this port tracks none, Phase 9's own
+/// "Open"), and no call-link exclusion (this port has no calls at all
+/// yet to produce one).
+private fun canBoost(row: MessageRow, boosts: BoostSummary?): Boolean =
+    !row.fromMe && row.uuid != null && (row.type == 0 || row.type == ATTACHMENT_MESSAGE_TYPE) && boosts?.boostedByMe != true
 
 /// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
 /// (`threadUuid ?? replyUuid ?? uuid`): a message already in a thread
@@ -794,6 +835,7 @@ private fun MessageRowView(
     threadSummary: ThreadSummaryData?,
     onOpenThread: () -> Unit,
     onReply: () -> Unit,
+    onBoost: (() -> Unit)? = null,
 ) {
     val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
     val content = previewContent(row)
@@ -802,14 +844,16 @@ private fun MessageRowView(
     // the same way; `SimpleDateFormat("HH:mm", ...)` ignored it outright.
     val timeContext = androidx.compose.ui.platform.LocalContext.current
     val time = row.timestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
+    var menuOpen by remember { mutableStateOf(false) }
 
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
-            .combinedClickable(onClick = {}, onLongClick = onReply.takeIf { row.uuid != null })
-            .padding(top = if (startsRun) 8.dp else 1.dp, bottom = 2.dp),
-    ) {
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
+                .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null) menuOpen = true })
+                .padding(top = if (startsRun) 8.dp else 1.dp, bottom = 2.dp),
+        ) {
         Box(Modifier.width(32.dp)) {
             if (startsRun) {
                 if (isAgent && row.fromMe.not()) {
@@ -863,6 +907,20 @@ private fun MessageRowView(
             if (threadSummary != null) {
                 Spacer(Modifier.height(2.dp))
                 ThreadSummaryRow(threadSummary, onClick = onOpenThread)
+            }
+        }
+        }
+        // Long-press: Reply, and Boost when it's someone else's
+        // content message this account hasn't boosted yet — PeelCore's
+        // own `MessageMenu` (`canBoost`), trimmed to the two actions
+        // this port actually has (no Copy, Copy link or Delete).
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(text = { Text("Reply") }, onClick = { menuOpen = false; onReply() })
+            if (onBoost != null) {
+                DropdownMenuItem(
+                    text = { Text("Boost ${formattedSats(BOOST_AMOUNT_MSAT)} sats") },
+                    onClick = { menuOpen = false; onBoost() },
+                )
             }
         }
     }

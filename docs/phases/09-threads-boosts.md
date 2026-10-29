@@ -65,6 +65,21 @@ second time; `threadSummaries` picks the newest reply from each
 distinct person (by hue key, or "me" for anything `fromMe`), up to
 three.
 
+**Update (2026-10-29), boost sending:** long-pressing someone else's
+message (not yet boosted by this account) now offers "Boost 100 sats"
+alongside "Reply" — `Engine.sendBoost`, a type 29 message naming the
+target by `replyUuid`, carrying a fixed 100-sat amount through the
+same `send` call every other message already goes through
+(`coreSend`'s own `amtMsat` parameter, already there, just always `0u`
+until now). This turned out not to need the payment infrastructure
+the "Open" item below once assumed it would: the core's `send` call
+already accepts a nonzero amount directly, and PeelCore's own
+client-side balance/confirmation checks (`checkPayment`,
+`spendableMsat`, a confirmation threshold) are a UX safeguard against
+a send that would obviously fail, not something the underlying
+mechanism requires to work at all. Skipped here on purpose — see
+"Decided".
+
 **Open:**
 
 - No calls — Open/Join rows, the call banner, the full-screen call UI:
@@ -80,10 +95,24 @@ three.
   replying to any message within a thread, which can start a *nested*
   thread at that reply. This port keeps every thread flat: one root,
   one flat list of replies, no nesting.
-- No boost sending — this port has no payment capability at all, so
-  every boost shown is one already in stored history (restored or
-  live), never one this device originates. Matches the same scope line
-  attachments drew for sending vs. receiving.
+- No amount picker, no balance check, no confirmation threshold on a
+  boost — always exactly `BOOST_AMOUNT_MSAT` (100 sats), sent
+  unconditionally. A boost this account genuinely can't afford fails
+  the same way any other send can (a plain error, nothing kept to
+  retry) rather than being refused ahead of time the way PeelCore's
+  own `checkPayment` refuses it client-side. No way to change the
+  amount either — PeelCore's own `setBoostAmount`/one-tap default
+  needs a preference this port has no settings screen to set.
+- No price added for a tribe that charges per message — PeelCore's own
+  `boostTotalMsat` adds the tribe's `paymentPriceMsat` (plus escrow) on
+  top of the tip; this port has no `tribe` table at all
+  (`docs/PLAN.md`'s own "No tribe... tables yet"), so there's no price
+  to add. A tribe that charges for messages may refuse an underpriced
+  boost the same way it would refuse an underpriced text send.
+- No "Copy", "Copy link" or "Delete" in the long-press menu — PeelCore's
+  own `MessageMenu` has all three; this port's menu only ever offered
+  Reply before this round, and only gained Boost alongside it, not the
+  rest.
 - A deleted boost or deleted thread reply still counts — this port
   tracks no `deleted` flag on any message (not Phase 5's scope, not
   this one's), so neither a boost total nor a thread's reply count can
@@ -127,6 +156,23 @@ three.
   its own picker/recorder state and launchers rather than sharing the
   main screen's — the two screens are still genuinely separate
   composables, just sharing the one UI component between them.
+- A boost sends at a fixed amount, with no client-side balance check
+  or confirmation threshold — PeelCore's own `quickBoost` only skips
+  *confirmation* for its one-tap path (the amount itself was already
+  approved when it was set), it still always checks the balance first
+  (`checkPayment`). This port has no balance to check at all (no
+  Payments tab, no payment history sync), so there's nothing to check
+  against; a boost that can't be paid for fails like any other send,
+  reported as a plain error. Matches the attachment-sending precedent
+  (no draft-row-first design, no retry) rather than inventing a
+  smaller version of PeelCore's own payment-safety machinery for one
+  call site.
+- Long-press now opens a small menu (Reply, and Boost when
+  applicable) instead of replying immediately — the minimum change
+  needed to offer a second action without inventing a new gesture,
+  and the same shape PeelCore's own long-press menu already uses
+  (`MessageMenu`), just with two of its five actions instead of all
+  five.
 
 ## Journal
 
@@ -190,6 +236,25 @@ then calling it from both places, kept the "tribe member keyed on
 alias, not pubkey" rule — a real, previously-fixed bug (Phase 4's
 avatar-collision fix) — from needing to be gotten right twice.
 
+**Checked whether "no payment capability" actually meant "can't send
+a boost" before accepting it as a blocker.** The Open list said
+exactly that, carried over from when sending images first needed its
+own infrastructure (encryption, upload, a media token). Boost sending
+looked like it would need the same kind of lift, this time for
+money — a balance, a confirmation threshold, payment history. Reading
+`Engine+Payments.swift` in full showed the actual dependency is
+narrower: the core's own `send` call already takes an `amtMsat`
+parameter (Android's `coreSend` binding has carried it, unused, as a
+hardcoded `0u`, since Phase 5) — the Lightning routing happens inside
+the core/mixer when given a nonzero amount, not in anything the
+Swift or Kotlin side builds. PeelCore's balance check and confirmation
+threshold are a real feature (ask before an obviously-doomed send,
+or a surprising one), but a *safeguard* around a mechanism that works
+without them, not a precondition for it to work at all. Sending a
+boost that skips the safeguard and just lets a real failure surface
+as an error is a materially smaller, honestly-scoped feature — not
+the same thing as building "payments."
+
 ## Done
 
 - `engine/Engine.kt`: `sendMessage`/`sendImageAttachment` gained
@@ -218,9 +283,30 @@ avatar-collision fix) — from needing to be gotten right twice.
   addressed at `threadRootUuid`; its old hand-rolled text-only
   composer Row is gone.
 
-No new tests: everything here is Compose UI plus pure grouping
-functions over data already covered by existing `MessageRow`/body
-parsing, in a screen already noted (Phase 5) as not unit-tested.
+**Also done (2026-10-29), boost sending:**
+
+- `engine/Attachment.kt`: `BOOST_MESSAGE_TYPE` (29) and
+  `BOOST_AMOUNT_MSAT` (100,000 msat) moved here from
+  `ConversationScreen.kt`'s own private copy, so `Engine.kt` can use
+  them too — the same reason `ATTACHMENT_MESSAGE_TYPE` already lives
+  here.
+- `engine/Engine.kt`: `sendBoost(chat, targetUuid, isTribe)` — a type
+  29 message (`{"content": "", "replyUuid": targetUuid}`) through the
+  same `run`/`coreSend` path every other send already uses, now
+  finally passing a nonzero `amtMsat`.
+- `ui/dashboard/ConversationScreen.kt`: `canBoost(row, boosts)`
+  (someone else's content message, not yet boosted by this account);
+  `MessageRowView` gained `onBoost: (() -> Unit)?`, and its long-press
+  gesture now opens a small `DropdownMenu` (Reply, and Boost when
+  `onBoost` isn't null) instead of replying immediately; both the main
+  screen and `ThreadScreen` compute `boostSummaries` and wire
+  `onBoost` the same way for every row they show, root and replies
+  alike.
+
+No new tests: `Engine.sendBoost` needs the native `sphinxrs` library
+(no host build for a plain JVM test, same gap every other `Engine`
+send function has); `canBoost` and the rest are Compose UI/pure
+functions in a screen already noted (Phase 5) as not unit-tested.
 
 ## Learned
 
@@ -247,3 +333,12 @@ parsing, in a screen already noted (Phase 5) as not unit-tested.
   the shared one than by porting the shared one's features into it
   piece by piece — the second approach recreates the exact
   copy-drifts-out-of-sync problem a shared component exists to avoid.
+- "No payment capability" as a blocker was true for *attachments*
+  (which genuinely needed encryption, upload, a media token — real
+  new infrastructure) but turned out false for *this* feature, which
+  only needed a parameter the send path already had wired through and
+  never used. The same words in an "Open" note can describe two
+  differently-sized gaps depending on what the feature actually is;
+  worth re-deriving what a blocker really requires rather than
+  inheriting its size from an earlier, differently-shaped feature
+  that happened to use similar words.
