@@ -131,7 +131,20 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
                     Path.RESTORE -> {
                         val restored = withContext(Dispatchers.Default) {
                             secretStore.save(mnemonic, pin)
-                            storage.apply(Storage.Commit(settings = mapOf(Setting.NEEDS_RESTORE to "1")))
+                            // Typing all twelve words back in to restore is
+                            // itself the confirmation a fresh account's own
+                            // 3-word spot check exists to get — PeelCore's
+                            // own `Account.swift` sets this the same way
+                            // (`needsRestore ? "1" : "0"`). Left unset here
+                            // before this fix: a restored account's own
+                            // Profile would have shown "Not checked yet"
+                            // forever, nothing in this port ever having
+                            // written it true for that path.
+                            storage.apply(
+                                Storage.Commit(
+                                    settings = mapOf(Setting.NEEDS_RESTORE to "1", Setting.WORDS_CONFIRMED to "1"),
+                                ),
+                            )
                             Engine(mnemonic, storage).also { it.start() }
                         }
                         onAccountReady(restored)

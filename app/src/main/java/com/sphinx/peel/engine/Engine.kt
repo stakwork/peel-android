@@ -152,14 +152,37 @@ class Engine(mnemonic: String, val storage: Storage) {
         for (key in result.stateToDelete) newState.remove(key)
         state = newState
 
+        // Any call's `RunReturn` can report a new balance, not just a
+        // send's — PeelCore's own `Engine.swift` commits `newBalance` the
+        // same unconditional way, right alongside the state/clock every
+        // result already carries. Its own `followUps.reconcile` (checking
+        // a jump against an open invoice) is real Payments-feature work
+        // this port has none of yet; storing the number itself needed
+        // nothing from that to be worth doing — it's what lets Profile
+        // show a real balance instead of nothing at all.
+        val settings = mutableMapOf(Setting.CLOCK to time)
+        result.newBalance?.let { settings[Setting.BALANCE_MSAT] = it.toString() }
+
         storage.apply(
             Storage.Commit(
                 state = updates,
                 deleteState = result.stateToDelete,
-                settings = mapOf(Setting.CLOCK to time),
+                settings = settings,
             ),
         )
     }
+
+    /// The account's own balance, as last reported by any core call —
+    /// never asked for on its own (no such call is made for this port
+    /// yet), only ever updated as a side effect of `commitLocked`. Null
+    /// before the first call that reports one.
+    fun balanceMsat(): Long? = storage.value(Setting.BALANCE_MSAT)?.toLongOrNull()
+
+    /// The broker this account last connected to, as `host:port` with its
+    /// scheme (`ServerAddress.toString`) — PeelCore's own `Engine.setServer`,
+    /// persisted the same way so Profile's "Server" row survives a restart
+    /// without a live connection. Null before the first successful connect.
+    fun serverLabel(): String? = storage.value(Setting.SERVER)
 
     /// The publish half of `run`: whatever a result's `subscriptionTopics`,
     /// `registerTopic`/`registerPayload` and generic `topics`/`payloads`
@@ -899,7 +922,9 @@ class Engine(mnemonic: String, val storage: Storage) {
         return try {
             val config = ServerConfig.fetch(network)
             config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
-            connect(ServerAddress.named(config.defaultLsp))
+            val server = ServerAddress.named(config.defaultLsp)
+            storage.apply(Storage.Commit(settings = mapOf(Setting.SERVER to server.toString())))
+            connect(server)
             connectionStateFlow.value = if (isRegistered) {
                 ConnectionState.Connected
             } else {

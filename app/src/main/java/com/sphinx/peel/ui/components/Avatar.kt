@@ -3,10 +3,12 @@ package com.sphinx.peel.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -24,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.sphinx.peel.R
 import com.sphinx.peel.storage.ConversationRow
+import com.sphinx.peel.ui.theme.Theme
 
 /// A person's colour on their initials avatar — one of eight hues, chosen
 /// by a hash of their key, the same on every device. Ported from
@@ -135,4 +138,20 @@ fun PeelLogo(size: Dp, modifier: Modifier = Modifier) {
             modifier = Modifier.size(size * 0.85f),
         )
     }
+}
+
+/// The small "AGENT" pill beside Peel's name — PeelCore's own `AgentTag`,
+/// shown wherever the agent's chat is named: its row in Chats, and its own
+/// row in Profile.
+@Composable
+fun AgentTag() {
+    Text(
+        "AGENT",
+        style = MaterialTheme.typography.labelSmall,
+        color = Theme.colors.secondaryText,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Theme.colors.fieldFill)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }

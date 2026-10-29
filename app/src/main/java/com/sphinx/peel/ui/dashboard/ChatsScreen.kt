@@ -52,6 +52,7 @@ import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.ConversationRow
 import com.sphinx.peel.storage.Storage
+import com.sphinx.peel.ui.components.AgentTag
 import com.sphinx.peel.ui.components.ConversationAvatar
 import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.theme.Theme
@@ -446,19 +447,6 @@ private fun AgentChatRow(unread: Long, onClick: () -> Unit) {
             UnreadBadge(unread)
         }
     }
-}
-
-@Composable
-private fun AgentTag() {
-    Text(
-        "AGENT",
-        style = MaterialTheme.typography.labelSmall,
-        color = Theme.colors.secondaryText,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(Theme.colors.fieldFill)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
 }
 
 /// "Show all 14 tribes" / "Show fewer" — PeelCore's `ShowAll`.
