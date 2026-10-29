@@ -37,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -210,7 +211,15 @@ private fun MessageRowView(row: MessageRow, startsRun: Boolean, isAgent: Boolean
                     }
                 }
             }
-            Text(content, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text)
+            Text(
+                content,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Theme.colors.text,
+                modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
+            )
+            if (row.status == "FAILED") {
+                Text("Not delivered", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
+            }
         }
     }
 }

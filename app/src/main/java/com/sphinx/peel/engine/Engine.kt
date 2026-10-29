@@ -262,11 +262,23 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// message either way.
     private fun storeMessages(result: RunReturn) {
         val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
-        if (rows.isEmpty()) return
-        storage.insertMessages(rows)
-        for (row in rows) {
-            val hint = contactHint(row) ?: continue
-            storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
+        if (rows.isNotEmpty()) {
+            storage.insertMessages(rows)
+            for (row in rows) {
+                val hint = contactHint(row) ?: continue
+                storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
+            }
+        }
+        // The mixer's one live word on a tag this device sent under —
+        // PeelCore's `liveStatus`: FAILED as it comes, anything else
+        // (just COMPLETE here) delivered. Arrives on whatever `RunReturn`
+        // carries it, restore pages included, same as `msgs` does; most
+        // sends never need this at all, since their own echo already
+        // marks the row delivered the moment it comes back through `msgs`.
+        val sentStatus = result.sentStatus?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val tag = sentStatus?.optString("tag")?.takeIf { it.isNotEmpty() }
+        if (tag != null) {
+            storage.markSendStatus(tag, delivered = sentStatus.optString("status") != "FAILED")
         }
     }
 
@@ -284,6 +296,12 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// through `contactHint` — PeelCore's own `deliver` reads only its
     /// `uuid`/`tag`/`paymentHash` too, building the rest of the row from
     /// what it just sent (the body, the chat, now), not from that entry.
+    /// Stored `PENDING`; moves to `DELIVERED` the moment its own echo
+    /// comes back under the same `uuid` (`insertMessages`), or `FAILED`/
+    /// `DELIVERED` from the mixer's own word on its `tag` if that arrives
+    /// first (`storeMessages`'s `sentStatus` handling) — whichever comes.
+    /// A send whose echo never arrives and whose tag the mixer never
+    /// mentions again stays `PENDING` forever: no retry, no timeout.
     suspend fun sendMessage(chat: String, text: String, isTribe: Boolean): MessageRow {
         check(transport != null) { "Not connected." }
         val body = JSONObject().put("content", text).toString()
@@ -305,6 +323,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             timestamp = System.currentTimeMillis(),
             tag = sent?.tag,
             paymentHash = sent?.paymentHash,
+            status = "PENDING",
         )
         storage.insertMessages(listOf(row))
         return row

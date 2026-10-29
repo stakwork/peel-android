@@ -16,6 +16,15 @@ its own `sender` JSON carries — the chat's own pubkey is shared by every
 member there (`Engine.contactHint`'s own finding from Phase 4), so a run
 groups by that alias, not by `chat`.
 
+**Also built, in a second pass:** delivery status — a sent row now
+carries `PENDING`/`DELIVERED`/`FAILED` (PeelCore's `Message.Delivery`,
+trimmed; no `UNSETTLED`, which is specifically about a payment the mixer
+handed off but hasn't confirmed, not relevant to a free text send). A
+pending message shows dimmed, the same `0.6` opacity PeelCore's own row
+uses while `isSending`; a failed one gets "Not delivered" under it. See
+the Journal for how it's actually confirmed — mostly by the message's
+own echo, the mixer's `sentStatus` only when that never arrives.
+
 **Open:**
 
 - No price: every send goes at 0 msat, whatever the tribe (or, later, a
@@ -30,11 +39,13 @@ groups by that alias, not by `chat`.
   even when one already exists in stored history (a payment, an
   attachment, a membership note) — those rows show as empty text today,
   not specially rendered.
-- No delivery status at all: a sent row has no "sending/sent/failed"
-  state, and a send that throws only shows a one-line error under the
-  list — nothing retries it, and the text is already cleared from the
-  composer by the time the error lands (optimistic-clear, same spirit as
-  PeelCore's own pending-then-confirmed row, minus the confirmation).
+- A `PENDING` send that never gets an echo and whose tag the mixer never
+  mentions again (lost on the way there, or its answer lost on the way
+  back) stays `PENDING` forever — no timeout, no retry button, no resend.
+  PeelCore's own `isRetryable`/Retry exists specifically for this; not
+  ported. A send that throws immediately (not connected) still just
+  shows a one-line error under the list, and the text is already
+  cleared from the composer by the time it lands (optimistic-clear).
 - No read receipts, no "seen", no typing indicator, no local time for a
   direct contact, no member count for a tribe's subtitle — the header is
   just a name (and AGENT, for the agent).
@@ -89,20 +100,47 @@ every member's forwarded message shares the tribe's own pubkey as `chat`
 Grouped by the message's own claimed `sender.alias` instead, which does
 name the actual author per message.
 
+**Delivery status mostly isn't a `sentStatus` feature at all.** Started
+reading `Engine+Messages.swift`/`liveStatus` expecting the mixer's
+`sentStatus` to be the one source of truth for "did this send land" —
+its own doc comment calls it "the one status the mixer publishes for a
+send," which reads like the whole mechanism. Realised while tracing it
+that `sentStatus` is specifically about *payment* routing (a boost, an
+invoice, a tribe's priced message) — a free text send carries no sats
+for the mixer to route at all, so nothing there may ever call back
+about it. What actually confirms a free send is simpler and already
+present: the message's own echo, coming back through the ordinary
+live/restore path under the same `uuid` `insertMessages` already
+dedupes on. Re-pointed `insertMessages` at that: a `uuid` conflict is
+now also "this device's own pending send just got confirmed," not only
+"skip it, already have it." `sentStatus`/`markSendStatus` stayed in
+(reading `RunReturn.sentStatus` costs nothing, and a priced send -
+paid tribes, once that exists - will want it) as the second, narrower
+path for whatever `send` or send*ing* never gets its own echo back for.
+
 ## Done
 
 - `engine/Engine.kt`: `sendMessage(chat, text, isTribe)` — calls the
   core's `send` through `run` (so it still commits+publishes under the
-  one lock any other call does), stores the outgoing row by hand.
+  one lock any other call does), stores the outgoing row by hand as
+  `PENDING`; `storeMessages` now also reads `RunReturn.sentStatus` and
+  marks a `tag` `FAILED`/`DELIVERED` through `markSendStatus`.
 - `storage/Storage.kt`: `messages(chat)` — one chat's rows, oldest first;
-  `MessageRow` gained `id` (the table's own row id, for a stable list key).
+  `MessageRow` gained `id` (the table's own row id, for a stable list
+  key) and `status`; `message.status` (v4 migration); `insertMessages`
+  now moves a `uuid` conflict's existing row from `PENDING` to
+  `DELIVERED` rather than only skipping it; `markSendStatus(tag,
+  delivered)`, the mixer-confirmation path.
 - `ui/dashboard/ConversationScreen.kt`: the chat screen — header with
-  back and the name (AGENT tag for the agent), the grouped message list,
-  the text composer and its send button, a one-line error on a failed send.
+  back and the name (AGENT tag for the agent), the grouped message list
+  (a `PENDING` row dimmed, a `FAILED` one marked "Not delivered"), the
+  text composer and its send button, a one-line error on a failed send.
 - `ui/dashboard/ChatsScreen.kt`/`MainTabs.kt`: a tapped row opens the
   conversation in place of the whole tab area (bar included); Back
   returns to whichever tab was open.
-- Tests: new `StorageTest` case for `messages(chat)`. 41 tests passing.
+- Tests: `StorageTest` cases for `messages(chat)`, a `uuid` conflict
+  moving `PENDING` to `DELIVERED`, and `markSendStatus` (including that
+  it never moves a row already settled). 44 tests passing.
   `Engine.sendMessage` itself is not unit-tested — `Engine` has no host
   build of the native `sphinxrs` library to run against (same gap
   `phases/01-foundation.md`'s "Learned" already names for the rest of
@@ -118,3 +156,15 @@ name the actual author per message.
   pages and live receives really are the same shape; a fresh send isn't,
   and forcing it through the same path would have been the wrong kind of
   reuse.
+- A field's own doc comment calling it "the" mechanism for something
+  ("the one status the mixer publishes for a send") describes what it
+  covers from the perspective of the features that already use it (paid
+  sends), not necessarily every case that sounds like it should be
+  covered — worth checking what actually triggers a signal, not just
+  reading its best description, before building around it as the only
+  source of truth.
+- A `uuid`-keyed `INSERT OR IGNORE` already *is* a dedup check for "this
+  exact message again" — turning its conflict case into a signal
+  ("this device's own pending send just got confirmed") rather than a
+  pure no-op got delivery status mostly for free, no new round trip or
+  polling needed.

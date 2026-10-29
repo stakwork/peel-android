@@ -128,6 +128,56 @@ class StorageTest {
     }
 
     @Test
+    fun `a sent message's own echo moves it from PENDING to DELIVERED`() {
+        val storage = newStorage()
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "sent-1", serverIndex = null, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 100, tag = "tag-1", paymentHash = null, status = "PENDING"),
+            ),
+        )
+        // The same uuid, now with a real serverIndex, the way the echo
+        // arrives through the ordinary live/restore path.
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "sent-1", serverIndex = 42, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 100, tag = "tag-1", paymentHash = null),
+            ),
+        )
+
+        val stored = storage.messages("alice").single()
+        assertEquals("DELIVERED", stored.status)
+        // The echo's own fields (serverIndex) never overwrite the original row.
+        assertNull(stored.serverIndex)
+    }
+
+    @Test
+    fun `markSendStatus moves a pending send to FAILED by its tag`() {
+        val storage = newStorage()
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "sent-1", serverIndex = null, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 100, tag = "tag-1", paymentHash = null, status = "PENDING"),
+            ),
+        )
+
+        storage.markSendStatus("tag-1", delivered = false)
+
+        assertEquals("FAILED", storage.messages("alice").single().status)
+    }
+
+    @Test
+    fun `markSendStatus never moves a message already DELIVERED or FAILED`() {
+        val storage = newStorage()
+        storage.insertMessages(
+            listOf(
+                MessageRow(uuid = "sent-1", serverIndex = null, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 100, tag = "tag-1", paymentHash = null, status = "DELIVERED"),
+            ),
+        )
+
+        storage.markSendStatus("tag-1", delivered = false)
+
+        assertEquals("DELIVERED", storage.messages("alice").single().status)
+    }
+
+    @Test
     fun `a chat with no messages yet still shows, with nothing to preview`() {
         val storage = newStorage()
         storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)

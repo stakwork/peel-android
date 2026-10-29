@@ -110,7 +110,10 @@ Two more, added in Phase 3 for the restore pipeline, ported from `peel`'s
 `Storage+Migrations.swift` `v1`/`v2`/`v3` (the columns a restore actually
 fills, trimmed):
 
-- `message`: one row per message a restore or a live fetch brings back.
+- `message`: one row per message a restore or a live fetch brings back;
+  `status` (Phase 5) is a sent row's own delivery state
+  (`PENDING`/`DELIVERED`/`FAILED`), always null for anything not sent
+  from this device.
 - `contact`: a pubkey, its alias/photo (parsed from its own messages, not
   core state — names and photos never are, and never for a tribe, whose
   real name/photo come from the tribes server, not built yet), whether

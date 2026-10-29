@@ -56,6 +56,9 @@ data class MessageRow(
     /// own `AUTOINCREMENT` starts at 1. A stable key for a message list; see
     /// `messages(in:)`.
     val id: Long = 0,
+    /// A sent message's own delivery state (`PENDING`/`DELIVERED`/`FAILED`)
+    /// — see `Storage.v4`. Always null for anything not `fromMe`.
+    val status: String? = null,
 )
 
 /// Everything Peel keeps on disk for one account: `coreState` (opaque
@@ -191,7 +194,7 @@ class Storage(context: Context, account: String = "default") {
         val rows = mutableListOf<MessageRow>()
         helper.readableDatabase.query(
             "message",
-            arrayOf("id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag", "paymentHash"),
+            arrayOf("id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag", "paymentHash", "status"),
             "chat = ?", arrayOf(chat), null, null, "timestamp ASC, id ASC",
         ).use { cursor ->
             while (cursor.moveToNext()) {
@@ -209,6 +212,7 @@ class Storage(context: Context, account: String = "default") {
                         timestamp = if (cursor.isNull(9)) null else cursor.getLong(9),
                         tag = cursor.getString(10),
                         paymentHash = cursor.getString(11),
+                        status = cursor.getString(12),
                     ),
                 )
             }
@@ -218,7 +222,14 @@ class Storage(context: Context, account: String = "default") {
 
     /// One page of history, stored `INSERT OR IGNORE`: a message a page
     /// repeats (two runs overlapping at a boundary) is simply skipped by
-    /// its `uuid`, same as PeelCore's unique `uuid` column does.
+    /// its `uuid`, same as PeelCore's unique `uuid` column does. A row
+    /// `Engine.sendMessage` already stored optimistically (`PENDING`) is
+    /// its own kind of repeat — its own echo, now coming back through the
+    /// ordinary live/restore path under the same `uuid` — and is ignored
+    /// here the same way, but counts as proof the send actually reached
+    /// the server: moved to `DELIVERED` rather than left exactly as
+    /// `insertWithOnConflict` would leave it (unmatched silently, since
+    /// `CONFLICT_IGNORE` cannot also update the row it left alone).
     fun insertMessages(rows: List<MessageRow>) {
         if (rows.isEmpty()) return
         val db = helper.writableDatabase
@@ -237,13 +248,34 @@ class Storage(context: Context, account: String = "default") {
                     put("timestamp", row.timestamp)
                     put("tag", row.tag)
                     put("paymentHash", row.paymentHash)
+                    put("status", row.status)
                 }
-                db.insertWithOnConflict("message", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+                val inserted = db.insertWithOnConflict("message", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+                if (inserted == -1L && row.uuid != null) {
+                    db.execSQL(
+                        "UPDATE message SET status = 'DELIVERED' WHERE uuid = ? AND status = 'PENDING'",
+                        arrayOf(row.uuid),
+                    )
+                }
             }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
+    }
+
+    /// What the mixer said about a tag this account sent under, just now
+    /// (`RunReturn.sentStatus`) — `FAILED` as it comes; anything else
+    /// (`COMPLETE`, the one other status this reads) counts as delivered
+    /// the same way the message's own echo already would, so this mostly
+    /// only matters for a send whose echo never arrives. A tag that
+    /// never names a stored row (a payment, or a type this device sends
+    /// nothing of yet) is a no-op.
+    fun markSendStatus(tag: String, delivered: Boolean) {
+        helper.writableDatabase.execSQL(
+            "UPDATE message SET status = ? WHERE tag = ? AND status = 'PENDING'",
+            arrayOf(if (delivered) "DELIVERED" else "FAILED", tag),
+        )
     }
 
     /// A contact's alias/photo, from the newest message naming them so
@@ -401,6 +433,7 @@ class Storage(context: Context, account: String = "default") {
             v1(db)
             v2(db)
             v3(db)
+            v4(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -409,6 +442,7 @@ class Storage(context: Context, account: String = "default") {
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             if (oldVersion < 2) v2(db)
             if (oldVersion < 3) v3(db)
+            if (oldVersion < 4) v4(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -462,8 +496,18 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("ALTER TABLE contact ADD COLUMN isTribe INTEGER NOT NULL DEFAULT 0")
         }
 
+        // `status`: a sent message's own delivery state (PeelCore's
+        // `Message.Delivery`, trimmed to PENDING/DELIVERED/FAILED — no
+        // UNSETTLED here, which is specifically about a payment the
+        // mixer handed off but hasn't confirmed, not relevant to a free
+        // text send). Always null for anything not `fromMe`: nothing but
+        // our own sends ever has one.
+        private fun v4(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE message ADD COLUMN status TEXT")
+        }
+
         companion object {
-            const val VERSION = 3
+            const val VERSION = 4
         }
     }
 }
