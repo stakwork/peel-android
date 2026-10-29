@@ -341,6 +341,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// mentions again stays `PENDING` forever: no retry, no timeout.
     suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null): MessageRow {
         check(transport != null) { "Not connected." }
+        val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
         val body = JSONObject().put("content", text).apply {
             if (replyTo != null) put("replyUuid", replyTo)
             if (inThread != null) put("threadUuid", inThread)
@@ -348,7 +349,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
         val result = run { time, stateBytes ->
-            coreSend(seed, time, chat, 0u, body, stateBytes, myAlias, myPhoto, 0u, isTribe)
+            coreSend(seed, time, chat, 0u, body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
         val sent = result.msgs.firstOrNull()
         val row = MessageRow(
@@ -359,7 +360,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             fromMe = true,
             sender = null,
             body = body,
-            msat = null,
+            msat = amountMsat.takeIf { it > 0 },
             timestamp = System.currentTimeMillis(),
             tag = sent?.tag,
             paymentHash = sent?.paymentHash,
@@ -369,23 +370,41 @@ class Engine(mnemonic: String, val storage: Storage) {
         return row
     }
 
+    /// What a tribe's member pays for an ordinary message (text or
+    /// attachment): the owner's own price plus escrow, or the 3-sat
+    /// floor if that's higher — PeelCore's own `Tribe.messageAmountMsat`/
+    /// `TribePrice.message`. Every tribe message carries at least the
+    /// floor, whether or not the tribe actually charges anything — the
+    /// official apps' own convention, not something the tribes server
+    /// requires. 0 for a DM, or a tribe whose price was never fetched
+    /// (`ContactRow.pricePerMessageMsat`'s own doc comment) — treated
+    /// the same as "no price", not an error.
+    private fun tribeMessageAmountMsat(chat: String): Long {
+        val tribe = storage.contact(chat) ?: return MESSAGE_FLOOR_MSAT
+        return (tribe.pricePerMessageMsat + tribe.escrowMsat).coerceAtLeast(MESSAGE_FLOOR_MSAT)
+    }
+
+    /// What a boost pays a tribe on top of its own tip: price plus
+    /// escrow, with no floor (unlike an ordinary message) — PeelCore's
+    /// own `Tribe.paymentPriceMsat`.
+    private fun tribePaymentPriceMsat(chat: String): Long {
+        val tribe = storage.contact(chat) ?: return 0
+        return (tribe.pricePerMessageMsat + tribe.escrowMsat).coerceAtLeast(0)
+    }
+
     /// Boosts someone else's message: a type 29 message naming it by
     /// `replyUuid`, carrying this account's own boost amount
-    /// (`boostAmountMsat()`) — PeelCore's own `quickBoost`, trimmed to
-    /// its everyday one-tap path. No confirmation threshold: that
-    /// depends on a balance this port doesn't track (no Payments tab,
-    /// no payment history), so there's nothing to check the amount
-    /// against here; a boost that can't actually be afforded fails the
-    /// same way any other send can, surfaced as a plain error, not
-    /// predicted ahead of time. Unlike PeelCore, never adds a tribe's
-    /// own price-per-message to the total either: that needs a `tribe`
-    /// table (price, escrow) this port has never had (`docs/PLAN.md`'s
-    /// own "No tribe... tables yet") — a tribe that charges for
-    /// messages may refuse an underpriced boost the same way it would
-    /// refuse an underpriced text send.
+    /// (`boostAmountMsat()`) plus, in a tribe, its own price and escrow
+    /// (`tribePaymentPriceMsat`, no floor) — PeelCore's own
+    /// `quickBoost`, trimmed to its everyday one-tap path. No
+    /// confirmation threshold: that depends on a balance this port
+    /// doesn't track (no Payments tab, no payment history), so there's
+    /// nothing to check the total against here; a boost that can't
+    /// actually be afforded fails the same way any other send can,
+    /// surfaced as a plain error, not predicted ahead of time.
     suspend fun sendBoost(chat: String, targetUuid: String, isTribe: Boolean): MessageRow {
         check(transport != null) { "Not connected." }
-        val amountMsat = boostAmountMsat()
+        val amountMsat = boostAmountMsat() + (if (isTribe) tribePaymentPriceMsat(chat) else 0L)
         val body = JSONObject().apply {
             put("content", "")
             put("replyUuid", targetUuid)
@@ -592,6 +611,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     ): MessageRow {
         check(transport != null) { "Not connected." }
         if (bytes.size > ATTACHMENT_LIMIT) throw IllegalStateException("That file is too large to send.")
+        val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
         val key = MediaCrypto.newKey()
         val sealed = MediaCrypto.encrypt(bytes, key)
         val memes = MemesServer(MEMES_HOST)
@@ -612,7 +632,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
         val result = run { time, stateBytes ->
-            coreSend(seed, time, chat, ATTACHMENT_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, 0u, isTribe)
+            coreSend(seed, time, chat, ATTACHMENT_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
         val sent = result.msgs.firstOrNull()
         val row = MessageRow(
@@ -623,7 +643,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             fromMe = true,
             sender = null,
             body = body,
-            msat = null,
+            msat = amountMsat.takeIf { it > 0 },
             timestamp = System.currentTimeMillis(),
             tag = sent?.tag,
             paymentHash = sent?.paymentHash,
@@ -900,7 +920,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             } catch (e: Exception) {
                 continue
             }
-            storage.updateTribeInfo(tribe.chat, info.name, info.img)
+            storage.updateTribeInfo(tribe.chat, info.name, info.img, info.pricePerMessageMsat, info.escrowMsat)
         }
     }
 
@@ -1141,5 +1161,10 @@ class Engine(mnemonic: String, val storage: Storage) {
         /// The largest attachment this device downloads — PeelCore's
         /// own `attachmentLimit`.
         private const val ATTACHMENT_LIMIT = 100_000_000
+
+        /// The official apps always send a tribe message with at least
+        /// this many msat (3 sats), whatever the tribe's own price —
+        /// PeelCore's own `TribePrice.messageFloorMsat`.
+        private const val MESSAGE_FLOOR_MSAT = 3_000L
     }
 }

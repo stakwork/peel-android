@@ -116,18 +116,26 @@ fills, trimmed):
   from this device.
 - `contact`: a pubkey, its alias/photo (parsed from its own messages, not
   core state — names and photos never are, and never for a tribe, whose
-  real name/photo come from the tribes server, not built yet), whether
+  real name/photo come from the tribes server, Phase 4), whether
   it's a tribe (`isTribe`, Phase 4 — the signal is a tribes server
-  marking what it forwards, not anything the chat itself declares), and
+  marking what it forwards, not anything the chat itself declares),
   whether the core (or, for a tribe, just being seen at all) now
-  recognises it (`ready`).
+  recognises it (`ready`), and — for a tribe, from the same registry
+  call as its name/photo — what it charges per message
+  (`pricePerMessageMsat`/`escrowMsat`, Phase 5/9/11).
 - `chatState` (Phase 6): each chat's own read marker and mute level —
   synced from the server (`getReads`/`getMutes`), not decided locally;
   `readPending` marks one moved here that hasn't reached the server yet.
+- `preference` doesn't exist as a table of its own yet (unlike
+  PeelCore's general `PreferenceRow` registry) — Phase 11's one synced
+  preference (the boost amount) lives as two rows in `setting` instead;
+  a general registry is real future work once there's a second key to
+  sync.
 
-No `tribe` (the rich kind — price, escrow, membership, roles),
-`payment`, `invoice` or `deviceRequest` tables yet; they come with the
-features that need them.
+No `tribe` (the rich kind — escrow terms, membership, roles; what this
+port needs of a tribe's price lives on `contact` instead, trimmed the
+same way `isTribe` already was), `payment`, `invoice` or
+`deviceRequest` tables yet; they come with the features that need them.
 
 ### Identity and secrets
 

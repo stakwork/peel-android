@@ -234,6 +234,34 @@ class StorageTest {
     }
 
     @Test
+    fun `updateTribeInfo stores a tribe's own price and escrow`() {
+        val storage = newStorage()
+        storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)
+
+        storage.updateTribeInfo("tribe1", "The Watercooler", null, pricePerMessageMsat = 2_000, escrowMsat = 500)
+
+        val contact = storage.contact("tribe1")
+        assertEquals(2_000L, contact?.pricePerMessageMsat)
+        assertEquals(500L, contact?.escrowMsat)
+    }
+
+    @Test
+    fun `a tribe's price survives an ordinary message arriving afterward`() {
+        // CONFLICT_REPLACE rewrites the whole contact row - a later
+        // upsertContact (any incoming message) must not silently wipe a
+        // price updateTribeInfo already fetched back to 0.
+        val storage = newStorage()
+        storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)
+        storage.updateTribeInfo("tribe1", "The Watercooler", null, pricePerMessageMsat = 2_000, escrowMsat = 500)
+
+        storage.upsertContact("tribe1", alias = "Someone", photoUrl = null, isTribe = true)
+
+        val contact = storage.contact("tribe1")
+        assertEquals(2_000L, contact?.pricePerMessageMsat)
+        assertEquals(500L, contact?.escrowMsat)
+    }
+
+    @Test
     fun `updateTribeInfo does nothing for a pubkey that isn't a known tribe`() {
         val storage = newStorage()
         storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)

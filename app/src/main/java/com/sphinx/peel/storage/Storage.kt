@@ -18,6 +18,14 @@ data class ContactRow(
     val photoUrl: String?,
     val isTribe: Boolean,
     val ready: Boolean,
+    /// The tribe's own price per message and escrow, in msat — PeelCore's
+    /// own `Tribe.pricePerMessageMsat`/`escrowMsat`, from its registry
+    /// (`TribeInfo`, `Storage.v7`). Always 0 for a direct contact, and
+    /// for a tribe whose price was never fetched (offline on first
+    /// sight, say — `Engine.refreshTribeNames` only fetches once, the
+    /// same gap its own name/photo already has).
+    val pricePerMessageMsat: Long = 0,
+    val escrowMsat: Long = 0,
 )
 
 /// One row the dashboard shows: a chat (a ready contact or a discovered
@@ -517,6 +525,12 @@ class Storage(context: Context, account: String = "default") {
             put("photoUrl", if (tribe) null else (photoUrl ?: existing?.photoUrl))
             put("isTribe", if (tribe) 1 else 0)
             put("ready", if (ready || existing?.ready == true) 1 else 0)
+            // `CONFLICT_REPLACE` replaces the whole row — a price fetched
+            // by `updateTribeInfo` must survive the next ordinary message
+            // from the same tribe, or it would be silently wiped back to
+            // 0 (no price) the moment any other field about it changes.
+            put("pricePerMessageMsat", existing?.pricePerMessageMsat ?: 0)
+            put("escrowMsat", existing?.escrowMsat ?: 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -527,7 +541,7 @@ class Storage(context: Context, account: String = "default") {
     /// No-op for a pubkey not already known as a tribe: this never turns
     /// a direct contact into one, only fills in what a known tribe's
     /// `contactHint` could never have, by design.
-    fun updateTribeInfo(pubkey: String, name: String, photoUrl: String?) {
+    fun updateTribeInfo(pubkey: String, name: String, photoUrl: String?, pricePerMessageMsat: Long = 0, escrowMsat: Long = 0) {
         val db = helper.writableDatabase
         val existing = readContact(db, pubkey) ?: return
         if (!existing.isTribe) return
@@ -537,9 +551,16 @@ class Storage(context: Context, account: String = "default") {
             put("photoUrl", photoUrl)
             put("isTribe", 1)
             put("ready", if (existing.ready) 1 else 0)
+            put("pricePerMessageMsat", pricePerMessageMsat)
+            put("escrowMsat", escrowMsat)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
+
+    /// One contact or tribe, for whatever needs more than
+    /// `conversations()` shows — a tribe's own price, so far
+    /// (`Engine.sendMessage`/`sendImageAttachment`/`sendBoost`).
+    fun contact(pubkey: String): ContactRow? = readContact(helper.readableDatabase, pubkey)
 
     /// Marks contacts the core itself now recognises (`listContacts`) —
     /// "ready" the way PeelCore's `contact.ready` is: the core holds their
@@ -559,6 +580,8 @@ class Storage(context: Context, account: String = "default") {
                     put("photoUrl", existing?.photoUrl)
                     put("isTribe", if (existing?.isTribe == true) 1 else 0)
                     put("ready", 1)
+                    put("pricePerMessageMsat", existing?.pricePerMessageMsat ?: 0)
+                    put("escrowMsat", existing?.escrowMsat ?: 0)
                 }
                 db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -621,7 +644,7 @@ class Storage(context: Context, account: String = "default") {
 
     private fun readContact(db: SQLiteDatabase, pubkey: String): ContactRow? {
         db.query(
-            "contact", arrayOf("pubkey", "alias", "photoUrl", "isTribe", "ready"),
+            "contact", arrayOf("pubkey", "alias", "photoUrl", "isTribe", "ready", "pricePerMessageMsat", "escrowMsat"),
             "pubkey = ?", arrayOf(pubkey), null, null, null,
         ).use { cursor ->
             if (!cursor.moveToFirst()) return null
@@ -631,6 +654,8 @@ class Storage(context: Context, account: String = "default") {
                 photoUrl = cursor.getString(2),
                 isTribe = cursor.getInt(3) != 0,
                 ready = cursor.getInt(4) != 0,
+                pricePerMessageMsat = cursor.getLong(5),
+                escrowMsat = cursor.getLong(6),
             )
         }
     }
@@ -654,6 +679,7 @@ class Storage(context: Context, account: String = "default") {
             v4(db)
             v5(db)
             v6(db)
+            v7(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -665,6 +691,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 4) v4(db)
             if (oldVersion < 5) v5(db)
             if (oldVersion < 6) v6(db)
+            if (oldVersion < 7) v7(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -786,8 +813,24 @@ class Storage(context: Context, account: String = "default") {
             }
         }
 
+        // `contact.pricePerMessageMsat`/`escrowMsat`: a tribe's own price,
+        // from its registry (`TribeInfo`, `Engine.refreshTribeNames`) —
+        // the same `GET /tribes/<pubkey>` call already fetched for a
+        // tribe's name and photo, now also kept for `Engine.sendMessage`/
+        // `sendImageAttachment`/`sendBoost` to charge the right amount.
+        // Always 0 for a direct contact, and for a tribe whose price was
+        // never fetched. PeelCore's own `Tribe`/`pricePerMessageMsat`/
+        // `escrowMsat` live in a whole separate `tribe` table (price,
+        // escrow, membership, roles); two columns on `contact` cover the
+        // one thing this port reads from it so far, the same trimming
+        // `v3`'s own `isTribe` already did for the same table.
+        private fun v7(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE contact ADD COLUMN pricePerMessageMsat INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE contact ADD COLUMN escrowMsat INTEGER NOT NULL DEFAULT 0")
+        }
+
         companion object {
-            const val VERSION = 6
+            const val VERSION = 7
         }
     }
 }

@@ -107,12 +107,15 @@ mechanism requires to work at all. Skipped here on purpose — see
   `setBoostAmount`/`tip_amount` is — see
   [phases/11-profile-preferences.md](11-profile-preferences.md). Only
   the balance/confirmation safeguards around *sending* stay open.
-- No price added for a tribe that charges per message — PeelCore's own
-  `boostTotalMsat` adds the tribe's `paymentPriceMsat` (plus escrow) on
-  top of the tip; this port has no `tribe` table at all
-  (`docs/PLAN.md`'s own "No tribe... tables yet"), so there's no price
-  to add. A tribe that charges for messages may refuse an underpriced
-  boost the same way it would refuse an underpriced text send.
+- **Fixed (2026-10-29):** a boost to a tribe now adds its own price and
+  escrow on top of the tip, PeelCore's own `boostTotalMsat`/
+  `paymentPriceMsat` (no floor, unlike an ordinary message) —
+  `Engine.tribePaymentPriceMsat`, reading the same `contact.pricePerMessageMsat`/
+  `escrowMsat` columns a tribe message now also charges (see
+  [phases/05-conversation.md](05-conversation.md)'s own "Update"). Was
+  "no `tribe` table at all" when first written; the two columns this
+  needed turned out to fit on `contact` instead, the same trimming its
+  own `isTribe` column already did for that table.
 - No "Copy", "Copy link" or "Delete" in the long-press menu — PeelCore's
   own `MessageMenu` has all three; this port's menu only ever offered
   Reply before this round, and only gained Boost alongside it, not the

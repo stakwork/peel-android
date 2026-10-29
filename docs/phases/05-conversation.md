@@ -25,13 +25,39 @@ uses while `isSending`; a failed one gets "Not delivered" under it. See
 the Journal for how it's actually confirmed — mostly by the message's
 own echo, the mixer's `sentStatus` only when that never arrives.
 
+**Update (2026-10-29), tribe pricing:** a tribe message no longer
+always goes at 0 msat. `TribeInfo.fetch` (already called for a tribe's
+real name/photo, `docs/phases/04-dashboard.md`) now also reads
+`price_per_message`/`escrow_amount` from the same response, kept on
+`contact` (`pricePerMessageMsat`/`escrowMsat`, `Storage.v7`).
+`Engine.sendMessage`/`sendImageAttachment` compute the tribe's own
+`messageAmountMsat` — price plus escrow, or a 3-sat floor if that's
+higher (PeelCore's own `TribePrice.message`, the official apps'
+convention every tribe message carries, charged or not) — instead of
+a hardcoded `0u`. See
+[phases/11-profile-preferences.md](11-profile-preferences.md) for
+where the tribe-pricing fix actually landed (boost sending's own
+Open item flagged the same gap first) and
+[phases/09-threads-boosts.md](09-threads-boosts.md) for the matching
+fix on a boost's own total.
+
 **Open:**
 
-- No price: every send goes at 0 msat, whatever the tribe (or, later, a
-  paid DM) actually charges — nothing here reads `TribeInfo.pricePerMessage`
-  yet. A tribe that charges for messages may refuse a send until that
-  exists; nothing here can yet tell the person that happened beyond
-  whatever error text the core's own refusal carries.
+- A tribe whose price was never fetched (offline on first sight, the
+  same gap `TribeInfo`'s own name/photo already has — no periodic
+  recheck, Phase 4's own "Open") sends at the 3-sat floor alone, not
+  its real price: `ContactRow.pricePerMessageMsat`/`escrowMsat` default
+  to 0 until a fetch actually lands. A tribe that raises its price
+  after this device last saw it undercharges until the next restart,
+  for the same reason.
+- No price on a paid DM — this port has no direct-payment sending at
+  all yet (`Engine.sendPayment` has no equivalent here), so this stays
+  0 msat for any non-tribe chat, same as before.
+- A tribe that refuses an underpriced send (its price changed since
+  this device last fetched it, say) reports whatever error text the
+  core's own refusal carries — PeelCore's own `tribePriceRose` names
+  the problem specifically; this port doesn't distinguish it from any
+  other send failure.
 - No reply, thread, delete, boost, pin, mention or attachment — PeelCore's
   composer and row views are built around all of these; this phase is
   text in, text out, nothing else. `MessageType` is hardcoded to 0

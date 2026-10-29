@@ -47,6 +47,10 @@ row missed those tribes entirely, not just mis-sorted them. See Journal.
   re-pictured after this account first saw it stays stale here until the
   app restarts. No retry or backoff either: a fetch that fails (offline,
   the registry briefly down) is tried again next launch, not sooner.
+  The same call now also reads the tribe's own price and escrow
+  (`docs/phases/05-conversation.md`'s own "Update"), so a price the
+  tribe changes later goes just as stale as a renamed/re-pictured one
+  would.
 - The raw count of tribe-signalling chats in this account's own history
   (17, by a direct count of `host`-bearing messages) is still higher than
   what iOS reports (15) even after the `fromMe` fix. The likely remaining
