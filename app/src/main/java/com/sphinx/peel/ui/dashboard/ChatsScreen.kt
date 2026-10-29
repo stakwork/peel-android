@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,12 +21,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,17 +60,48 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
-/// the large title with the connection bolt, Unread (when there is any),
-/// then Tribes, then Direct messages, each ending in its actions. No
-/// search yet.
+/// the large title with the connection bolt, then `ChatListBody` for
+/// everything else.
 @Composable
 fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
+    val connection by engine.connectionState.collectAsState()
+
+    Column(modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Chats",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = Theme.colors.text,
+                modifier = Modifier.weight(1f),
+            )
+            ConnectionBolt(connected = connection == ConnectionState.Connected)
+        }
+        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenChat = onOpenChat)
+    }
+}
+
+/// The actual list: Unread (when there is any), then Tribes, then Direct
+/// messages, each ending in its own actions — shared by `ChatsScreen`
+/// (`query` always blank) and `SearchScreen` (PeelCore's own `ChatList`,
+/// reused the same way by both `ChatsTab` and the iPhone's `SearchTab`).
+/// Owns the data loading so either caller can be mounted on its own.
+@Composable
+private fun ChatListBody(
+    engine: Engine,
+    storage: Storage,
+    query: String,
+    modifier: Modifier = Modifier,
+    onOpenChat: (String) -> Unit = {},
+) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
     var allTribes by remember { mutableStateOf(false) }
     var allDirect by remember { mutableStateOf(false) }
-    val connection by engine.connectionState.collectAsState()
     val restoreProgress by engine.restoreProgress.collectAsState()
 
     // No reactive query layer yet (no Room, no Flow-backed DB) to push a
@@ -86,31 +122,28 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
     // The agent's DM is its own row, first in Direct messages, never
     // among the regular rows — PeelCore's `ChatList`: "The agent's DM is
     // its own row, first in Direct messages... never in the sections".
+    // While searching it's found by name the same way any other chat is.
     val agentConversation = conversations.firstOrNull { it.chat == engine.agentPubkey }
-    val sectionable = if (agentConversation == null) conversations else conversations.filter { it.chat != engine.agentPubkey }
-    val sections = remember(sectionable, tribesOpen, directOpen, allTribes, allDirect) {
-        ChatSections.of(sectionable, tribesOpen, directOpen, allTribes, allDirect)
+        ?.takeIf { ChatSections.matches(it.name, query) }
+    val sectionable = if (agentConversation == null) {
+        conversations
+    } else {
+        conversations.filter { it.chat != engine.agentPubkey }
     }
+    val sections = remember(sectionable, tribesOpen, directOpen, allTribes, allDirect, query) {
+        ChatSections.of(sectionable, tribesOpen, directOpen, allTribes, allDirect, query)
+    }
+    val searching = sections.searching
+    val noMatches = searching && sections.unread.isEmpty() && sections.tribes.isEmpty() &&
+        sections.direct.isEmpty() && agentConversation == null
 
-    Column(modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Chats",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = Theme.colors.text,
-                modifier = Modifier.weight(1f),
-            )
-            ConnectionBolt(connected = connection == ConnectionState.Connected)
-        }
-
-        if (conversations.isEmpty()) {
+    Box(modifier) {
+        if (conversations.isEmpty() && !searching) {
             EmptyChats(restoring = restoreProgress.restoring)
+        } else if (noMatches) {
+            NoSearchResults(query)
         } else {
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 20.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
                 if (sections.unread.isNotEmpty()) {
                     item { SectionHeader("Unread", expanded = true, onToggle = null) }
                     items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
@@ -119,38 +152,147 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
                     item { Spacer(Modifier.height(16.dp)) }
                 }
 
-                item { SectionHeader("Tribes", expanded = tribesOpen) { tribesOpen = !tribesOpen } }
-                if (tribesOpen) {
-                    items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
-                        ChatRow(conversation) { onOpenChat(conversation.chat) }
+                // Searching shows every matching section, no chevron, no
+                // actions — a section with no matches doesn't show at all.
+                if (!searching || sections.tribes.isNotEmpty()) {
+                    val toggleTribes: (() -> Unit)? = if (searching) null else ({ tribesOpen = !tribesOpen })
+                    item { SectionHeader("Tribes", expanded = tribesOpen || searching, onToggle = toggleTribes) }
+                    if (tribesOpen || searching) {
+                        items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
+                            ChatRow(conversation) { onOpenChat(conversation.chat) }
+                        }
+                        sections.allTribesCount?.let { count ->
+                            item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
+                        }
+                        if (!searching) {
+                            item { ActionRow("Join a tribe") { /* not wired yet */ } }
+                            item { ActionRow("Create a tribe") { /* not wired yet */ } }
+                        }
                     }
-                    sections.allTribesCount?.let { count ->
-                        item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
-                    }
-                    item { ActionRow("Join a tribe") { /* not wired yet */ } }
-                    item { ActionRow("Create a tribe") { /* not wired yet */ } }
+                    item { Spacer(Modifier.height(16.dp)) }
                 }
 
-                item { Spacer(Modifier.height(16.dp)) }
-
-                item { SectionHeader("Direct messages", expanded = directOpen) { directOpen = !directOpen } }
-                if (directOpen) {
-                    agentConversation?.let { agent ->
-                        item(key = "agent") { AgentChatRow(agent.shownUnread) { onOpenChat(engine.agentPubkey) } }
+                if (!searching || sections.direct.isNotEmpty() || agentConversation != null) {
+                    val toggleDirect: (() -> Unit)? = if (searching) null else ({ directOpen = !directOpen })
+                    item { SectionHeader("Direct messages", expanded = directOpen || searching, onToggle = toggleDirect) }
+                    if (directOpen || searching) {
+                        agentConversation?.let { agent ->
+                            item(key = "agent") { AgentChatRow(agent.shownUnread) { onOpenChat(engine.agentPubkey) } }
+                        }
+                        items(sections.direct, key = { "direct-${it.chat}" }) { conversation ->
+                            ChatRow(conversation) { onOpenChat(conversation.chat) }
+                        }
+                        sections.allDirectCount?.let { count ->
+                            item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
+                        }
+                        if (!searching) {
+                            item { ActionRow("Add contact") { /* not wired yet */ } }
+                            item { ActionRow("Invite someone") { /* not wired yet */ } }
+                        }
                     }
-                    items(sections.direct, key = { "direct-${it.chat}" }) { conversation ->
-                        ChatRow(conversation) { onOpenChat(conversation.chat) }
-                    }
-                    sections.allDirectCount?.let { count ->
-                        item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
-                    }
-                    item { ActionRow("Add contact") { /* not wired yet */ } }
-                    item { ActionRow("Invite someone") { /* not wired yet */ } }
                 }
 
                 item { Spacer(Modifier.height(24.dp)) }
             }
         }
+    }
+}
+
+/// "No results for '…'" — PeelCore's own `ContentUnavailableView.search`.
+@Composable
+private fun NoSearchResults(query: String) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("No results for \"$query\"", style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
+    }
+}
+
+/// "Search" (docs/design/iphone.md's own tab bar: Chats, Payments, You,
+/// "plus the system's separate search tab") — a text field filtering
+/// `ChatListBody`, the same list the Chats tab shows, by name
+/// (`ChatSections`'s own `matches`/`searching`), PeelCore's own iPhone
+/// `SearchTab`: `.searchable` over the same `ChatList` `ChatsTab` uses.
+/// Not message content — PeelCore's own content search is a different
+/// feature entirely (Mac's ⌘F find-within-a-chat, `Storage+Search.swift`'s
+/// FTS5 index), and "results across messages" for *this* tab is still
+/// explicitly listed under `docs/design/iphone.md`'s own "To design", not
+/// built even on iOS yet.
+@Composable
+fun SearchScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
+    var query by remember { mutableStateOf("") }
+
+    Column(modifier.fillMaxSize()) {
+        Text(
+            "Search",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = Theme.colors.text,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+        )
+        SearchField(query, onQueryChange = { query = it }, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp))
+        if (query.isBlank()) {
+            EmptySearch()
+        } else {
+            ChatListBody(engine, storage, query = query, modifier = Modifier.weight(1f), onOpenChat = onOpenChat)
+        }
+    }
+}
+
+@Composable
+private fun SearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Theme.colors.fieldFill)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) {
+                Text("Search chats", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
+                cursorBrush = SolidColor(Theme.colors.accent),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (query.isNotEmpty()) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Clear",
+                tint = Theme.colors.secondaryText,
+                modifier = Modifier.size(18.dp).clickable { onQueryChange("") },
+            )
+        }
+    }
+}
+
+/// "Search chats" / "Tribes and people by name." for a blank query —
+/// PeelCore's own `ContentUnavailableView("Search chats", ...)`.
+@Composable
+private fun EmptySearch() {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(40.dp))
+        Spacer(Modifier.height(12.dp))
+        Text("Search chats", style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
+        Spacer(Modifier.height(4.dp))
+        Text("Tribes and people by name.", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
     }
 }
 

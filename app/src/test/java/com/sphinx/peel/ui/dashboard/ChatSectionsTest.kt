@@ -6,9 +6,9 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ChatSectionsTest {
-    private fun row(chat: String, isTribe: Boolean, unread: Long = 0, muted: Boolean = false) =
+    private fun row(chat: String, isTribe: Boolean, unread: Long = 0, muted: Boolean = false, alias: String = chat) =
         ConversationRow(
-            chat, alias = chat, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = null,
+            chat, alias = alias, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = null,
             lastFromMe = null, unread = unread, muteLevel = if (muted) 2 else 0,
         )
 
@@ -81,5 +81,48 @@ class ChatSectionsTest {
 
         assertEquals(emptyList<ConversationRow>(), sections.unread)
         assertEquals(listOf("d1"), sections.direct.map { it.chat })
+    }
+
+    @Test
+    fun `a blank query is not searching`() {
+        val rows = listOf(row("t1", true, unread = 0, alias = "Sphinx Tribe"))
+        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false, query = "   ")
+
+        assertEquals(false, sections.searching)
+        assertEquals(listOf("t1"), sections.tribes.map { it.chat })
+    }
+
+    @Test
+    fun `a query filters every section by name, case-insensitively`() {
+        val rows = listOf(
+            row("t1", true, unread = 0, alias = "Sphinx Tribe"),
+            row("t2", true, unread = 2, alias = "Other Tribe"),
+            row("d1", false, unread = 0, alias = "Alice"),
+        )
+        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false, query = "sphinx")
+
+        assertEquals(true, sections.searching)
+        assertEquals(listOf("t1"), sections.tribes.map { it.chat })
+        assertEquals(emptyList<ConversationRow>(), sections.unread)
+        assertEquals(emptyList<ConversationRow>(), sections.direct)
+    }
+
+    @Test
+    fun `searching shows every match with no trimming and no Show all row`() {
+        val rows = (1..8).map { row("t$it", true, unread = 0, alias = "Tribe $it") }
+        val sections = ChatSections.of(rows, tribesOpen = false, directOpen = false, allTribes = false, allDirect = false, query = "Tribe")
+
+        assertEquals(8, sections.tribes.size)
+        assertNull(sections.allTribesCount)
+    }
+
+    @Test
+    fun `searching with no matches returns empty sections`() {
+        val rows = listOf(row("t1", true, unread = 0, alias = "Sphinx Tribe"))
+        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false, query = "nothing matches this")
+
+        assertEquals(emptyList<ConversationRow>(), sections.tribes)
+        assertEquals(emptyList<ConversationRow>(), sections.direct)
+        assertEquals(emptyList<ConversationRow>(), sections.unread)
     }
 }

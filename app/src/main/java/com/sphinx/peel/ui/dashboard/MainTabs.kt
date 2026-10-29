@@ -40,8 +40,7 @@ import com.sphinx.peel.ui.you.YouScreen
 private enum class MainTab { CHATS, PAYMENTS, YOU, SEARCH }
 
 /// The tab bar — PeelCore's `MainTabs.swift`: Chats, Payments, You, Search.
-/// Only Chats and You are real; Payments and Search are placeholders,
-/// since neither has anything behind it yet.
+/// Chats, You and Search are real; Payments is still a placeholder.
 @Composable
 fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
     var tab by remember { mutableStateOf(MainTab.CHATS) }
@@ -60,7 +59,7 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
                     MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                     MainTab.PAYMENTS -> NotBuiltYet("Payments")
                     MainTab.YOU -> YouScreen(engine, storage, secretStore, onForgotten)
-                    MainTab.SEARCH -> NotBuiltYet("Search")
+                    MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                 }
             }
             BottomBar(tab) { tab = it }
