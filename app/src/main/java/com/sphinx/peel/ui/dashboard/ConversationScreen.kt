@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Pause
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -104,6 +106,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     var messages by remember(chat) { mutableStateOf(emptyList<MessageRow>()) }
     var draft by remember(chat) { mutableStateOf("") }
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
+    var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
@@ -153,9 +156,10 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                     ?: throw IllegalStateException("That doesn't look like an image.")
                 val caption = draft
                 val replyUuid = replyTo?.uuid
+                val inThread = replyTo?.let { threadRoot(it) }
                 draft = ""
                 replyTo = null
-                engine.sendImageAttachment(chat, jpeg, caption, isTribe, replyUuid)
+                engine.sendImageAttachment(chat, jpeg, caption, isTribe, replyUuid, inThread)
                 reload()
             } catch (e: Exception) {
                 error = e.message ?: "Could not send that image."
@@ -171,6 +175,17 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val uri = cameraOutputUri
         if (success && uri != null) sendImage(uri)
+    }
+
+    val openRoot = openThreadRoot
+    if (openRoot != null) {
+        ThreadScreen(
+            engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, audioPlayer = audioPlayer,
+            threadRootUuid = openRoot, messages = messages,
+            onBack = { openThreadRoot = null },
+            onSent = { scope.launch { reload() } },
+        )
+        return
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -196,23 +211,41 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             }
         }
 
+        // Boosts are never a row of their own (PeelCore's own `BoostLineView`
+        // shows them as a chip under the message they boost, by its own
+        // `replyUuid`) - summed once per `messages` change, not per row.
+        val boosts = remember(messages) { boostSummaries(messages) }
+        // Nor is a thread's own reply ever shown inline - PeelCore's own
+        // `rows(...)` collapses every message that carries a `threadUuid`
+        // behind its root's "N replies" row; the root itself keeps its
+        // ordinary place in the list (unlike PeelCore, which bumps the
+        // collapsed row to the thread's newest reply - a documented
+        // simplification, see docs/phases/09-threads-boosts.md).
+        val threads = remember(messages) { threadSummaries(messages) }
+        val displayedMessages = remember(messages) {
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && threadUuid(it) == null }
+        }
+
         val listState = rememberLazyListState()
-        LaunchedEffect(messages.size) {
-            if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+        LaunchedEffect(displayedMessages.size) {
+            if (displayedMessages.isNotEmpty()) listState.animateScrollToItem(displayedMessages.size - 1)
         }
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            itemsIndexed(messages, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
-                val previous = messages.getOrNull(index - 1)
+            itemsIndexed(displayedMessages, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
+                val previous = displayedMessages.getOrNull(index - 1)
                 val startsRun = previous == null || runSenderKey(previous) != runSenderKey(row)
                 val replyUuid = replyUuid(row)
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
                 MessageRowView(
                     row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                     replyUuid = replyUuid, parent = parent, engine = engine, audioPlayer = audioPlayer,
+                    boosts = row.uuid?.let { boosts[it] },
+                    threadSummary = row.uuid?.let { threads[it] },
+                    onOpenThread = { row.uuid?.let { openThreadRoot = it } },
                     onReply = { replyTo = row },
                 )
             }
@@ -245,12 +278,16 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
+                // A reply always lands in a thread, the same thread its
+                // own parent is already in (or starts a new one at the
+                // parent, if it isn't in one yet) — PeelCore's `threadRoot`.
+                val inThread = replyTo?.let { threadRoot(it) }
                 draft = ""
                 replyTo = null
                 error = null
                 scope.launch {
                     try {
-                        engine.sendMessage(chat, toSend, isTribe, replyUuid)
+                        engine.sendMessage(chat, toSend, isTribe, replyUuid, inThread)
                         reload()
                     } catch (e: Exception) {
                         error = e.message ?: "Could not send that."
@@ -258,6 +295,147 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                 }
             },
         )
+    }
+}
+
+/// A thread (docs/design/iphone.md — `ThreadSheet.swift`): the root
+/// message, then everything that replies to it, newest at the bottom,
+/// and its own composer — always replying to the root, PeelCore's own
+/// "a thread is flat" shape (a reply within a thread doesn't start a
+/// nested one). Text only: no attach button here yet, unlike the main
+/// screen's composer (`docs/phases/09-threads-boosts.md`).
+@Composable
+private fun ThreadScreen(
+    engine: Engine,
+    chat: String,
+    isTribe: Boolean,
+    isAgent: Boolean,
+    myAlias: String,
+    audioPlayer: AudioPlayer,
+    threadRootUuid: String,
+    messages: List<MessageRow>,
+    onBack: () -> Unit,
+    onSent: () -> Unit,
+) {
+    var draft by remember(threadRootUuid) { mutableStateOf("") }
+    var error by remember(threadRootUuid) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val root = messages.firstOrNull { it.uuid == threadRootUuid }
+    val replies = remember(messages, threadRootUuid) {
+        messages.filter { threadUuid(it) == threadRootUuid }.sortedBy { it.timestamp ?: 0L }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Thread", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+            }
+            IconButton(onClick = onBack) {
+                Icon(Icons.Filled.Close, contentDescription = "Close", tint = Theme.colors.secondaryText)
+            }
+        }
+
+        val listState = rememberLazyListState()
+        LaunchedEffect(replies.size) {
+            if (replies.isNotEmpty()) listState.animateScrollToItem(replies.size)
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            if (root != null) {
+                item(key = "root") {
+                    MessageRowView(
+                        row = root, startsRun = true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                        replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
+                        boosts = null, threadSummary = null, onOpenThread = {}, onReply = {},
+                    )
+                    HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp))
+                }
+            } else {
+                item(key = "root-missing") {
+                    Text(
+                        "Original message not available",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Theme.colors.secondaryText,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+            }
+            itemsIndexed(replies, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
+                val previous = replies.getOrNull(index - 1) ?: root
+                val startsRun = previous == null || runSenderKey(previous) != runSenderKey(row)
+                MessageRowView(
+                    row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
+                    boosts = null, threadSummary = null, onOpenThread = {}, onReply = {},
+                )
+            }
+        }
+
+        error?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = Theme.colors.destructive,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Theme.colors.fieldFill)
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (draft.isEmpty()) {
+                    Text("Reply", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+                }
+                BasicTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            val canSend = draft.isNotBlank()
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Theme.colors.button.copy(alpha = if (canSend) 1f else 0.4f))
+                    .clickable(enabled = canSend) {
+                        val toSend = draft
+                        draft = ""
+                        error = null
+                        scope.launch {
+                            try {
+                                engine.sendMessage(chat, toSend, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
+                                onSent()
+                            } catch (e: Exception) {
+                                error = e.message ?: "Could not send that."
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
+            }
+        }
     }
 }
 
@@ -287,6 +465,62 @@ private fun previewContent(row: MessageRow): String =
 private fun replyUuid(row: MessageRow): String? =
     row.body?.let { runCatching { JSONObject(it).optString("replyUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
 
+/// A boost: a payment on another message, named the same way a reply
+/// names what it answers (`replyUuid`) — PeelCore's own `MessageType.boost`.
+private const val BOOST_MESSAGE_TYPE = 29
+
+private data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean)
+
+/// Every boost in `messages`, summed per message it boosts — PeelCore's
+/// `BoostSummary`, trimmed: no pending/unsettled/failed tracking, since
+/// this port has no payment capability at all yet and so never
+/// originates a *new* boost — only ever shows ones already in stored
+/// history, restored or live, which are already as final as they'll get.
+private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary> {
+    val byTarget = mutableMapOf<String, MutableList<MessageRow>>()
+    for (row in messages) {
+        if (row.type != BOOST_MESSAGE_TYPE) continue
+        val target = replyUuid(row) ?: continue
+        byTarget.getOrPut(target) { mutableListOf() }.add(row)
+    }
+    return byTarget.mapValues { (_, boosts) ->
+        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: 0L }, boostedByMe = boosts.any { it.fromMe })
+    }
+}
+
+/// `row`'s own `threadUuid`, the same way `replyUuid` is read — set by
+/// `Engine.sendMessage`'s `inThread` parameter, or carried the same way
+/// by an incoming message.
+private fun threadUuid(row: MessageRow): String? =
+    row.body?.let { runCatching { JSONObject(it).optString("threadUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
+/// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
+/// (`threadUuid ?? replyUuid ?? uuid`): a message already in a thread
+/// keeps it going; one that's itself a plain reply starts a thread at
+/// what it replies to; anything else starts a thread at itself. This is
+/// why *every* reply ends up collapsed behind "N replies" once there's
+/// a second one — not a separate "make this a thread" action, the same
+/// way PeelCore's own `links(replyTo:inThread:in:)` works it out.
+private fun threadRoot(row: MessageRow): String = threadUuid(row) ?: replyUuid(row) ?: row.uuid ?: ""
+
+private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Long?)
+
+/// Every thread among `messages`, by its root's uuid — PeelCore's own
+/// `ThreadSummary`, trimmed to what the collapsed row needs (a count
+/// and when it was last added to); no participants, no unread count
+/// (Phase 6's own read-state doesn't distinguish a thread's messages
+/// from the chat's).
+private fun threadSummaries(messages: List<MessageRow>): Map<String, ThreadSummaryData> {
+    val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
+    for (row in messages) {
+        val root = threadUuid(row) ?: continue
+        byRoot.getOrPut(root) { mutableListOf() }.add(row)
+    }
+    return byRoot.mapValues { (_, replies) ->
+        ThreadSummaryData(replyCount = replies.size, lastTimestamp = replies.mapNotNull { it.timestamp }.maxOrNull())
+    }
+}
+
 @Composable
 private fun MessageRowView(
     row: MessageRow,
@@ -298,6 +532,9 @@ private fun MessageRowView(
     parent: MessageRow?,
     engine: Engine,
     audioPlayer: AudioPlayer,
+    boosts: BoostSummary?,
+    threadSummary: ThreadSummaryData?,
+    onOpenThread: () -> Unit,
     onReply: () -> Unit,
 ) {
     val sender = senderJson(row)
@@ -360,8 +597,30 @@ private fun MessageRowView(
             if (row.status == "FAILED") {
                 Text("Not delivered", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
             }
+            if (boosts != null && boosts.count > 0) {
+                Spacer(Modifier.height(2.dp))
+                BoostChip(boosts)
+            }
+            if (threadSummary != null) {
+                Spacer(Modifier.height(2.dp))
+                ThreadSummaryRow(threadSummary, onClick = onOpenThread)
+            }
         }
     }
+}
+
+/// "N replies", in the accent colour — PeelCore's `ThreadSummaryButton`,
+/// minus the small stack of repliers' avatars (this port tracks no
+/// per-thread participant list, Phase 9's own trimming of `ThreadSummary`).
+@Composable
+private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
+    Text(
+        if (summary.replyCount == 1) "1 reply" else "${summary.replyCount} replies",
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = Theme.colors.accent,
+        modifier = Modifier.clickable(onClick = onClick).padding(vertical = 2.dp),
+    )
 }
 
 private sealed class AttachmentState {
@@ -595,6 +854,36 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
         )
     }
 }
+
+/// A bolt and a sats total, on `fieldFill` — PeelCore's own `BoostChipView`,
+/// lit (the accent colour) when this device's own history has a boost on
+/// it, plain otherwise. No pending/failed states: this port never sends
+/// a new boost yet, so everything shown here already reached its final
+/// state before this device ever saw it.
+@Composable
+private fun BoostChip(boosts: BoostSummary) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Theme.colors.fieldFill)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Bolt, contentDescription = null, tint = Theme.colors.attention, modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(
+            "${formattedSats(boosts.totalMsat)} sats",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = if (boosts.boostedByMe) Theme.colors.accent else Theme.colors.text,
+        )
+    }
+}
+
+/// "1,200" — msat to whole sats, thousands-grouped, as PeelCore's own
+/// `Sats.number` shows a boost's total.
+private fun formattedSats(msat: Long): String =
+    "%,d".format(Locale.US, msat / 1000)
 
 @Composable
 private fun AgentTag() {

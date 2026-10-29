@@ -161,6 +161,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 6 | Read state: unread counts, mute levels, synced read markers | built; see the file for what's open | [phases/06-read-state.md](phases/06-read-state.md) |
 | 7 | Reply: replying to a message from the chat screen | built; see the file for what's open | [phases/07-reply.md](phases/07-reply.md) |
 | 8 | Attachments: receive and show images/video/audio/PDF/files; send images (Photo/Camera) | built; see the file for what's open | [phases/08-attachments.md](phases/08-attachments.md) |
+| 9 | Threads and boosts: collapsed "N replies" + a thread sheet, boost chips | built; see the file for what's open | [phases/09-threads-boosts.md](phases/09-threads-boosts.md) |
 
 ## Open questions
 

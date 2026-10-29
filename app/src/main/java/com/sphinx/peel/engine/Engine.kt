@@ -312,15 +312,18 @@ class Engine(mnemonic: String, val storage: Storage) {
     }
 
     /// Sends a plain text message to a contact or a tribe, optionally as
-    /// a reply to one of its own stored messages (`replyTo`, its `uuid`
-    /// — not checked against the real thing `links(replyTo:...)` does on
-    /// PeelCore: any uuid goes in as given, since this port tracks
-    /// neither deletion nor threads for there to be anything to check
-    /// against). Ported from PeelCore's `Engine+Messages.swift`
-    /// (`sendText`/`deliver`), trimmed to one message with no thread,
-    /// device-request or payment-threshold handling — and no price:
-    /// every send goes at 0 msat regardless of what a tribe actually
-    /// charges, since nothing here reads a tribe's price yet
+    /// a reply to one of its own stored messages (`replyTo`, its `uuid`)
+    /// and/or into a thread (`inThread`, the thread's own root uuid —
+    /// `ConversationScreen` works out which one the same way PeelCore's
+    /// `links(replyTo:inThread:in:)` does, since this port has no
+    /// storage-level `threadRoot` lookup of its own). Neither is checked
+    /// against the real thing PeelCore's `links` does — any uuid goes in
+    /// as given, since this port tracks no deletion and no thread
+    /// membership to check against. Ported from PeelCore's
+    /// `Engine+Messages.swift` (`sendText`/`deliver`), trimmed to one
+    /// message with no device-request or payment-threshold handling —
+    /// and no price: every send goes at 0 msat regardless of what a
+    /// tribe actually charges, since nothing here reads a tribe's price yet
     /// (`TribeInfo.pricePerMessage`, not fetched); a tribe that charges
     /// for messages may refuse this until that exists.
     ///
@@ -335,9 +338,12 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// first (`storeMessages`'s `sentStatus` handling) — whichever comes.
     /// A send whose echo never arrives and whose tag the mixer never
     /// mentions again stays `PENDING` forever: no retry, no timeout.
-    suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null): MessageRow {
+    suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null): MessageRow {
         check(transport != null) { "Not connected." }
-        val body = JSONObject().put("content", text).apply { if (replyTo != null) put("replyUuid", replyTo) }.toString()
+        val body = JSONObject().put("content", text).apply {
+            if (replyTo != null) put("replyUuid", replyTo)
+            if (inThread != null) put("threadUuid", inThread)
+        }.toString()
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
         val result = run { time, stateBytes ->
@@ -411,7 +417,9 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// `jpeg` is already re-encoded, orientation corrected, metadata
     /// gone — the caller's job (`ConversationScreen`'s picker), not
     /// this function's: it only ever sends exactly the bytes it's given.
-    suspend fun sendImageAttachment(chat: String, jpeg: ByteArray, caption: String, isTribe: Boolean, replyTo: String? = null): MessageRow {
+    suspend fun sendImageAttachment(
+        chat: String, jpeg: ByteArray, caption: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null,
+    ): MessageRow {
         check(transport != null) { "Not connected." }
         val key = MediaCrypto.newKey()
         val sealed = MediaCrypto.encrypt(jpeg, key)
@@ -426,6 +434,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             put("mediaType", "image/jpg")
             put("mediaToken", mediaToken)
             if (replyTo != null) put("replyUuid", replyTo)
+            if (inThread != null) put("threadUuid", inThread)
         }.toString()
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
