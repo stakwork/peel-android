@@ -30,14 +30,30 @@ whatever was already typed as its caption. `Engine.sendImageAttachment`
 is `MediaCrypto.encrypt`/`MemesServer.upload`/`sendMessage`'s own shape,
 one call each, with no draft-row-then-resume complexity: a failure
 throws, same as a text send, rather than leaving something to retry.
-Video, voice recording and arbitrary files are still their own future
-task, not started.
+
+**Also built, the rest of sending (2026-10-29):** video, voice
+recording and arbitrary files. `sendImageAttachment` became a thin
+wrapper over a shared private `sendAttachment(bytes, fileName,
+mediaType, ...)`, the same shape PeelCore's own generic `sendAttachment`
+is under every kind it sends — `sendVoiceMessage` and
+`sendFileAttachment` are two more thin wrappers over it, not separate
+mechanisms. A voice message is a real press-and-hold recording
+(`VoiceRecorder`, built on `AudioRecord` — `MediaRecorder` has no
+uncompressed-WAV output mode, and a plain WAV is exactly what every
+Sphinx client sends and expects), 16 kHz mono 16-bit PCM, named
+`"audio.wav"`/`"audio/wav"`, the one format that plays on iOS Sphinx's
+44.1 kHz and the official Android app's 8 kHz alike. A video or any
+other file goes through a new "File" attach option (the system
+document picker) — there's no dedicated video picker, on this port or
+on PeelCore's own iPhone app: a video reaches the send path through
+the generic Files picker on both. `classifyOutgoingFile` ports
+PeelCore's own `OutgoingFile.init` renaming rule for a video (always
+`"video.mov"`/`"video/mov"`, whatever its real container, the
+cross-client convention every Sphinx client uses for one); anything
+else keeps its own name and declared type.
 
 **Open:**
 
-- No video, voice-recording or arbitrary-file sending — only images,
-  by explicit choice, so a bigger "sending" task doesn't need to
-  re-cover what images already settled (the upload/token/body shape).
 - No tap-to-load gate: every attachment in a chat starts downloading
   the moment its row appears, images included. Fine for how little any
   one chat has so far; a very attachment-heavy tribe may want a gate
@@ -82,19 +98,53 @@ task, not started.
   already covers (PeelCore's own fallback) — a device that bought an
   attachment on someone else's behalf (the seller side) is not a case
   this port needs, since receiving never had to buy one either.
-- No pricing on a sent image either — always free, the same simplification
-  `Engine.sendMessage` already has for text in a paid tribe.
-- No preview-before-send: picking or capturing a photo sends it right
-  away, with whatever was already typed as its caption — there is no
-  staging tray to add a caption after picking, remove a picked photo,
-  or send several at once (PeelCore's own multi-file `sendAttachments`).
-- No upload progress bar, just a plain "Sending photo…" line — PeelCore
-  reports bytes transferred as it goes; this port waits for the whole
-  thing silently.
-- No retry on a failed send: a send that throws (upload refused, no
-  connection, etc.) shows the one-line error already used for a failed
-  text send and the photo is gone — nothing is kept to try again,
-  unlike PeelCore's own draft-row-first design.
+- No pricing on anything sent either — always free, the same
+  simplification `Engine.sendMessage` already has for text in a paid
+  tribe.
+- No preview-before-send, for any kind: picking, capturing or recording
+  sends right away, with whatever was already typed as its caption (a
+  voice message, never a caption at all) — there is no staging tray to
+  add a caption after picking, remove something picked, or send
+  several files at once (PeelCore's own multi-file `sendAttachments`).
+- No upload progress bar, just a plain "Sending photo…"/"Sending
+  file…"/"Sending voice message…" line — PeelCore reports bytes
+  transferred as it goes; this port waits for the whole thing silently.
+- No retry on a failed send, for any kind: a send that throws (upload
+  refused, no connection, a file over the 100MB limit, etc.) shows the
+  one-line error already used for a failed text send and whatever was
+  picked or recorded is gone — nothing is kept to try again, unlike
+  PeelCore's own draft-row-first design.
+- No slide-to-cancel on the voice recorder — PeelCore's own
+  `HoldToRecordButton` lets sliding the held mic left or up
+  (`VoiceMessage.cancelDistance`) discard a recording without
+  releasing; this port's `VoiceRecorder` only ever sends on release
+  (or discards if under the 1-second minimum). `cancel()` exists for
+  the one case this app still needs without the gesture (backgrounded
+  mid-recording), just not reachable from a slide.
+- The mic permission prompt is the bare system dialog, asked the
+  moment the mic button is first pressed — PeelCore's own composer
+  shows "Allow the microphone in Settings to record voice messages."
+  once denied (`recorder.denied`); this port shows nothing further
+  after a refusal, so pressing the mic again just re-prompts (or does
+  nothing once Android stops asking, after a repeated denial) with no
+  explanation of why.
+- A file picked through "File" is read entirely into memory before its
+  size is checked against the 100MB limit — PeelCore's own
+  `sendAttachment` does the exact same thing (`resourceValues`'s
+  cheaper check first, then `Data(contentsOf:)` and a second check),
+  so this isn't a shortcut unique to this port, just a real memory
+  cost either way for a file that turns out to be too large.
+- No animated-GIF-vs-still-image split for a GIF picked through
+  "File" (PeelCore's own `OutgoingFile.init` sends an animated one as
+  `"image.gif"`/`image/gif`, unmodified bytes, keeping its motion; a
+  still one as `"image.jpg"`). This port's own image-prep pipeline
+  already flattens any picked image to a still JPEG before it's ever
+  sent that way (Photo/Camera), so this only matters for a GIF picked
+  through the generic file picker specifically — it keeps its own
+  name and declared `image/gif` type (so it still renders, inline, as
+  an image — `AttachmentKind` classifies by `mediaType` containing
+  "image" or "gif" either way), it just isn't relabeled the exact way
+  PeelCore's own picker would.
 
 ## Decided
 
@@ -113,6 +163,28 @@ task, not started.
   that needs it (`AttachmentView`, by way of `downloadAttachment`) is
   already keyed by `muid` for the content itself, and a one-line file
   is simpler than a migration for data this disposable.
+- One generic `sendAttachment(bytes, fileName, mediaType, ...)` under
+  every kind sent (image, voice, file), not a parallel function per
+  kind — PeelCore's own `Engine.sendAttachment` is the same single
+  function under all of its kinds; only the *classification* (what
+  name/type a given file sends as) differs by kind, not the actual
+  encrypt/upload/send mechanics.
+- No dedicated "send a video" picker or function — PeelCore's own
+  iPhone app has none either (`AttachButton`'s menu is Photos/Camera/
+  Files, no fourth "Video" option; the photo picker itself is
+  image-only, `matching: .images`). A video reaches the send path
+  through the generic Files picker on both platforms, so Android's
+  own `sendFileAttachment` covers it without a separate code path -
+  confirmed by reading the real `Composer.swift` source, not assumed
+  from "a chat app's attach menu usually has a Video option."
+- `AudioRecord`, not `MediaRecorder`, for the voice recorder —
+  `MediaRecorder` has no output format that is a plain, uncompressed
+  WAV (its PCM-ish modes are still container formats other clients
+  don't expect for this), and a plain 16-bit PCM WAV is exactly what
+  every Sphinx client sends and plays. `AudioRecord` gives raw PCM
+  samples directly, so the WAV header is written by hand (`VoiceRecorder`'s
+  own `toWav`) — the same RIFF/`fmt `/`data` layout `peel`'s own
+  `WavHeader(_:)` parses in reverse.
 
 ## Journal
 
@@ -192,6 +264,27 @@ opening a *received* file externally. One more `<cache-path>` entry
 by the camera intent) in the same `file_paths.xml` was the whole
 addition.
 
+**Read the real Composer source before assuming "finish sending" meant
+a dedicated video picker.** "No video, voice-recording or arbitrary-
+file sending" sounds like three features on the composer's attach
+menu; reading `Apps/iOS/Peel/Composer.swift` in full showed the real
+app's own menu is Photos (images only)/Camera/Files, with video
+reaching the send path only through Files, and the mic as its own
+button beside the composer, not a fourth menu item. Building what the
+reference app actually does — one new "File" option plus a mic button
+— instead of inventing a video picker iOS itself doesn't have avoided
+adding a feature that would have made this port *diverge* from the
+thing it's porting, not just extend it.
+
+**`MediaRecorder` looked like the obvious tool and wasn't the right
+one.** Android's usual path for "record audio" is `MediaRecorder`, but
+every one of its output formats compresses or containers the audio in
+a way that isn't a plain WAV — and a plain 16-bit PCM WAV is
+specifically what `VoiceMessage.swift` says every Sphinx client sends
+and expects. `AudioRecord` (raw PCM samples, no container at all) plus
+a hand-written WAV header turned out to be the actual match for the
+format, not a step down from the "proper" API.
+
 ## Done
 
 - `engine/MediaCrypto.kt`: RNCryptor v3 decrypt (PBKDF2-HMAC-SHA1 ×2,
@@ -239,11 +332,50 @@ addition.
   too-short or wrong-version blob; `encrypt` round-trips through
   `decrypt`, never repeats itself for the same input, and a
   Kotlin-encrypted blob was checked by hand against the same Python
-  reference in the other direction. 60 tests passing. `AudioPlayer`
-  and the picker/camera flow are not unit-tested — one wraps
+  reference in the other direction. `AudioPlayer` and the
+  picker/camera flow are not unit-tested — one wraps
   `android.media.MediaPlayer`, the other needs a real device's photo
   picker and camera app, both the same category of gap as `Engine`'s
   own untestable native-library calls.
+
+**Also done (2026-10-29), the rest of sending:**
+
+- `engine/Engine.kt`: `sendImageAttachment` refactored into a thin
+  wrapper over a shared private `sendAttachment(chat, bytes, fileName,
+  mediaType, caption, isTribe, replyTo, inThread)` (now also checks
+  the 100MB limit, and writes the `<muid>.name` sidecar for any kind,
+  not just images); `uploadFieldName(mediaType)` (PeelCore's own
+  `OutgoingFile.field`); `sendVoiceMessage(chat, wav, isTribe, ...)`;
+  `sendFileAttachment(chat, bytes, pickedName, declaredMediaType,
+  caption, isTribe, ...)`.
+- `engine/Attachment.kt`: `classifyOutgoingFile(fileName,
+  declaredMediaType)` — PeelCore's own `OutgoingFile.init` renaming
+  rule, trimmed (no animated-GIF detection — see Open).
+- `ui/components/VoiceRecorder.kt`: a press-and-hold recorder on
+  `AudioRecord` — 16 kHz mono 16-bit PCM, written as a plain WAV by
+  hand (`toWav`); `start`/`release`/`cancel`, Compose state
+  (`isRecording`/`elapsedMs`); auto-stops and sends at 5 minutes
+  (`MAXIMUM_DURATION_MS`), discards anything under 1 second
+  (`MINIMUM_DURATION_MS`), both PeelCore's own `VoiceMessage` numbers.
+- `ui/dashboard/ConversationScreen.kt`: a "File" attach menu item
+  (`ActivityResultContracts.OpenDocument`, reading the picked file's
+  bytes/name/declared type through its own `ContentResolver`); the
+  composer's trailing button is now Send when there's text to send,
+  else a press-and-hold mic (`detectTapGestures(onPress =
+  ...)`/`awaitRelease`) that records and sends a voice message on
+  release; the single `sendingImage: Boolean` composer param became
+  `sendingLabel: String?`, set by whichever send path is in flight
+  ("Sending photo…"/"Sending file…"/"Sending voice message…").
+- `AndroidManifest.xml`: `RECORD_AUDIO`, requested at runtime the
+  first time the mic button is pressed.
+- Tests: `AttachmentTest` — `classifyOutgoingFile` relabels every
+  recognised video extension to `"video.mov"`/`"video/mov"`, keeps
+  anything else's own name, guesses a media type from the extension
+  when none was declared, and falls back to
+  `"application/octet-stream"` for neither. 71 tests passing.
+  `VoiceRecorder` is not unit-tested — it wraps
+  `android.media.AudioRecord`, which needs a real microphone, the same
+  category of gap as `AudioPlayer`'s own `MediaPlayer` wrapper.
 
 ## Learned
 
@@ -281,3 +413,17 @@ addition.
   later, seemingly unrelated need (the camera's own output) turned out
   to require — worth checking what's already in place before assuming
   a new feature needs new plumbing.
+- A phase's own "Open" list naming three remaining things ("video,
+  voice-recording or arbitrary-file sending") described the *user-
+  visible* gaps accurately, but the actual shape underneath them was
+  one new generic send path plus a label for each kind, not three
+  separate features — reading PeelCore's own `sendAttachment` first
+  (one function under every kind it sends) rather than starting from
+  the three-item list avoided building three parallel mechanisms that
+  would have needed to stay in sync by hand.
+- The "obvious" platform API for a task (`MediaRecorder` for "record
+  audio") is worth checking against the *exact* format something
+  downstream actually needs before reaching for it — the right tool
+  here was the lower-level one (`AudioRecord`), because the task
+  wasn't "record audio," it was "produce the specific uncompressed WAV
+  bytes every other Sphinx client already expects."

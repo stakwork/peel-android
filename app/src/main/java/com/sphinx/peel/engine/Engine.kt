@@ -408,30 +408,43 @@ class Engine(mnemonic: String, val storage: Storage) {
         return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), fileName, plain.size)
     }
 
-    /// Sends an image: encrypts it with a fresh key, uploads it to the
-    /// memes server, then a type 6 message naming it — PeelCore's
-    /// `sendAttachment`, trimmed to one image with no price, no "sell
-    /// it" path (`Engine+Attachments.swift`'s own price plumbing), and
-    /// no retry-the-upload-later: a failure here throws, same as a text
+    /// Sends a file as an attachment: encrypts it with a fresh key,
+    /// uploads it to the memes server, then a type 6 message naming it
+    /// — PeelCore's `sendAttachment`, trimmed to no price, no "sell it"
+    /// path (`Engine+Attachments.swift`'s own price plumbing), and no
+    /// retry-the-upload-later: a failure here throws, same as a text
     /// send, rather than leaving a stored draft row behind to resume.
-    /// `jpeg` is already re-encoded, orientation corrected, metadata
-    /// gone — the caller's job (`ConversationScreen`'s picker), not
-    /// this function's: it only ever sends exactly the bytes it's given.
-    suspend fun sendImageAttachment(
-        chat: String, jpeg: ByteArray, caption: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null,
+    /// `bytes`/`fileName`/`mediaType` are exactly what goes — any
+    /// re-encoding (images) or classifying (`classifyOutgoingFile`,
+    /// for a generic picked file or a video) is the caller's job, same
+    /// as PeelCore's own `sendAttachment` takes an already-decided
+    /// `OutgoingFile`. Shared by every kind this port can send
+    /// (`sendImageAttachment`/`sendVoiceMessage`/`sendFileAttachment`),
+    /// the way PeelCore's own `sendAttachment` is one function under
+    /// all of its kinds too. There's no separate "send a video"
+    /// function — PeelCore's own iPhone app has no dedicated video
+    /// picker either; a video only ever reaches `sendAttachment`
+    /// through the generic Files picker, same as here through
+    /// `sendFileAttachment`.
+    private suspend fun sendAttachment(
+        chat: String, bytes: ByteArray, fileName: String, mediaType: String, caption: String, isTribe: Boolean,
+        replyTo: String?, inThread: String?,
     ): MessageRow {
         check(transport != null) { "Not connected." }
+        if (bytes.size > ATTACHMENT_LIMIT) throw IllegalStateException("That file is too large to send.")
         val key = MediaCrypto.newKey()
-        val sealed = MediaCrypto.encrypt(jpeg, key)
+        val sealed = MediaCrypto.encrypt(bytes, key)
         val memes = MemesServer(MEMES_HOST)
-        val muid = withMemes(memes) { auth -> memes.upload(sealed, fieldName = "image", fileName = "image.jpg", mediaType = "image/jpg", token = auth) }
+        val muid = withMemes(memes) { auth ->
+            memes.upload(sealed, fieldName = uploadFieldName(mediaType), fileName = fileName, mediaType = mediaType, token = auth)
+        }
         val expiry = (System.currentTimeMillis() / 1000 + 365L * 24 * 3600).toUInt()
         val mediaToken = coreMakeMediaToken(seed, clock.next(), StateCodec.encode(state), MEMES_HOST, muid, chat, expiry)
         val body = JSONObject().apply {
             put("content", caption)
             put("mediaKeyForSelf", key)
             put("mediaKey", key)
-            put("mediaType", "image/jpg")
+            put("mediaType", mediaType)
             put("mediaToken", mediaToken)
             if (replyTo != null) put("replyUuid", replyTo)
             if (inThread != null) put("threadUuid", inThread)
@@ -459,9 +472,55 @@ class Engine(mnemonic: String, val storage: Storage) {
         storage.insertMessages(listOf(row))
         // Our own copy goes straight into the cache, the same place a
         // download would put it — this device never needs to download
-        // back what it just encrypted and sent.
-        java.io.File(storage.attachmentCacheDir(), muid).writeBytes(jpeg)
+        // back what it just encrypted and sent. The name sidecar is
+        // what lets this device's own row show the right file name
+        // immediately too, the same file `downloadAttachment` writes
+        // once a download names one.
+        val cacheDir = storage.attachmentCacheDir()
+        java.io.File(cacheDir, muid).writeBytes(bytes)
+        java.io.File(cacheDir, "$muid.name").writeText(fileName)
         return row
+    }
+
+    /// The multipart field name a kind uploads under — PeelCore's own
+    /// `OutgoingFile.field`.
+    private fun uploadFieldName(mediaType: String): String = when (mediaType) {
+        "image/jpg", "image/gif" -> "image"
+        "video/mov" -> "video"
+        "audio/wav" -> "audio"
+        else -> "file"
+    }
+
+    /// `jpeg` is already re-encoded, orientation corrected, metadata
+    /// gone — the caller's job (`ConversationScreen`'s picker), not
+    /// this function's: it only ever sends exactly the bytes it's given.
+    suspend fun sendImageAttachment(
+        chat: String, jpeg: ByteArray, caption: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null,
+    ): MessageRow = sendAttachment(chat, jpeg, "image.jpg", "image/jpg", caption, isTribe, replyTo, inThread)
+
+    /// A voice recording — always exactly `"audio.wav"`/`"audio/wav"`,
+    /// PeelCore's own `VoiceMessage.fileName`/`mediaType`: the WAV
+    /// container `VoiceRecorder` already wrote, never re-labeled by
+    /// `classifyOutgoingFile` (that's for a generic picked file, not a
+    /// recording whose format this app controls completely itself).
+    /// No caption — a voice message never has one, on any Sphinx client.
+    suspend fun sendVoiceMessage(
+        chat: String, wav: ByteArray, isTribe: Boolean, replyTo: String? = null, inThread: String? = null,
+    ): MessageRow = sendAttachment(chat, wav, "audio.wav", "audio/wav", "", isTribe, replyTo, inThread)
+
+    /// Any file picked through the system document picker — classified
+    /// by `classifyOutgoingFile` (a video is relabeled `"video.mov"`/
+    /// `"video/mov"`, the cross-client convention every Sphinx client
+    /// uses for one whatever its real container; anything else keeps
+    /// its own name and declared type). Sent exactly as read, no
+    /// re-encoding — PeelCore's own generic `sendAttachment` doesn't
+    /// either.
+    suspend fun sendFileAttachment(
+        chat: String, bytes: ByteArray, pickedName: String, declaredMediaType: String?, caption: String, isTribe: Boolean,
+        replyTo: String? = null, inThread: String? = null,
+    ): MessageRow {
+        val (fileName, mediaType) = classifyOutgoingFile(pickedName, declaredMediaType)
+        return sendAttachment(chat, bytes, fileName, mediaType, caption, isTribe, replyTo, inThread)
     }
 
     /// What the bytes really are, given what the sender said — PeelCore's

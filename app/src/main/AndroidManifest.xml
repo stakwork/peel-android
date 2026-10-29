@@ -2,6 +2,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Voice messages (VoiceRecorder): the mic for a press-and-hold
+         recording, requested at runtime, same as the system picker and
+         camera already needed no manifest-time grant beyond this. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:allowBackup="false"

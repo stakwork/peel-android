@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
@@ -64,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -83,6 +86,7 @@ import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.components.formatDuration
 import com.sphinx.peel.ui.components.prepareImageForSending
+import com.sphinx.peel.ui.components.VoiceRecorder
 import com.sphinx.peel.ui.theme.Theme
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -157,12 +161,12 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     val myAlias = storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
 
     val context = androidx.compose.ui.platform.LocalContext.current
-    var sendingImage by remember(chat) { mutableStateOf(false) }
+    var sendingLabel by remember(chat) { mutableStateOf<String?>(null) }
     var cameraOutputUri by remember(chat) { mutableStateOf<android.net.Uri?>(null) }
 
     fun sendImage(uri: android.net.Uri) {
         scope.launch {
-            sendingImage = true
+            sendingLabel = "Sending photo…"
             error = null
             try {
                 val jpeg = withContext(Dispatchers.Default) { prepareImageForSending(context, uri) }
@@ -177,7 +181,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             } catch (e: Exception) {
                 error = e.message ?: "Could not send that image."
             } finally {
-                sendingImage = false
+                sendingLabel = null
             }
         }
     }
@@ -188,6 +192,79 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val uri = cameraOutputUri
         if (success && uri != null) sendImage(uri)
+    }
+
+    // "Files" — any file, the one attach option that isn't image/camera
+    // specific: a video reaches `sendFileAttachment` through here too,
+    // the same way it does on PeelCore's own iPhone app (no dedicated
+    // video picker there either — see `Engine.sendFileAttachment`).
+    fun sendFile(uri: android.net.Uri) {
+        scope.launch {
+            sendingLabel = "Sending file…"
+            error = null
+            try {
+                val (bytes, pickedName, mediaType) = withContext(Dispatchers.Default) {
+                    val resolver = context.contentResolver
+                    val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+                    } ?: uri.lastPathSegment ?: "file"
+                    val data = resolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw IllegalStateException("That file could not be read.")
+                    Triple(data, name, resolver.getType(uri))
+                }
+                val caption = draft
+                val replyUuid = replyTo?.uuid
+                val inThread = replyTo?.let { threadRoot(it) }
+                draft = ""
+                replyTo = null
+                engine.sendFileAttachment(chat, bytes, pickedName, mediaType, caption, isTribe, replyUuid, inThread)
+                reload()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that file."
+            } finally {
+                sendingLabel = null
+            }
+        }
+    }
+
+    val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) sendFile(uri)
+    }
+
+    val voiceRecorder = remember(chat) { VoiceRecorder() }
+    DisposableEffect(chat) { onDispose { voiceRecorder.cancel() } }
+
+    fun sendVoice(wav: ByteArray) {
+        scope.launch {
+            sendingLabel = "Sending voice message…"
+            error = null
+            try {
+                val replyUuid = replyTo?.uuid
+                val inThread = replyTo?.let { threadRoot(it) }
+                replyTo = null
+                engine.sendVoiceMessage(chat, wav, isTribe, replyUuid, inThread)
+                reload()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not send that voice message."
+            } finally {
+                sendingLabel = null
+            }
+        }
+    }
+
+    fun startRecording() {
+        voiceRecorder.start(scope) { wav -> if (wav != null) sendVoice(wav) }
+    }
+
+    val recordPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startRecording()
+    }
+
+    fun onPressRecord() {
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) startRecording() else recordPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
     }
 
     val openRoot = openThreadRoot
@@ -312,7 +389,11 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                 cameraOutputUri = uri
                 cameraLauncher.launch(uri)
             },
-            sendingImage = sendingImage,
+            onPickFile = { fileLauncher.launch(arrayOf("*/*")) },
+            recorder = voiceRecorder,
+            onPressRecord = { onPressRecord() },
+            onReleaseRecord = { voiceRecorder.release() },
+            sendingLabel = sendingLabel,
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
@@ -1017,7 +1098,11 @@ private fun Composer(
     onCancelReply: () -> Unit,
     onPickPhoto: () -> Unit,
     onTakePhoto: () -> Unit,
-    sendingImage: Boolean,
+    onPickFile: () -> Unit,
+    recorder: VoiceRecorder,
+    onPressRecord: () -> Unit,
+    onReleaseRecord: () -> Unit,
+    sendingLabel: String?,
     onSend: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -1047,9 +1132,9 @@ private fun Composer(
                 }
             }
         }
-        if (sendingImage) {
+        if (sendingLabel != null) {
             Text(
-                "Sending photo…",
+                sendingLabel,
                 style = MaterialTheme.typography.labelSmall,
                 color = Theme.colors.secondaryText,
                 modifier = Modifier.padding(bottom = 6.dp),
@@ -1064,6 +1149,10 @@ private fun Composer(
                 DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
                     DropdownMenuItem(text = { Text("Photo") }, onClick = { attachMenuOpen = false; onPickPhoto() })
                     DropdownMenuItem(text = { Text("Camera") }, onClick = { attachMenuOpen = false; onTakePhoto() })
+                    // Any file, including a video — PeelCore's own iPhone
+                    // app has no dedicated video picker either; a video
+                    // reaches the send path through this same option there.
+                    DropdownMenuItem(text = { Text("File") }, onClick = { attachMenuOpen = false; onPickFile() })
                 }
             }
             Box(
@@ -1075,27 +1164,64 @@ private fun Composer(
                     .padding(horizontal = 16.dp, vertical = 11.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                if (text.isEmpty()) {
-                    Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+                if (recorder.isRecording) {
+                    Text(
+                        "Recording… ${formatDuration(recorder.elapsedMs.toInt())}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Theme.colors.destructive,
+                    )
+                } else {
+                    if (text.isEmpty()) {
+                        Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+                    }
+                    BasicTextField(
+                        value = text,
+                        onValueChange = onTextChange,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
-                BasicTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
             val canSend = text.isNotBlank()
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Theme.colors.button.copy(alpha = if (canSend) 1f else 0.4f))
-                    .clickable(enabled = canSend, onClick = onSend),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
+            if (canSend) {
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Theme.colors.button)
+                        .clickable(onClick = onSend),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
+                }
+            } else {
+                // Press and hold to record — PeelCore's own
+                // `HoldToRecordButton`, minus its slide-to-cancel gesture
+                // (`VoiceRecorder`'s own doc comment names that gap).
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (recorder.isRecording) Theme.colors.destructive else Theme.colors.fieldFill)
+                        .pointerInput(Unit) {
+                            detectTapGestures(onPress = {
+                                onPressRecord()
+                                try {
+                                    awaitRelease()
+                                } finally {
+                                    onReleaseRecord()
+                                }
+                            })
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Mic,
+                        contentDescription = "Record a voice message",
+                        tint = if (recorder.isRecording) Theme.colors.buttonText else Theme.colors.secondaryText,
+                    )
+                }
             }
         }
     }

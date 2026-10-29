@@ -1,5 +1,6 @@
 package com.sphinx.peel.engine
 
+import android.webkit.MimeTypeMap
 import org.json.JSONObject
 
 /// A message of this type carries an attachment — PeelCore's
@@ -86,3 +87,28 @@ fun attachmentKind(mediaType: String?): AttachmentKind {
 /// flag: nothing here distinguishes a cache hit from a fresh download
 /// for the caller, since both end the same way, a local file to show).
 data class DownloadedAttachment(val file: java.io.File, val kind: AttachmentKind, val fileName: String?, val size: Int)
+
+/// What a picked file is actually sent as — PeelCore's own
+/// `OutgoingFile.init(name:data:)`, trimmed: no animated-GIF-vs-still
+/// split (this port's image path always re-encodes to a still JPEG
+/// before it ever reaches here — `ImagePreparation.kt` — so a picked
+/// GIF never survives as one anyway) and no sniffing a file's bytes for
+/// a WAV container (a voice recording already carries its own exact
+/// name/type from `VoiceRecorder`, never routed through this). What's
+/// left, and still worth porting: a video keeps the same cross-client
+/// convention every Sphinx client uses for one, whatever its real
+/// container — always `"video.mov"`/`"video/mov"` — so a `.mp4` from
+/// Android's own camera or gallery reads as a video on an iOS or Mac
+/// peer the same way a `.mov` from theirs reads here (both are ISO
+/// base media underneath; nothing here or there tells `.mov` from
+/// `.mp4` apart by content, only the declared type).
+fun classifyOutgoingFile(fileName: String, declaredMediaType: String?): Pair<String, String> {
+    val ext = fileName.substringAfterLast('.', "").lowercase()
+    if (ext in VIDEO_EXTENSIONS) return "video.mov" to "video/mov"
+    val mediaType = declaredMediaType?.takeIf { it.isNotEmpty() }
+        ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+        ?: "application/octet-stream"
+    return fileName to mediaType
+}
+
+private val VIDEO_EXTENSIONS = setOf("mov", "mp4", "m4v", "3gp")
