@@ -4,8 +4,9 @@
 
 **Built:** an attachment message (type 6, from anyone, in a restore, a
 catch-up or live) downloads, decrypts and shows itself the moment its
-row appears — images inline, video/audio/PDF/anything else as a named
-row that opens in whatever app the person has for it. This needed three
+row appears — images inline, a voice message with its own Play/Pause
+and a draggable progress bar, video/PDF/anything else as a named row
+that opens in whatever app the person has for it. This needed three
 things this port had none of before: the exact encryption format the
 other Sphinx clients use (RNCryptor v3 — PBKDF2-HMAC-SHA1, AES-256-CBC,
 HMAC-SHA256, ported byte-for-byte and checked against an independent
@@ -13,6 +14,13 @@ Python implementation, not just against itself), a small HTTP client
 for the memes server (sign in with a signed challenge, download by
 bearer token), and a local decrypted-file cache. Scoped to receiving
 only, on the user's explicit direction — sending is its own task.
+
+**Also built, once asked whether audio actually played in place or
+just handed off like everything else:** it was the latter at first —
+fixed with `AudioPlayer`, one `MediaPlayer` shared by every voice
+message in a chat screen (playing one stops whatever was already
+playing, same as any messaging app's voice notes), and
+`AudioAttachmentRow`'s Play/Pause button and draggable `Slider`.
 
 **Open:**
 
@@ -30,18 +38,28 @@ only, on the user's explicit direction — sending is its own task.
   file here is always re-derivable from the server plus its key, so
   nothing is actually at risk — just not actively managed the way
   PeelCore's is.
-- No video/audio playback in the app, no PDF viewer in the app, no
-  image viewer (full screen, zoom, swipe between a chat's images) —
-  everything but an inline image opens in whatever other app the
-  person has installed for it (`Intent.ACTION_VIEW` through a
+- No video playback or PDF viewer in the app, no image viewer (full
+  screen, zoom, swipe between a chat's images) — only audio plays in
+  place; everything else but an inline image opens in whatever other
+  app the person has installed for it (`Intent.ACTION_VIEW` through a
   `FileProvider`). An image shows inline, nothing more: no tap to view
   full size.
 - No container-signature verification for video or audio (PeelCore
   checks `ftyp`/`moov`/RIFF/etc. headers before trusting the declared
   kind; this port trusts the declared `mediaType` for those two
-  outright). Images are verified (`BitmapFactory` must actually decode
-  them) and PDFs are (the `%PDF-` signature), since both were cheap to
-  check with what Android already has built in.
+  outright — `AudioAttachmentRow` finding out a file won't actually
+  play would show as a stuck "0:00", not a clear error). Images are
+  verified (`BitmapFactory` must actually decode them) and PDFs are
+  (the `%PDF-` signature), since both were cheap to check with what
+  Android already has built in.
+- Only one voice message plays at a time, by design (`AudioPlayer`
+  holds one `MediaPlayer`) — not something to fix, named so it reads as
+  a decision, not an oversight.
+- `AudioPlayer`'s position only updates while something is playing (a
+  poll loop, since `MediaPlayer` has no position-changed callback) —
+  dragging a *paused* voice message's own slider still seeks it
+  correctly (nothing needs the poll loop for that); dragging one never
+  played at all does nothing, since nothing is loaded yet to seek.
 - No paid attachments. A free one (or a tribe's, which always keeps its
   key) shows normally; one that cost sats and this account never bought
   has no key at all here and shows as an error — correct, since nothing
@@ -117,6 +135,19 @@ check, for the same reason Phase 4's tribe detection already had to
 reason about which `host` a message is allowed to name versus which
 one it actually gets to use.
 
+**"Showing" an audio attachment turned out to mean something more
+specific than it does for everything else.** The first version treated
+audio the same as video/PDF/anything else — a named row, opened
+externally. Asked directly whether that was really "playing it,"
+which it wasn't: handing a voice message to some other app the person
+may not even have one suited for is a materially worse experience than
+a one-line in-app player, and voice messages are common enough in
+Sphinx chats that this was worth the extra piece rather than deferring
+it into "sending." `MediaPlayer` reads a file by its decrypted bytes'
+own container signature, not the file's name or extension, so the
+cache's extension-less `<muid>` files needed no change at all to work
+with it.
+
 ## Done
 
 - `engine/MediaCrypto.kt`: RNCryptor v3 decrypt (PBKDF2-HMAC-SHA1 ×2,
@@ -134,13 +165,23 @@ one it actually gets to use.
   (PeelCore's own retry-once-on-401 shape); `verifiedKind`.
 - `storage/Storage.kt`: `attachmentCacheDir()`.
 - `ui/dashboard/ConversationScreen.kt`: `AttachmentView` (loading/
-  error/loaded states), `AttachmentContent` (inline image, or a named
-  row that opens externally via `FileProvider`).
+  error/loaded states), `AttachmentContent` (inline image, an in-app
+  audio player, or a named row that opens externally via
+  `FileProvider`); `AudioAttachmentRow` (Play/Pause, a draggable
+  `Slider`, the position/duration label).
+- `ui/components/AudioPlayer.kt`: one `MediaPlayer`, shared by a chat
+  screen's voice messages — `toggle`/`seekTo`/`release`, Compose state
+  (`isPlaying`/`positionMs`/`durationMs`) a screen polls while playing
+  (`MediaPlayer` has no position-changed callback of its own);
+  `formatDuration`.
 - `AndroidManifest.xml`/`res/xml/file_paths.xml`: a `FileProvider`
   scoped to just the attachment cache directory.
 - Tests: `MediaCryptoTest` — decrypts a blob from an independent Python
   RNCryptor-v3 implementation, refuses the wrong key, refuses a
-  too-short or wrong-version blob. 57 tests passing.
+  too-short or wrong-version blob. 57 tests passing. `AudioPlayer`
+  itself is not unit-tested — it wraps `android.media.MediaPlayer`,
+  which needs a real device/emulator decoder, the same category of gap
+  as `Engine`'s own untestable native-library calls.
 
 ## Learned
 
@@ -162,3 +203,9 @@ one it actually gets to use.
   been: no `MediaCrypto.encrypt`, no multipart upload, no outgoing-file
   management, no "sell it" price path — all genuinely large pieces
   that a receive-only phase never has to touch.
+- "Showing" an attachment is not one behavior across every kind — a
+  file a person can open in another app and a voice message they
+  expect to just tap and hear are different enough expectations that
+  treating them identically (both "a named row") undersold what the
+  second one actually needed, even though both are "attachments" by
+  the same message type.

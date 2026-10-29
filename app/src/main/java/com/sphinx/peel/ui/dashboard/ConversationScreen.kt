@@ -32,14 +32,19 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -63,9 +68,11 @@ import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
+import com.sphinx.peel.ui.components.AudioPlayer
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.components.PersonHue
+import com.sphinx.peel.ui.components.formatDuration
 import com.sphinx.peel.ui.theme.Theme
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -92,6 +99,16 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     var error by remember(chat) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
+    val audioPlayer = remember(chat) { AudioPlayer() }
+    DisposableEffect(chat) { onDispose { audioPlayer.release() } }
+    // MediaPlayer has no position-changed callback of its own; polled
+    // while something is actually playing, not continuously.
+    LaunchedEffect(audioPlayer.isPlaying) {
+        while (audioPlayer.isPlaying) {
+            audioPlayer.refreshPosition()
+            delay(200)
+        }
+    }
 
     suspend fun reload() {
         conversation = withContext(Dispatchers.Default) { storage.conversations().firstOrNull { it.chat == chat } }
@@ -154,7 +171,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
                 MessageRowView(
                     row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
-                    replyUuid = replyUuid, parent = parent, engine = engine,
+                    replyUuid = replyUuid, parent = parent, engine = engine, audioPlayer = audioPlayer,
                     onReply = { replyTo = row },
                 )
             }
@@ -234,6 +251,7 @@ private fun MessageRowView(
     replyUuid: String?,
     parent: MessageRow?,
     engine: Engine,
+    audioPlayer: AudioPlayer,
     onReply: () -> Unit,
 ) {
     val sender = senderJson(row)
@@ -282,7 +300,7 @@ private fun MessageRowView(
                 Spacer(Modifier.height(2.dp))
             }
             if (row.type == ATTACHMENT_TYPE) {
-                AttachmentView(row, engine)
+                AttachmentView(row, engine, audioPlayer)
                 if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
             }
             if (content.isNotEmpty() || row.type != ATTACHMENT_TYPE) {
@@ -314,7 +332,7 @@ private sealed class AttachmentState {
 /// a small chat's worth of images costs little either way; a busier
 /// one may want that gate later.
 @Composable
-private fun AttachmentView(row: MessageRow, engine: Engine) {
+private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPlayer) {
     var state by remember(row.id, row.uuid) { mutableStateOf<AttachmentState>(AttachmentState.Loading) }
     LaunchedEffect(row.id, row.uuid) {
         state = try {
@@ -332,7 +350,7 @@ private fun AttachmentView(row: MessageRow, engine: Engine) {
             Spacer(Modifier.width(8.dp))
             Text(current.message, style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
         }
-        is AttachmentState.Loaded -> AttachmentContent(current.attachment)
+        is AttachmentState.Loaded -> AttachmentContent(current.attachment, audioPlayer)
     }
 }
 
@@ -351,7 +369,7 @@ private fun AttachmentPlaceholder(isError: Boolean = false, content: @Composable
 }
 
 @Composable
-private fun AttachmentContent(attachment: DownloadedAttachment) {
+private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: AudioPlayer) {
     if (attachment.kind == AttachmentKind.IMAGE) {
         AsyncImage(
             model = attachment.file,
@@ -363,6 +381,10 @@ private fun AttachmentContent(attachment: DownloadedAttachment) {
                 .clip(RoundedCornerShape(10.dp))
                 .background(Theme.colors.fieldFill),
         )
+        return
+    }
+    if (attachment.kind == AttachmentKind.AUDIO) {
+        AudioAttachmentRow(attachment, audioPlayer)
         return
     }
     val context = LocalContext.current
@@ -387,6 +409,62 @@ private fun AttachmentContent(attachment: DownloadedAttachment) {
             )
             Text(formattedSize(attachment.size), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
         }
+    }
+}
+
+/// A voice message: Play/Pause and a draggable progress bar, in place
+/// of the generic named row every other attachment kind gets — the one
+/// kind worth playing in place rather than handing to another app.
+@Composable
+private fun AudioAttachmentRow(attachment: DownloadedAttachment, audioPlayer: AudioPlayer) {
+    val scope = rememberCoroutineScope()
+    val isThis = audioPlayer.playingFile == attachment.file
+    val playing = isThis && audioPlayer.isPlaying
+    val position = if (isThis) audioPlayer.positionMs else 0
+    val duration = if (isThis && audioPlayer.durationMs > 0) audioPlayer.durationMs else 0
+    // Dragging sets this so the thumb follows the finger instead of
+    // snapping back to the player's own (slower-to-update) position
+    // until the drag lands.
+    var dragPosition by remember(attachment.file) { mutableStateOf<Float?>(null) }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Theme.colors.fieldFill)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = { scope.launch { audioPlayer.toggle(attachment.file) } }, modifier = Modifier.size(36.dp)) {
+            Icon(
+                if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = if (playing) "Pause" else "Play",
+                tint = Theme.colors.accent,
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        Slider(
+            value = dragPosition ?: (if (duration > 0) position.toFloat() / duration else 0f),
+            onValueChange = { dragPosition = it },
+            onValueChangeFinished = {
+                val target = dragPosition
+                if (target != null && duration > 0) audioPlayer.seekTo((target * duration).toInt())
+                dragPosition = null
+            },
+            modifier = Modifier.weight(1f).height(24.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Theme.colors.accent,
+                activeTrackColor = Theme.colors.accent,
+                inactiveTrackColor = Theme.colors.inputBorder,
+            ),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            formatDuration(if (duration > 0) (dragPosition?.let { (it * duration).toInt() } ?: position) else 0),
+            style = MaterialTheme.typography.labelSmall,
+            color = Theme.colors.secondaryText,
+            modifier = Modifier.width(36.dp),
+        )
     }
 }
 
