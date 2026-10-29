@@ -61,6 +61,29 @@ own echo, the mixer's `sentStatus` only when that never arrives.
   poll, plus a reload right after sending — a live message from someone
   else still waits up to 3 seconds to show.
 
+**Update (2026-10-29), from a full iOS-vs-Android audit:** three real
+fixes to how a run of messages reads, found by comparing against
+PeelCore's own `ChatRow.rows`.
+
+A run used to break only on sender identity — no day boundary, no gap
+check, so a same-sender conversation spanning days rendered as one
+undifferentiated block with a single timestamp at the very top of it.
+`ConversationScreen.kt`'s run-break rule now also breaks on a day
+change or a 5-minute gap, PeelCore's own rule, and a day change draws
+an actual divider ("Today"/"Yesterday"/a weekday and date — PeelCore's
+`Formatting.dayHeading`) — a component that didn't exist here before.
+A "New messages" divider is new too, for a chat opened with something
+unread: captured once as the screen opens, from the read marker as it
+stood right before this chat's own `markRead` moves it (PeelCore's
+`AppModel.newMessages`); see
+[phases/06-read-state.md](06-read-state.md) for the boundary rule
+itself.
+
+Separately, a message's time was hardcoded to 24-hour
+(`SimpleDateFormat("HH:mm", ...)`), ignoring the device's own clock
+setting entirely. Now uses `android.text.format.DateFormat.getTimeFormat`,
+which honors it, matching PeelCore's own `Date.FormatStyle`.
+
 **Decided:**
 
 - The outgoing row is built by hand from what was just sent (the body,

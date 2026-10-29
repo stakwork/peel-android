@@ -121,9 +121,22 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         }
     }
 
+    // Where "new messages" starts, captured once as the screen opens -
+    // PeelCore's own `AppModel.newMessages`, the read marker as it stood
+    // right before this chat's `markRead` moves it, kept only if there
+    // was anything unread to mark the boundary of (otherwise no line).
+    var newAfterCaptured by remember(chat) { mutableStateOf(false) }
+    var newAfterIndex by remember(chat) { mutableStateOf<Long?>(null) }
+
     suspend fun reload() {
         conversation = withContext(Dispatchers.Default) { storage.conversations().firstOrNull { it.chat == chat } }
         messages = withContext(Dispatchers.Default) { storage.messages(chat) }
+        if (!newAfterCaptured) {
+            newAfterCaptured = true
+            newAfterIndex = if ((conversation?.unread ?: 0L) > 0L) {
+                withContext(Dispatchers.Default) { storage.lastRead(chat) } ?: -1L
+            } else null
+        }
         // Viewing a chat marks it read, here and on the server — every
         // reload, not only the first, so a message that arrives while
         // this screen is still open is caught too. Cheap when there is
@@ -215,18 +228,33 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         // shows them as a chip under the message they boost, by its own
         // `replyUuid`) - summed once per `messages` change, not per row.
         val boosts = remember(messages) { boostSummaries(messages) }
-        // Nor is a thread's own reply ever shown inline - PeelCore's own
-        // `rows(...)` collapses every message that carries a `threadUuid`
-        // behind its root's "N replies" row. The root keeps its own
-        // content but moves to its newest reply's chronological spot -
-        // PeelCore's `row.date = message.date`, where `message` is the
-        // thread's latest surviving message, not the root itself - so a
-        // thread that just got a reply jumps to where that reply would
-        // sit, same as an active chat bumping to the bottom.
-        val threads = remember(messages) { threadSummaries(messages) }
+        // Nor is a thread's own reply ever shown inline, once it's really
+        // a thread - PeelCore's own `rows(...)` collapses every message
+        // that carries a `threadUuid` behind its root's "N replies" row,
+        // but only in a tribe (a DM's timeline never builds the summary
+        // dictionary at all - `Storage+Threads.swift`'s `timeline(in:)`
+        // guards it `if isTribe`) and only once a thread has a second
+        // message (`threadsSQL`'s own `HAVING COUNT(*) >= 2` for a tribe -
+        // one reply alone still renders as an ordinary reply, quote box
+        // and all). The root keeps its own content but moves to its
+        // newest reply's chronological spot - PeelCore's `row.date =
+        // message.date`, where `message` is the thread's latest
+        // surviving message, not the root itself - so a thread that just
+        // got a reply jumps to where that reply would sit, same as an
+        // active chat bumping to the bottom.
+        val threads = remember(messages, isTribe) { if (isTribe) threadSummaries(messages) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
-            messages.filter { it.type != BOOST_MESSAGE_TYPE && threadUuid(it) == null }
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && threadUuid(it)?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
+        }
+
+        // Only our own first crossing into "new" gets the line - PeelCore's
+        // own `rows(...)` clears `newAfter` the moment one row claims it.
+        val newMessageIndex = remember(displayedMessages, newAfterIndex) {
+            newAfterIndex?.let { after ->
+                displayedMessages.indexOfFirst { !it.fromMe && it.type != BOOST_MESSAGE_TYPE && (it.serverIndex ?: -1L) > after }
+                    .takeIf { it >= 0 }
+            }
         }
 
         val listState = rememberLazyListState()
@@ -240,7 +268,14 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         ) {
             itemsIndexed(displayedMessages, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
                 val previous = displayedMessages.getOrNull(index - 1)
-                val startsRun = previous == null || runSenderKey(previous) != runSenderKey(row)
+                // Runs: one sender, a few minutes apart, on one day -
+                // PeelCore's own rule (`ChatRow.swift`'s run-break check),
+                // not sender identity alone.
+                val startsDay = previous == null || !isSameDay(previous.timestamp, row.timestamp)
+                val startsRun = startsDay || runSenderKey(previous) != runSenderKey(row) ||
+                    ((row.timestamp ?: 0L) - (previous.timestamp ?: 0L) > 5 * 60 * 1000L)
+                if (startsDay && row.timestamp != null) DayDivider(row.timestamp)
+                if (index == newMessageIndex) NewMessagesDivider()
                 val replyUuid = replyUuid(row)
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
                 MessageRowView(
@@ -508,18 +543,24 @@ private fun threadRoot(row: MessageRow): String = threadUuid(row) ?: replyUuid(r
 
 private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Long?)
 
-/// Every thread among `messages`, by its root's uuid — PeelCore's own
-/// `ThreadSummary`, trimmed to what the collapsed row needs (a count
-/// and when it was last added to); no participants, no unread count
-/// (Phase 6's own read-state doesn't distinguish a thread's messages
-/// from the chat's).
+/// Every REAL thread among `messages` (2+ messages), by its root's uuid
+/// — PeelCore's own `ThreadSummary`, trimmed to what the collapsed row
+/// needs (a count and when it was last added to); no participants, no
+/// unread count (Phase 6's own read-state doesn't distinguish a
+/// thread's messages from the chat's). A single reply isn't a thread
+/// yet — PeelCore's own `threadsSQL` only builds a summary from
+/// `HAVING COUNT(*) >= 2`; one reply alone still renders as an ordinary
+/// reply, not a collapsed "1 reply" row. Call only for a tribe: a DM's
+/// timeline never collapses at all (PeelCore's `timeline(in:)` builds
+/// this dictionary `if isTribe` only), so callers pass an empty map for
+/// a DM instead of calling this.
 private fun threadSummaries(messages: List<MessageRow>): Map<String, ThreadSummaryData> {
     val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         val root = threadUuid(row) ?: continue
         byRoot.getOrPut(root) { mutableListOf() }.add(row)
     }
-    return byRoot.mapValues { (_, replies) ->
+    return byRoot.filterValues { it.size >= 2 }.mapValues { (_, replies) ->
         ThreadSummaryData(replyCount = replies.size, lastTimestamp = replies.mapNotNull { it.timestamp }.maxOrNull())
     }
 }
@@ -555,9 +596,19 @@ private fun MessageRowView(
     val sender = senderJson(row)
     val name = if (row.fromMe) myAlias else senderAlias(row)
     val photoUrl = if (row.fromMe) null else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
-    val hueKey = sender?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: row.chat
+    // A tribe member's hue is keyed on their alias, never their pubkey —
+    // PeelCore's own `PersonHue.colourKey` ignores pubkey for a tribe
+    // member on purpose (`Sender.init(member:)`), because a tribe's
+    // forwarded messages often carry the tribe's own shared pubkey as
+    // `sender.pubkey`, not the member's — keying on it here would make
+    // two different members land on the same colour.
+    val hueKey = if (isTribe && !row.fromMe) name else (sender?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: row.chat)
     val content = previewContent(row)
-    val time = row.timestamp?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(it) }
+    // The device's own 12/24-hour setting, not a hardcoded format -
+    // PeelCore's `Formatting.time` honors `Date.FormatStyle`'s locale
+    // the same way; `SimpleDateFormat("HH:mm", ...)` ignored it outright.
+    val timeContext = androidx.compose.ui.platform.LocalContext.current
+    val time = row.timestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
 
     Row(
         Modifier
@@ -636,6 +687,57 @@ private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
         color = Theme.colors.accent,
         modifier = Modifier.clickable(onClick = onClick).padding(vertical = 2.dp),
     )
+}
+
+/// Two messages on the same device-local calendar day, by `Calendar`
+/// (not a raw 24h-bucket division) — PeelCore's own `startsDay` check,
+/// `Calendar.current.isDate(_:inSameDayAs:)`.
+private fun isSameDay(a: Long?, b: Long?): Boolean {
+    if (a == null || b == null) return false
+    val ca = java.util.Calendar.getInstance().apply { timeInMillis = a }
+    val cb = java.util.Calendar.getInstance().apply { timeInMillis = b }
+    return ca.get(java.util.Calendar.YEAR) == cb.get(java.util.Calendar.YEAR) &&
+        ca.get(java.util.Calendar.DAY_OF_YEAR) == cb.get(java.util.Calendar.DAY_OF_YEAR)
+}
+
+/// "Today", "Yesterday", else a weekday and date — PeelCore's own
+/// `Formatting.dayHeading`.
+private fun dayHeading(timestamp: Long): String {
+    val now = java.util.Calendar.getInstance()
+    val then = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
+    if (isSameDay(now.timeInMillis, timestamp)) return "Today"
+    now.add(java.util.Calendar.DAY_OF_YEAR, -1)
+    if (isSameDay(now.timeInMillis, timestamp)) return "Yesterday"
+    return SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(then.time)
+}
+
+@Composable
+private fun DayDivider(timestamp: Long) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.Center) {
+        Text(
+            dayHeading(timestamp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Theme.colors.secondaryText,
+        )
+    }
+}
+
+/// The one-time boundary where this chat's unread messages began, the
+/// moment this screen opened — PeelCore's own `NewMessagesLine`.
+@Composable
+private fun NewMessagesDivider() {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
+        Text(
+            "New messages",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Theme.colors.accent,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
+    }
 }
 
 private sealed class AttachmentState {

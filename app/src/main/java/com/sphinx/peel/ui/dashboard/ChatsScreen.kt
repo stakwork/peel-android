@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -245,6 +246,23 @@ private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
         if (unread > 0) {
             Spacer(Modifier.width(8.dp))
             UnreadBadge(unread)
+        } else {
+            // Nothing unread to show as a count — PeelCore's own
+            // `ChatListRow` still shows the chat's own mute state as a
+            // trailing glyph (bell-slash/"@"), state already stored and
+            // read (Phase 6), just never shown here until now. No "New"
+            // badge yet (PeelCore's `ChatReadState.isNew`) - this port
+            // tracks no such flag for a just-added contact.
+            when (conversation.muteLevel) {
+                2 -> {
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Filled.NotificationsOff, contentDescription = "Muted", tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp))
+                }
+                1 -> {
+                    Spacer(Modifier.width(8.dp))
+                    Text("@", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                }
+            }
         }
     }
 }

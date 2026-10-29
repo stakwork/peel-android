@@ -32,20 +32,29 @@ data class ConversationRow(
     val lastFromMe: Boolean?,
     /// Someone else's messages past this chat's read marker
     /// (`chatState.lastRead`) — PeelCore's `ChatReadState.unread`, trimmed:
-    /// every non-`fromMe` message counts, not just the content types
-    /// PeelCore's own `countsAsUnreadSQL` picks out (no boost/payment/
+    /// every non-`fromMe`, non-boost message counts, not just the content
+    /// types PeelCore's own `countsAsUnreadSQL` picks out (no payment/
     /// control-message filtering here, since this port doesn't parse
     /// message bodies that finely yet).
     val unread: Long = 0,
-    /// Any mute level above "all" (`chatState.muteLevel`) hides the count
-    /// — PeelCore distinguishes "mentions only" from "muted"
-    /// (`ChatReadState.shownUnread`); this port can't, since it has no
-    /// mention tracking, so both read as muted here.
-    val muted: Boolean = false,
+    /// `chatState.muteLevel` as the server stores it — 0 "all" (loudest),
+    /// 1 "mentions only", 2 "muted" — PeelCore's own `MuteLevel`. Kept as
+    /// the raw level, not just a bool, so a chat list row can still tell
+    /// "mentions only" from "fully muted" for its own trailing glyph
+    /// (`ChatRow` in `ChatsScreen.kt`), even though `shownUnread` below
+    /// still can't distinguish them (no mention tracking to pick a
+    /// mentions-only count out of `unread`).
+    val muteLevel: Int = 0,
 ) {
     /// The alias, or the chat's own key trimmed to 12 characters — same
     /// fallback as `Conversation.name`.
     val name: String get() = alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
+
+    /// Any mute level above "all" hides the count — PeelCore distinguishes
+    /// "mentions only" from "muted" (`ChatReadState.shownUnread`, which
+    /// shows a mentions-only chat its *mentions* count); this port can't,
+    /// since it has no mention tracking, so both read as muted here.
+    val muted: Boolean get() = muteLevel != 0
 
     /// What a chat row actually shows — `unread`, unless muted.
     val shownUnread: Long get() = if (muted) 0 else unread
@@ -250,6 +259,13 @@ class Storage(context: Context, account: String = "default") {
         db.insertWithOnConflict("chatState", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         return true
     }
+
+    /// This chat's own read marker, or null if it has none yet — the
+    /// snapshot a conversation screen takes once, right as it opens and
+    /// before its own `markRead` call moves it, to know where "new
+    /// messages" started this time (PeelCore's own `AppModel.newMessages`,
+    /// captured the same way at open).
+    fun lastRead(chat: String): Long? = readChatState(helper.readableDatabase, chat)?.lastRead
 
     /// Read markers set here while offline, not yet sent — PeelCore's
     /// `pendingReads`. What `Engine.fetchReadsAndMutes`'s
@@ -516,6 +532,19 @@ class Storage(context: Context, account: String = "default") {
     /// message if it has one, newest chat first. A chat with no message
     /// yet (just key-exchanged, say) sorts last — SQLite treats `NULL` as
     /// lowest, which is what a `DESC` newest-first order wants here.
+    ///
+    /// `type != 29` keeps a boost (PeelCore's `MessageType.boost`) out of
+    /// the unread count. PeelCore's own `countsAsUnreadSQL` only excludes
+    /// a boost that *doesn't* target one of this account's own messages —
+    /// a boost on your own message still counts there. This table has no
+    /// column for what a boost targets (it's `replyUuid` inside the
+    /// message's own JSON `body`, parsed in Kotlin, not SQL — see
+    /// `ConversationScreen.kt`'s `replyUuid`/`boostSummaries`), and
+    /// `json_extract` isn't reliably available on this app's minSdk 26,
+    /// so excluding every boost is the closest match SQL alone can do
+    /// here: it undercounts a boost on your own message, but doesn't
+    /// overcount every boost between other people the way no filter at
+    /// all did.
     fun conversations(): List<ConversationRow> {
         val rows = mutableListOf<ConversationRow>()
         helper.readableDatabase.rawQuery(
@@ -526,7 +555,7 @@ class Storage(context: Context, account: String = "default") {
                 (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
                 (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
                 (SELECT COUNT(*) FROM message
-                    WHERE chat = c.pubkey AND fromMe = 0
+                    WHERE chat = c.pubkey AND fromMe = 0 AND type != 29
                         AND serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)),
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0)
             FROM contact c
@@ -546,7 +575,7 @@ class Storage(context: Context, account: String = "default") {
                         lastTimestamp = if (cursor.isNull(5)) null else cursor.getLong(5),
                         lastFromMe = if (cursor.isNull(6)) null else cursor.getInt(6) != 0,
                         unread = cursor.getLong(7),
-                        muted = cursor.getInt(8) != 0,
+                        muteLevel = cursor.getInt(8),
                     ),
                 )
             }

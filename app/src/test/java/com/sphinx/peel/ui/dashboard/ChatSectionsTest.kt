@@ -9,7 +9,7 @@ class ChatSectionsTest {
     private fun row(chat: String, isTribe: Boolean, unread: Long = 0, muted: Boolean = false) =
         ConversationRow(
             chat, alias = chat, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = null,
-            lastFromMe = null, unread = unread, muted = muted,
+            lastFromMe = null, unread = unread, muteLevel = if (muted) 2 else 0,
         )
 
     @Test

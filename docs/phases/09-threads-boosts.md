@@ -19,16 +19,32 @@ an attachment aren't two rows.
 **Threads:** sending a reply now also tags `threadUuid` — PeelCore's own
 `threadRoot` rule (`threadUuid ?? replyUuid ?? uuid`): a reply to a
 message already in a thread joins that thread; a reply to a plain
-message starts a thread at that message. Every message carrying a
+message starts a thread at that message. A message carrying a
 `threadUuid` is pulled out of the main list and grouped by it
-(`threadSummaries`); the root grows an "N replies" row and moves to its
-thread's newest reply's position in the list, the same as PeelCore's
-own `ChatRow.rows` (which overwrites the collapsed row's `date` with
-the thread's latest surviving message's date, not the root's own) —
-so an old message with a brand new reply jumps to where that reply
-would sit, same as the real app. Tapping it opens `ThreadScreen` — the
-root, every reply in order, and a composer that always replies to the
-root.
+(`threadSummaries`) **only once it's a real thread — a tribe with 2+
+messages in it** (fixed 2026-10-29, see below); the root grows an "N
+replies" row and moves to its thread's newest reply's position in the
+list, the same as PeelCore's own `ChatRow.rows` (which overwrites the
+collapsed row's `date` with the thread's latest surviving message's
+date, not the root's own) — so an old message with a brand new reply
+jumps to where that reply would sit, same as the real app. Tapping it
+opens `ThreadScreen` — the root, every reply in order, and a composer
+that always replies to the root.
+
+**Update (2026-10-29), from a full iOS-vs-Android audit:** two real
+scope bugs fixed, both in `threadSummaries`/`ConversationScreen.kt`'s
+`displayedMessages` filter.
+
+A reply in a DIRECT message used to collapse exactly the same as a
+tribe's — it never should have. PeelCore's `Storage+Threads.swift`
+`timeline(in:)` only builds the thread-summary dictionary `if isTribe`;
+a DM's timeline never collapses at all, so a reply there always stays
+an ordinary row with its own quote box. And within a tribe, a *single*
+reply used to collapse immediately to "1 reply" — PeelCore's own
+`threadsSQL` only counts something a thread once it has `COUNT(*) >=
+2`; the first reply alone still renders normally, only the second one
+triggers the collapse. `threadSummaries` is now called only when
+`isTribe`, and only keeps a root whose replies number 2 or more.
 
 **Open:**
 

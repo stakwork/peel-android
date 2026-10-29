@@ -152,6 +152,13 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             Account.wordsIn(answer) != listOf(shownWords[position])
         }.keys.sorted()
         if (wrong.isEmpty()) {
+            // PeelCore's own `confirmWords` writes this on success too
+            // (`Engine+Account.swift`) - a flag for "this account's own
+            // words have been written down", for a future screen (a
+            // settings "back up your words" reminder) to read. Declared
+            // on this port since Phase 1 (`Setting.kt`) but never once
+            // written until now.
+            storage.apply(Storage.Commit(settings = mapOf(Setting.WORDS_CONFIRMED to "1")))
             engine?.let(onAccountReady)
         } else {
             problem = "Word${if (wrong.size > 1) "s" else ""} ${wrong.joinToString(", ") { "${it + 1}" }} ${if (wrong.size > 1) "don't" else "doesn't"} match."

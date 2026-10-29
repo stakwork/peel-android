@@ -144,11 +144,25 @@ class FileSecretStore(context: Context, account: String = "default") : SecretSto
         file.delete()
     }
 
+    /// Writes the sealed mnemonic so it is never, even briefly,
+    /// world-readable — unlike writing the bytes first and chmod-ing
+    /// after, which leaves a window with default (not owner-only)
+    /// permissions if the process dies in between. A fresh temp file is
+    /// created with owner-only permissions as part of its own creation
+    /// (`PosixFilePermissions.asFileAttribute`, applied atomically by the
+    /// OS at `createTempFile`, not after), written to, then moved onto
+    /// `file` in one filesystem op — the Android equivalent of iOS's own
+    /// `open()` with `O_CREAT` and mode `0600` in one call
+    /// (`SecretStore.swift`'s `FileSecretStore.write`).
     private fun writeOwnerOnly(bytes: ByteArray) {
-        file.writeBytes(bytes)
-        file.setReadable(false, false)
-        file.setWritable(false, false)
-        file.setReadable(true, true)
-        file.setWritable(true, true)
+        val ownerOnly = java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+            java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"),
+        )
+        val tmp = java.nio.file.Files.createTempFile(file.parentFile!!.toPath(), file.name, ".tmp", ownerOnly)
+        java.nio.file.Files.write(tmp, bytes)
+        java.nio.file.Files.move(
+            tmp, file.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+        )
     }
 }

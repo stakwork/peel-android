@@ -28,12 +28,27 @@ marking it as new messages arrive while it's still open.
   back to just before some message, to make a chat show unread again on
   purpose).
 - Unread counting is coarser than PeelCore's own `countsAsUnreadSQL`:
-  every non-`fromMe` message past the marker counts, full stop — no
-  filtering for control messages, no-words rows, or restricting to
-  "real" content/payment/call types the way PeelCore does, since this
-  port doesn't parse message bodies that finely. In practice this only
-  over-counts rows nothing here renders specially yet anyway (Phase 5's
-  own gap: a payment or membership note already shows as empty text).
+  every non-`fromMe`, non-boost message past the marker counts, full
+  stop — no filtering for control messages, no-words rows, or
+  restricting to "real" content/payment/call types the way PeelCore
+  does, since this port doesn't parse message bodies that finely. In
+  practice this only over-counts rows nothing here renders specially
+  yet anyway (Phase 5's own gap: a payment or membership note already
+  shows as empty text).
+  **Update (2026-10-29):** that reasoning went stale the moment Phase 9
+  added boosts as a specially-rendered chip — a boost (type 29) from
+  anyone, on anyone's message, was inflating the badge, which a user in
+  an active tribe would actually notice. PeelCore's own
+  `countsAsUnreadSQL` only excludes a boost that *doesn't* target this
+  account's own message; this port has no column for what a boost
+  targets (it's `replyUuid` inside the message's JSON `body`, parsed in
+  Kotlin — `ConversationScreen.kt`'s `boostSummaries`), and
+  `json_extract` isn't reliably on this app's minSdk 26, so
+  `Storage.conversations()` now excludes every boost from the count
+  instead (`type != 29`) — undercounts a boost on your own message, but
+  no longer overcounts boosts between other people the way no filter at
+  all did. A real, documented difference from PeelCore, not a silent
+  one.
 - No mentions at all, so the Unread section's PeelCore ordering (direct,
   then tribes that mention you, then other tribes) is simplified to
   direct then every unread tribe, no mention-based split.

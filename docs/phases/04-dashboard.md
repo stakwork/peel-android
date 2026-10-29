@@ -66,6 +66,31 @@ row missed those tribes entirely, not just mis-sorted them. See Journal.
 - Join a tribe / Create a tribe / Add contact / Invite someone are drawn,
   same place as the real app, and do nothing — each opens a real flow
   that isn't built.
+
+**Update (2026-10-29), from a full iOS-vs-Android audit:** two real
+fixes.
+
+A dashboard row showed only its unread-count badge — a muted or
+mentions-only chat with nothing unread looked identical to a normal
+one, even though `chatState.muteLevel` was already stored and read
+(Phase 6). `ChatRow` in `ChatsScreen.kt` now shows PeelCore's own
+trailing glyph in that case (bell-slash for muted, "@" for mentions
+only — `PhoneComponents.swift`'s `ChatListRow`), which needed
+`ConversationRow.muted: Boolean` widened to `muteLevel: Int` so the two
+mute levels above "all" stop collapsing into one. Still not ported:
+PeelCore's "New" badge for a contact who added you with nothing
+exchanged yet (`ChatReadState.isNew`) — this port tracks no such flag
+at all, a bigger gap than the glyph alone.
+
+Separately, `MessageRowView`'s own avatar/name colour in
+`ConversationScreen.kt` keyed every row's hue off `sender.pubkey` —
+wrong for a tribe member specifically, since a tribe's forwarded
+messages often carry the tribe's own shared pubkey there, not the
+member's (the same unreliability this phase's own `contactHint` had to
+work around for tribe *detection* — see above). PeelCore's
+`PersonHue.colourKey` ignores pubkey for a tribe member on purpose,
+keying only on the trimmed alias. `hueKey` now does the same: alias for
+a tribe member, pubkey/chat otherwise.
 - No chat screen. Tapping a row does nothing yet; there is nowhere to
   send a message or read one beyond the list.
 - No reactive query layer (no Room, no Flow-backed DB): the dashboard

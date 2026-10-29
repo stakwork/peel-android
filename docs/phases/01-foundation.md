@@ -34,6 +34,30 @@ latest already targets a `compileSdk` not yet released stable. AGP 9.4.1
 with built-in Kotlin, not AGP 8.x with the separate `org.jetbrains.kotlin.android`
 plugin — AndroidX now requires it.
 
+**Update (2026-10-29), from a full iOS-vs-Android audit:** two real gaps
+found and fixed, one left open on purpose.
+
+Fixed: `Setting.WORDS_CONFIRMED` had been declared since this phase but
+never once written or read — `OnboardingScreen.kt`'s `checkWords()` now
+writes it on a successful confirmation, matching PeelCore's own
+`confirmWords` (`Engine+Account.swift`). And `SecretStore.kt`'s
+`FileSecretStore.writeOwnerOnly` used to write the sealed mnemonic's
+bytes first and chmod to owner-only *after* — a real, if narrow, window
+where the file exists with default (not owner-only) permissions, and a
+window a process death during it would leave open indefinitely. Now
+written to a fresh temp file created with owner-only permissions as
+part of its own creation (`PosixFilePermissions.asFileAttribute`, one
+syscall, no window), then moved onto the real path.
+
+Left open: no biometric unlock. PeelCore's `BiometricUnlock.swift` +
+`AppModel+Biometrics.swift` let a device skip typing the PIN (and the
+multi-second PBKDF2 derivation this phase's own "Learned" section below
+already flags as slow on a phone CPU) once Face/Touch ID is turned on.
+`LockScreen.kt` has no such path — every single app open here pays the
+full PIN cost, no exceptions. Not done in this pass; needs its own
+design (BiometricPrompt, what "fall back to PIN" looks like, whether a
+failed biometric burns an attempt) rather than a quick port.
+
 ## Journal
 
 The build log, kept as written.
