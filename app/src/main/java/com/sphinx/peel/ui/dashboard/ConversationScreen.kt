@@ -2,6 +2,7 @@ package com.sphinx.peel.ui.dashboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,6 +25,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -62,14 +65,16 @@ import org.json.JSONObject
 /// a header with the back arrow and the chat's name, its messages flat
 /// (not bubbles — a run's first row carries the avatar and name in the
 /// sender's colour, the rest of the run under it, same as the Mac/iPhone),
-/// and the composer at the bottom. No reply/thread, calls, pinned message,
-/// mentions or boosts yet — see `docs/phases/05-conversation.md`.
+/// and the composer at the bottom. Long-press a message to reply to it.
+/// No thread, calls, pinned message, mentions or boosts yet — see
+/// `docs/phases/05-conversation.md`/`docs/phases/07-reply.md`.
 @Composable
 fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: () -> Unit) {
     val isAgent = chat == engine.agentPubkey
     var conversation by remember(chat) { mutableStateOf<com.sphinx.peel.storage.ConversationRow?>(null) }
     var messages by remember(chat) { mutableStateOf(emptyList<MessageRow>()) }
     var draft by remember(chat) { mutableStateOf("") }
+    var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
@@ -131,7 +136,13 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             itemsIndexed(messages, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
                 val previous = messages.getOrNull(index - 1)
                 val startsRun = previous == null || runSenderKey(previous) != runSenderKey(row)
-                MessageRowView(row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias)
+                val replyUuid = replyUuid(row)
+                val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
+                MessageRowView(
+                    row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    replyUuid = replyUuid, parent = parent,
+                    onReply = { replyTo = row },
+                )
             }
         }
 
@@ -148,13 +159,17 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             text = draft,
             onTextChange = { draft = it },
             placeholder = if (isAgent) "Ask Peel" else "Message $title",
+            replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to previewContent(target) },
+            onCancelReply = { replyTo = null },
             onSend = {
                 val toSend = draft
+                val replyUuid = replyTo?.uuid
                 draft = ""
+                replyTo = null
                 error = null
                 scope.launch {
                     try {
-                        engine.sendMessage(chat, toSend, isTribe)
+                        engine.sendMessage(chat, toSend, isTribe, replyUuid)
                         reload()
                     } catch (e: Exception) {
                         error = e.message ?: "Could not send that."
@@ -176,19 +191,44 @@ private fun runSenderKey(row: MessageRow): String {
     return sender?.optString("alias")?.takeIf { it.isNotEmpty() } ?: row.chat
 }
 
+private fun senderJson(row: MessageRow): JSONObject? = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() }
+
+private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("alias")?.takeIf { it.isNotEmpty() } ?: "Someone"
+
+/// A message's own text, from `body`'s `content` field — the same body
+/// `Engine.sendMessage` writes, and the one `mapMessage` stores as is.
+private fun previewContent(row: MessageRow): String =
+    row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
+
+/// What `row` replies to, by uuid — `body`'s `replyUuid` field
+/// (`Engine.sendMessage`'s own `replyTo` parameter writes it; an incoming
+/// reply carries it the same way, PeelCore's `BodyFields.replyUuid`).
+private fun replyUuid(row: MessageRow): String? =
+    row.body?.let { runCatching { JSONObject(it).optString("replyUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
 @Composable
-private fun MessageRowView(row: MessageRow, startsRun: Boolean, isAgent: Boolean, isTribe: Boolean, myAlias: String) {
-    val sender = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() }
-    val name = if (row.fromMe) myAlias else (sender?.optString("alias")?.takeIf { it.isNotEmpty() } ?: "Someone")
+private fun MessageRowView(
+    row: MessageRow,
+    startsRun: Boolean,
+    isAgent: Boolean,
+    isTribe: Boolean,
+    myAlias: String,
+    replyUuid: String?,
+    parent: MessageRow?,
+    onReply: () -> Unit,
+) {
+    val sender = senderJson(row)
+    val name = if (row.fromMe) myAlias else senderAlias(row)
     val photoUrl = if (row.fromMe) null else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
     val hueKey = sender?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: row.chat
-    val content = row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
+    val content = previewContent(row)
     val time = row.timestamp?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(it) }
 
     Row(
         Modifier
             .fillMaxWidth()
             .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
+            .combinedClickable(onClick = {}, onLongClick = onReply.takeIf { row.uuid != null })
             .padding(top = if (startsRun) 8.dp else 1.dp, bottom = 2.dp),
     ) {
         Box(Modifier.width(32.dp)) {
@@ -217,6 +257,11 @@ private fun MessageRowView(row: MessageRow, startsRun: Boolean, isAgent: Boolean
                     }
                 }
             }
+            if (replyUuid != null) {
+                Spacer(Modifier.height(2.dp))
+                QuoteBox(parent = parent, myAlias = myAlias)
+                Spacer(Modifier.height(2.dp))
+            }
             Text(
                 content,
                 style = MaterialTheme.typography.bodyMedium,
@@ -227,6 +272,46 @@ private fun MessageRowView(row: MessageRow, startsRun: Boolean, isAgent: Boolean
                 Text("Not delivered", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
             }
         }
+    }
+}
+
+/// The message a reply answers: who and a one-line preview — PeelCore's
+/// `QuoteBox`, minus "tap to go to it" (no scroll-to-message here yet).
+/// `parent` null is "Original message not available" (not stored, or
+/// too far back to have loaded) — PeelCore's `Quote.missing`.
+@Composable
+private fun QuoteBox(parent: MessageRow?, myAlias: String) {
+    val shape = RoundedCornerShape(8.dp)
+    if (parent == null) {
+        Text(
+            "Original message not available",
+            style = MaterialTheme.typography.labelSmall,
+            color = Theme.colors.secondaryText,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(Theme.colors.fieldFill)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+        return
+    }
+    val name = if (parent.fromMe) myAlias else senderAlias(parent)
+    val hueKey = senderJson(parent)?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: parent.chat
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Theme.colors.fieldFill)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text(name, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = PersonHue.of(hueKey).fill)
+        Text(
+            previewContent(parent),
+            style = MaterialTheme.typography.labelSmall,
+            color = Theme.colors.secondaryText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -245,43 +330,76 @@ private fun AgentTag() {
 
 /// The capsule text field and send button — PeelCore's `PhoneComposer`,
 /// trimmed to text only: no attach, mentions, voice or the sats bolt.
+/// `replyTarget` (name, preview) shows PeelCore's `ReplyingTo` above the
+/// capsule, with its own dismiss; long-pressing a row sets it.
 @Composable
-private fun Composer(text: String, onTextChange: (String) -> Unit, placeholder: String, onSend: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(
-            Modifier
-                .weight(1f)
-                .heightIn(min = 44.dp)
-                .clip(RoundedCornerShape(22.dp))
-                .background(Theme.colors.fieldFill)
-                .padding(horizontal = 16.dp, vertical = 11.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            if (text.isEmpty()) {
-                Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+private fun Composer(
+    text: String,
+    onTextChange: (String) -> Unit,
+    placeholder: String,
+    replyTarget: Pair<String, String>?,
+    onCancelReply: () -> Unit,
+    onSend: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        if (replyTarget != null) {
+            val (name, preview) = replyTarget
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Replying to $name",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Theme.colors.text,
+                    )
+                    Text(
+                        preview,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Theme.colors.secondaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(onClick = onCancelReply, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Filled.Close, contentDescription = "Stop replying", tint = Theme.colors.secondaryText)
+                }
             }
-            BasicTextField(
-                value = text,
-                onValueChange = onTextChange,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
-        val canSend = text.isNotBlank()
-        Box(
-            Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(Theme.colors.button.copy(alpha = if (canSend) 1f else 0.4f))
-                .clickable(enabled = canSend, onClick = onSend),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Theme.colors.fieldFill)
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (text.isEmpty()) {
+                    Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+                }
+                BasicTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            val canSend = text.isNotBlank()
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Theme.colors.button.copy(alpha = if (canSend) 1f else 0.4f))
+                    .clickable(enabled = canSend, onClick = onSend),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
+            }
         }
     }
 }

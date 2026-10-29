@@ -159,6 +159,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 4 | Dashboard: live message storage, tribe detection, the Chats list and tab bar | built; see the file for what's open | [phases/04-dashboard.md](phases/04-dashboard.md) |
 | 5 | Conversation: the chat screen, grouped message rows, sending a text message | built; see the file for what's open | [phases/05-conversation.md](phases/05-conversation.md) |
 | 6 | Read state: unread counts, mute levels, synced read markers | built; see the file for what's open | [phases/06-read-state.md](phases/06-read-state.md) |
+| 7 | Reply: replying to a message from the chat screen | built; see the file for what's open | [phases/07-reply.md](phases/07-reply.md) |
 
 ## Open questions
 

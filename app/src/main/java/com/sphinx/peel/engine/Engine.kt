@@ -305,14 +305,18 @@ class Engine(mnemonic: String, val storage: Storage) {
         return map
     }
 
-    /// Sends a plain text message to a contact or a tribe. Ported from
-    /// PeelCore's `Engine+Messages.swift` (`sendText`/`deliver`), trimmed
-    /// to one message with no reply/thread, device-request or
-    /// payment-threshold handling — and no price: every send goes at 0
-    /// msat regardless of what a tribe actually charges, since nothing
-    /// here reads a tribe's price yet (`TribeInfo.pricePerMessage`, not
-    /// fetched); a tribe that charges for messages may refuse this until
-    /// that exists.
+    /// Sends a plain text message to a contact or a tribe, optionally as
+    /// a reply to one of its own stored messages (`replyTo`, its `uuid`
+    /// — not checked against the real thing `links(replyTo:...)` does on
+    /// PeelCore: any uuid goes in as given, since this port tracks
+    /// neither deletion nor threads for there to be anything to check
+    /// against). Ported from PeelCore's `Engine+Messages.swift`
+    /// (`sendText`/`deliver`), trimmed to one message with no thread,
+    /// device-request or payment-threshold handling — and no price:
+    /// every send goes at 0 msat regardless of what a tribe actually
+    /// charges, since nothing here reads a tribe's price yet
+    /// (`TribeInfo.pricePerMessage`, not fetched); a tribe that charges
+    /// for messages may refuse this until that exists.
     ///
     /// Stores the sent row itself, not through `storeMessages`: `send`'s
     /// own `RunReturn.msgs` entry is confirmation, not a message to run
@@ -325,9 +329,9 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// first (`storeMessages`'s `sentStatus` handling) — whichever comes.
     /// A send whose echo never arrives and whose tag the mixer never
     /// mentions again stays `PENDING` forever: no retry, no timeout.
-    suspend fun sendMessage(chat: String, text: String, isTribe: Boolean): MessageRow {
+    suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null): MessageRow {
         check(transport != null) { "Not connected." }
-        val body = JSONObject().put("content", text).toString()
+        val body = JSONObject().put("content", text).apply { if (replyTo != null) put("replyUuid", replyTo) }.toString()
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
         val result = run { time, stateBytes ->
