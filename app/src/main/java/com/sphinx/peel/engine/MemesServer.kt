@@ -118,6 +118,80 @@ class MemesServer(private val host: String) {
             muid
         }
 
+    /// `GET /preferences`: the account's encrypted preferences file, as
+    /// base64 text — PeelCore's own `preferences`, including its exact
+    /// "not found" shape: a JSON `{"success": false, "error":
+    /// "Preferences not found"}` (status usually 404, sometimes 200 —
+    /// read by content here, not status) means no file yet, returned as
+    /// null; anything else that parses as JSON is a refusal; anything
+    /// else (plain text, status 200) is the file itself.
+    suspend fun preferences(token: Token): String? = withContext(Dispatchers.IO) {
+        val connection = (URL("https://$host/preferences").openConnection() as HttpURLConnection).apply {
+            setRequestProperty("Authorization", "Bearer ${token.value}")
+            connectTimeout = 10_000
+            readTimeout = 10_000
+        }
+        val status = connection.responseCode
+        val body = try {
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            stream?.bufferedReader()?.use { it.readText() } ?: ""
+        } finally {
+            connection.disconnect()
+        }
+        val json = runCatching { JSONObject(body) }.getOrNull()
+        if (json != null) {
+            if (jsonSuccess(json) == false && json.optString("error") == "Preferences not found") return@withContext null
+            throw RefusedException(status, "the preferences file")
+        }
+        if (status != 200 || body.isEmpty()) throw RefusedException(status, "the preferences file")
+        body
+    }
+
+    /// `POST /preferences`: the whole encrypted file (already base64
+    /// text), with the account's pubkey as base64url — PeelCore's own
+    /// `uploadPreferences`, the same multipart shape `upload` already
+    /// uses, just with a `"pubkey"` field instead of `"name"`.
+    suspend fun uploadPreferences(sealedBase64: String, pubkeyField: String, token: Token) = withContext(Dispatchers.IO) {
+        val boundary = "peel-${java.util.UUID.randomUUID()}"
+        val body = java.io.ByteArrayOutputStream()
+        fun part(headers: String, content: ByteArray) {
+            body.write("--$boundary\r\n$headers\r\n\r\n".toByteArray(Charsets.UTF_8))
+            body.write(content)
+            body.write("\r\n".toByteArray(Charsets.UTF_8))
+        }
+        part("Content-Disposition: form-data; name=\"pubkey\"", pubkeyField.toByteArray(Charsets.UTF_8))
+        part(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"preferences\"\r\nContent-Type: application/octet-stream",
+            sealedBase64.toByteArray(Charsets.UTF_8),
+        )
+        body.write("--$boundary--\r\n".toByteArray(Charsets.UTF_8))
+        val bodyBytes = body.toByteArray()
+
+        val connection = (URL("https://$host/preferences").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            setRequestProperty("Authorization", "Bearer ${token.value}")
+            connectTimeout = 10_000
+            readTimeout = 30_000
+            setFixedLengthStreamingMode(bodyBytes.size)
+        }
+        connection.outputStream.use { it.write(bodyBytes) }
+        val replyText = readText(connection, "the preferences file")
+        val json = runCatching { JSONObject(replyText) }.getOrNull() ?: throw UnreadableException("the preferences file")
+        if (jsonSuccess(json) != true) throw UnreadableException("the preferences file")
+    }
+
+    /// `success` as the official apps' reply reads it: a bool, or a
+    /// number (not 0 is true); null when it's neither.
+    private fun jsonSuccess(json: JSONObject): Boolean? = when (val value = json.opt("success")) {
+        is Boolean -> value
+        is Int -> value != 0
+        is Long -> value != 0L
+        null -> null
+        else -> null
+    }
+
     private fun readText(connection: HttpURLConnection, what: String): String {
         val status = connection.responseCode
         try {

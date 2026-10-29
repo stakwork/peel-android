@@ -39,6 +39,7 @@ import uniffi.sphinxrs.handle as coreHandle
 import uniffi.sphinxrs.initialSetup as coreInitialSetup
 import uniffi.sphinxrs.listContacts as coreListContacts
 import uniffi.sphinxrs.makeMediaToken as coreMakeMediaToken
+import uniffi.sphinxrs.nodeKeys as coreNodeKeys
 import uniffi.sphinxrs.pubkeyFromSeed
 import uniffi.sphinxrs.read as coreMarkRead
 import uniffi.sphinxrs.rootSignMs as coreRootSignMs
@@ -369,21 +370,22 @@ class Engine(mnemonic: String, val storage: Storage) {
     }
 
     /// Boosts someone else's message: a type 29 message naming it by
-    /// `replyUuid`, carrying `BOOST_AMOUNT_MSAT` — PeelCore's own
-    /// `quickBoost`, trimmed to its everyday one-tap path. No amount
-    /// picker and no confirmation threshold: both depend on a balance
-    /// this port doesn't track (no Payments tab, no payment history —
-    /// see `BOOST_AMOUNT_MSAT`'s own doc comment), so there's nothing
-    /// to check the amount against here; a boost that can't actually
-    /// be afforded fails the same way any other send can, surfaced as
-    /// a plain error, not predicted ahead of time. Unlike PeelCore,
-    /// never adds a tribe's own price-per-message to the total either:
-    /// that needs a `tribe` table (price, escrow) this port has never
-    /// had (`docs/PLAN.md`'s own "No tribe... tables yet") — a tribe
-    /// that charges for messages may refuse an underpriced boost the
-    /// same way it would refuse an underpriced text send.
+    /// `replyUuid`, carrying this account's own boost amount
+    /// (`boostAmountMsat()`) — PeelCore's own `quickBoost`, trimmed to
+    /// its everyday one-tap path. No confirmation threshold: that
+    /// depends on a balance this port doesn't track (no Payments tab,
+    /// no payment history), so there's nothing to check the amount
+    /// against here; a boost that can't actually be afforded fails the
+    /// same way any other send can, surfaced as a plain error, not
+    /// predicted ahead of time. Unlike PeelCore, never adds a tribe's
+    /// own price-per-message to the total either: that needs a `tribe`
+    /// table (price, escrow) this port has never had (`docs/PLAN.md`'s
+    /// own "No tribe... tables yet") — a tribe that charges for
+    /// messages may refuse an underpriced boost the same way it would
+    /// refuse an underpriced text send.
     suspend fun sendBoost(chat: String, targetUuid: String, isTribe: Boolean): MessageRow {
         check(transport != null) { "Not connected." }
+        val amountMsat = boostAmountMsat()
         val body = JSONObject().apply {
             put("content", "")
             put("replyUuid", targetUuid)
@@ -391,7 +393,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
         val result = run { time, stateBytes ->
-            coreSend(seed, time, chat, BOOST_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, BOOST_AMOUNT_MSAT.toULong(), isTribe)
+            coreSend(seed, time, chat, BOOST_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
         val sent = result.msgs.firstOrNull()
         val row = MessageRow(
@@ -402,7 +404,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             fromMe = true,
             sender = null,
             body = body,
-            msat = BOOST_AMOUNT_MSAT,
+            msat = amountMsat,
             timestamp = System.currentTimeMillis(),
             tag = sent?.tag,
             paymentHash = sent?.paymentHash,
@@ -411,6 +413,120 @@ class Engine(mnemonic: String, val storage: Storage) {
         storage.insertMessages(listOf(row))
         return row
     }
+
+    /// This account's own one-tap boost amount, in msat — whatever was
+    /// last chosen here or taken from another device
+    /// (`syncBoostAmount`), else `BOOST_AMOUNT_MSAT`'s own default.
+    fun boostAmountMsat(): Long = storage.value(Setting.BOOST_AMOUNT_MSAT)?.toLongOrNull() ?: BOOST_AMOUNT_MSAT
+
+    /// The person chose a new boost amount in Profile: written here,
+    /// dated now, and synced to the account's other devices right away
+    /// (best effort — a sync failure here is silent, the same way a
+    /// background sync failing after `start()`/`resume()` is; the
+    /// value is already correct on this device either way, and the
+    /// next successful sync carries it).
+    suspend fun setBoostAmount(sats: Long) {
+        require(sats > 0) { "the boost amount must be more than zero" }
+        val now = System.currentTimeMillis() / 1000
+        storage.apply(
+            Storage.Commit(
+                settings = mapOf(
+                    Setting.BOOST_AMOUNT_MSAT to (sats * 1000).toString(),
+                    Setting.BOOST_AMOUNT_UPDATED_AT to now.toString(),
+                ),
+            ),
+        )
+        runCatching { syncBoostAmount() }
+    }
+
+    /// Merges this account's boost amount with the memes-server
+    /// preferences file: fetches and decrypts it, takes the file's
+    /// `tip_amount` if it's at least as new as this device's own, else
+    /// (this device's is newer, or the file has none) writes this
+    /// device's into the file and uploads it — PeelCore's own
+    /// `syncPreferences`, specialised to the one key this port
+    /// actually syncs (see `PreferencesFile`'s own doc comment). A
+    /// transport-less or offline call just does nothing; this is
+    /// always best-effort, never something a caller need surface as an
+    /// error.
+    suspend fun syncBoostAmount() {
+        if (transport == null) return
+        val memes = MemesServer(MEMES_HOST)
+        val secret = coreNodeKeys("bitcoin", seed).secret
+        val fetched = withMemes(memes) { auth -> memes.preferences(auth) }
+        val localMsat = storage.value(Setting.BOOST_AMOUNT_MSAT)?.toLongOrNull()
+        val localDate = storage.value(Setting.BOOST_AMOUNT_UPDATED_AT)?.toLongOrNull() ?: 0L
+
+        if (fetched == null) {
+            if (!mayStartPreferencesFile(MEMES_HOST) || localMsat == null) return
+            val file = PreferencesFile.empty()
+            file.setTipAmount(localMsat / 1000, localDate)
+            uploadPreferencesFile(memes, secret, file)
+            markPreferencesFileSeen()
+            return
+        }
+
+        val sealed = android.util.Base64.decode(fetched.trim(), android.util.Base64.DEFAULT)
+        val plain = MediaCrypto.decrypt(sealed, secret)
+        val file = PreferencesFile.parse(String(plain, Charsets.UTF_8))
+        markPreferencesFileSeen()
+
+        val (fileSats, fileDate) = file.tipAmount() ?: (null to 0L)
+        when {
+            localMsat != null && localDate > fileDate -> {
+                if (fileSats != localMsat / 1000 || fileDate != localDate) {
+                    file.setTipAmount(localMsat / 1000, localDate)
+                    uploadPreferencesFile(memes, secret, file)
+                }
+            }
+            fileSats != null -> {
+                val fileMsat = fileSats * 1000
+                if (fileMsat != localMsat || fileDate != localDate) {
+                    storage.apply(
+                        Storage.Commit(
+                            settings = mapOf(
+                                Setting.BOOST_AMOUNT_MSAT to fileMsat.toString(),
+                                Setting.BOOST_AMOUNT_UPDATED_AT to fileDate.toString(),
+                            ),
+                        ),
+                    )
+                }
+            }
+            localMsat != null && localDate > 0 -> {
+                // The file exists but has never carried a tip_amount of
+                // its own; this device's own real choice goes up.
+                file.setTipAmount(localMsat / 1000, localDate)
+                uploadPreferencesFile(memes, secret, file)
+            }
+        }
+    }
+
+    private suspend fun uploadPreferencesFile(memes: MemesServer, secret: String, file: PreferencesFile) {
+        val sealed = MediaCrypto.encrypt(file.text().toByteArray(Charsets.UTF_8), secret)
+        val sealedBase64 = android.util.Base64.encodeToString(sealed, android.util.Base64.NO_WRAP)
+        // The account's pubkey, base64url without padding — PeelCore's
+        // own `MediaToken.base64URLEncode(key).replacingOccurrences(of: "=", with: "")`.
+        val pubkeyField = base64UrlEncode(hexToBytes(accountKey)).trimEnd('=')
+        withMemes(memes) { auth -> memes.uploadPreferences(sealedBase64, pubkeyField, auth) }
+    }
+
+    private fun markPreferencesFileSeen() {
+        storage.apply(Storage.Commit(settings = mapOf(Setting.PREFERENCES_FILE_SEEN to MEMES_HOST.lowercase())))
+    }
+
+    /// Whether a "not found" from the memes server may start this
+    /// account's preferences file here — PeelCore's own
+    /// `mayStartPreferencesFile`: only for an account created fresh on
+    /// this device (`Setting.NEEDS_RESTORE` was never set at all — a
+    /// restored account always has one, whatever happened before this
+    /// device opened it, is never safe to start over on a "not found"
+    /// that could just as well be a server hiccup), and only on a
+    /// server this device has never already confirmed having one on.
+    private fun mayStartPreferencesFile(host: String): Boolean =
+        storage.value(Setting.NEEDS_RESTORE) == null && storage.value(Setting.PREFERENCES_FILE_SEEN) != host.lowercase()
+
+    private fun hexToBytes(hex: String): ByteArray =
+        ByteArray(hex.length / 2) { ((Character.digit(hex[it * 2], 16) shl 4) + Character.digit(hex[it * 2 + 1], 16)).toByte() }
 
     /// Downloads and decrypts an attachment into this account's cache,
     /// or finds it there already — PeelCore's `downloadAttachment`,
@@ -721,6 +837,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             fetchReadsAndMutes()
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             refreshTribeNames()
+            runCatching { syncBoostAmount() }
         }
     }
 
@@ -762,6 +879,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             if (!connectAndRegister()) return@launch
             fetchReadsAndMutes()
             if (!restoreProgressFlow.value.restoring) catchUpMessages()
+            runCatching { syncBoostAmount() }
         }
     }
 

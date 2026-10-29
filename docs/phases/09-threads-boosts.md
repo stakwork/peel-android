@@ -95,14 +95,18 @@ mechanism requires to work at all. Skipped here on purpose — see
   replying to any message within a thread, which can start a *nested*
   thread at that reply. This port keeps every thread flat: one root,
   one flat list of replies, no nesting.
-- No amount picker, no balance check, no confirmation threshold on a
-  boost — always exactly `BOOST_AMOUNT_MSAT` (100 sats), sent
-  unconditionally. A boost this account genuinely can't afford fails
-  the same way any other send can (a plain error, nothing kept to
-  retry) rather than being refused ahead of time the way PeelCore's
-  own `checkPayment` refuses it client-side. No way to change the
-  amount either — PeelCore's own `setBoostAmount`/one-tap default
-  needs a preference this port has no settings screen to set.
+- No balance check or confirmation threshold on a boost — sent
+  unconditionally at whatever `Engine.boostAmountMsat()` reads. A
+  boost this account genuinely can't afford fails the same way any
+  other send can (a plain error, nothing kept to retry) rather than
+  being refused ahead of time the way PeelCore's own `checkPayment`
+  refuses it client-side.
+  **Update (2026-10-29):** the amount itself is no longer fixed —
+  Phase 11 added a "Boost amount" setting in Profile, synced across
+  this account's devices the same way PeelCore's own
+  `setBoostAmount`/`tip_amount` is — see
+  [phases/11-profile-preferences.md](11-profile-preferences.md). Only
+  the balance/confirmation safeguards around *sending* stay open.
 - No price added for a tribe that charges per message — PeelCore's own
   `boostTotalMsat` adds the tribe's `paymentPriceMsat` (plus escrow) on
   top of the tip; this port has no `tribe` table at all

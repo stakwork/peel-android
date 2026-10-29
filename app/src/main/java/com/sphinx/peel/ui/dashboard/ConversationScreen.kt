@@ -76,7 +76,6 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
-import com.sphinx.peel.engine.BOOST_AMOUNT_MSAT
 import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
@@ -917,10 +916,10 @@ private fun MessageRowView(
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("Reply") }, onClick = { menuOpen = false; onReply() })
             if (onBoost != null) {
-                DropdownMenuItem(
-                    text = { Text("Boost ${formattedSats(BOOST_AMOUNT_MSAT)} sats") },
-                    onClick = { menuOpen = false; onBoost() },
-                )
+                // Just "Boost", not "Boost N sats" — the user's own
+                // choice, unlike PeelCore's own menu
+                // (`model.quickBoostLabel`), which does name the amount.
+                DropdownMenuItem(text = { Text("Boost") }, onClick = { menuOpen = false; onBoost() })
             }
         }
     }

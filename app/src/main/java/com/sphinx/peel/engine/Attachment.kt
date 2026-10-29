@@ -15,14 +15,13 @@ const val ATTACHMENT_MESSAGE_TYPE = 6
 /// both need it.
 const val BOOST_MESSAGE_TYPE = 29
 
-/// What a one-tap boost sends unasked, in msat — PeelCore's own
-/// `defaultBoostAmountMsat` (100 sats). Fixed, not a setting: this
-/// port has no Payments tab, no balance tracking and no per-account
-/// preference sync (PeelCore's own `boostAmountMsat`/`setBoostAmount`,
-/// which a boost amount picker would need) to let someone change it —
-/// matches the same "no settings UI" scope line this port has drawn
-/// elsewhere (the memes host, the boost itself before this).
-const val BOOST_AMOUNT_MSAT = 100_000L
+/// What a one-tap boost sends before anyone has ever chosen their own
+/// amount, in msat — 10 sats, this port's own default (PeelCore's own
+/// `defaultBoostAmountMsat` is 100 sats; the user explicitly chose a
+/// different number for this port, not a porting mistake). Once someone
+/// sets it from Profile, `Engine.boostAmountMsat()` reads their own
+/// choice instead — see `Setting.BOOST_AMOUNT_MSAT`.
+const val BOOST_AMOUNT_MSAT = 10_000L
 
 /// What an attachment message's JSON says — PeelCore's
 /// `AttachmentFields`, trimmed to what sending an image and receiving

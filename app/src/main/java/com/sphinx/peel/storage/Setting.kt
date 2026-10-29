@@ -43,4 +43,26 @@ enum class Setting(val key: String) {
     /// (`ServerConfig.tribeHost`), recorded once so a tribe's name/photo
     /// can be asked for later without the public config call every time.
     TRIBE_HOST("tribeHost"),
+
+    /// The one-tap boost's own tip, in msat — PeelCore's own `tip_amount`
+    /// preference. Unset until chosen here or taken from another
+    /// device's (`Engine.syncBoostAmount`); `Engine.boostAmountMsat()`
+    /// falls back to `BOOST_AMOUNT_MSAT` (`Attachment.kt`) until then.
+    BOOST_AMOUNT_MSAT("boostAmountMsat"),
+
+    /// When `BOOST_AMOUNT_MSAT` was last set, in whole seconds since the
+    /// epoch — the preferences file's own "date" for `tip_amount`,
+    /// needed to tell a value chosen on this device from one the file
+    /// might hold from another, PeelCore's own last-write-wins rule
+    /// (`PreferencesFile.merged`).
+    BOOST_AMOUNT_UPDATED_AT("boostAmountUpdatedAt"),
+
+    /// The memes server this account's preferences file was last
+    /// confirmed fetched from (or started on), lower-cased — PeelCore's
+    /// own `device.preferences_file_seen`: a "not found" answer may
+    /// only start a fresh file here once, on a server never seen to
+    /// have had one before (`Engine.mayStartPreferencesFile`) — so a
+    /// transient server hiccup never looks like "this account has no
+    /// preferences file yet" and overwrites a real one.
+    PREFERENCES_FILE_SEEN("preferencesFileSeen"),
 }

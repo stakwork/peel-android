@@ -163,6 +163,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 8 | Attachments: receive and show images/video/audio/PDF/files; send images (Photo/Camera) | built; see the file for what's open | [phases/08-attachments.md](phases/08-attachments.md) |
 | 9 | Threads and boosts: collapsed "N replies" + a thread sheet, boost chips | built; see the file for what's open | [phases/09-threads-boosts.md](phases/09-threads-boosts.md) |
 | 10 | Search: the bottom bar's Search tab, filtering the chat list by name | built; see the file for what's open | [phases/10-search.md](phases/10-search.md) |
+| 11 | Profile and preferences sync: an editable name, the boost amount, synced via the memes-server preferences file | built; see the file for what's open | [phases/11-profile-preferences.md](phases/11-profile-preferences.md) |
 
 ## Open questions
 
