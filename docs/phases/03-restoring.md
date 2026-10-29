@@ -70,12 +70,24 @@ See the Journal for how that was found and the real bug underneath it
 not just the missing catch-up).
 
 **Open:** restoring 11,653 messages at 100 per page is on the order of
-120 sequential ask-then-wait round trips, one at a time — real, and
-noticeably slower than the iPhone app's own restore of the same account.
-Nothing here is wrong, just unoptimized: no pipelining (asking for the
-next page before the current one's answer lands), no larger page size,
-no parallel contacts/messages phases. Worth returning to once the
-correctness is proven out further. No full `Engine.commit()` parity — `peel`'s version also
+120 sequential ask-then-wait round trips, one at a time, and that is
+real and not a gap this port has that PeelCore doesn't — `HistoryCursor`
+is sequential for the same reason, and has to be: a history page carries
+no request id (its own comment on `advance`), so a reply can only ever
+be matched to *some* outstanding ask, never to the specific one that
+produced it. Firing several pages at once (what an earlier version of
+this note called "pipelining") would not be an optimization here, it
+would be a correctness bug on both platforms — there is no way to tell
+which of several in-flight replies answers which ask. What's actually
+not known yet is *why* a restore here would be slower than the iPhone's
+for the same account at the same page count and the same one-at-a-time
+design — added per-page timing (`Log.d("PeelHistory", ...)`, elapsed ms
+each) to find out, rather than guess further; needs a real restore run
+with logcat attached to get an answer. One concrete, safe fix landed
+either way: `markContactsReady` was re-decoding the core's entire
+contact list (`listContacts`) on *every* page of the contacts phase
+instead of once after it — real waste, if a smaller one than pipelining
+would have been had it been safe. No full `Engine.commit()` parity — `peel`'s version also
 carries tribe membership, replay detection and payment settlement, which
 is its own large system (see the Journal). This phase stores real
 contacts and messages correctly for the direct-message case; a tribe's
@@ -310,6 +322,21 @@ have been exercised by `start()` alone, since that only ever connects
 once per `Engine` instance; `resume()` existing at all is what forced it
 into the open.
 
+**Revisiting "the restore pipeline needs performance work."** That was
+this project's own earlier framing (an open item carried from this
+phase's first pass), and it assumed pipelining — asking for the next
+page before the current one's answer lands — was the obvious lever,
+just not pulled yet. Re-reading `HistoryCursor.swift`'s `advance` before
+touching anything showed why it never pipelines either: its own comment
+says a page "carries no request id," so `Engine`'s one incoming-message
+listener (either platform's) has no way to tell which outstanding ask a
+given reply is answering, only that *some* ask is now answered. Two or
+more pages in flight at once would risk a reply landing against the
+wrong one. That rules out the fix this note previously assumed was
+possible; what's left is finding out why Android would still be slower
+than iOS at the exact same one-at-a-time design, which needs a timed
+restore to actually answer rather than more reading.
+
 ## Done
 
 - `storage/Storage.kt`: `contact` and `message` tables (DB version 2, a
@@ -329,7 +356,9 @@ into the open.
   fresh one), `resume()` (reconnect + catch up, for a lifecycle observer
   to call), `connectAndRegister` (the connect-and-handle-errors half of
   `start()`, shared with `resume()`); `disconnect()` now resets
-  `listenerStarted` so a reconnect's listener actually attaches.
+  `listenerStarted` so a reconnect's listener actually attaches;
+  `markContactsReady`/`listContacts` moved to once per contacts phase,
+  not once per page; `page` logs each page's own round-trip time.
 - `storage/Storage.kt`: `maxServerIndex()` — where a catch-up resumes
   from, read back from what is already stored rather than a separate setting.
 - `ui/onboarding/OnboardingScreen.kt`: step indicator, back button and
@@ -355,6 +384,13 @@ into the open.
 
 ## Learned
 
+- A note written at the end of a phase, naming what's left as "just
+  unoptimized," is itself a claim worth re-checking before acting on it
+  later — this project's own earlier "no pipelining yet" turned out to
+  describe a correctness constraint of the protocol (no request id on a
+  history page), not a missed optimization, once the reference
+  implementation's own handling of the same limit was actually read
+  rather than assumed absent.
 - "Restore once, then live messages only" quietly assumes the app is
   never closed and never loses its connection between launches — worth
   checking a reference implementation's own `cameOnline`/equivalent for

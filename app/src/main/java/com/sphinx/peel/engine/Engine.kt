@@ -1,5 +1,7 @@
 package com.sphinx.peel.engine
 
+import android.os.SystemClock
+import android.util.Log
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.storage.ContactRow
 import com.sphinx.peel.storage.MessageRow
@@ -462,6 +464,12 @@ class Engine(mnemonic: String, val storage: Storage) {
                 page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
                     coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
                 }
+                // Once, with every contacts page's own state already
+                // folded in — not per page: `listContacts` decodes the
+                // core's *entire* contact list every time it's asked, and
+                // the final state after this phase already includes
+                // everything any one of its pages revealed.
+                storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
             }
             if (counts != null && counts.total > 0) {
                 page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
@@ -508,14 +516,23 @@ class Engine(mnemonic: String, val storage: Storage) {
     private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, call: (String, ByteArray, ULong) -> RunReturn) {
         var next = start
         while (true) {
+            // Timed deliberately: the protocol gives a history page no
+            // request id (`HistoryCursor.advance`'s own comment on
+            // PeelCore's side), so a reply can only ever be matched to
+            // *some* outstanding ask, never to a specific one — pipelining
+            // several pages at once is not a missed optimization here,
+            // it is unsafe for either client. Logging each page's own
+            // round-trip cost is how to find out whether Android's restore
+            // actually is slower than the iPhone's for a reason that *can*
+            // be fixed (docs/phases/03-restoring.md, "Open").
+            val askedAt = SystemClock.elapsedRealtime()
             val result = askAndAwait(historyWaitMs, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
-            } ?: break
+            }
+            Log.d("PeelHistory", "$phase page at $next: ${if (result == null) "timed out" else "${result.msgs.size} msgs"} in ${SystemClock.elapsedRealtime() - askedAt}ms")
+            if (result == null) break
             // Already stored: the same listener that delivered this result
             // to askAndAwait ran it through `storeMessages` first.
-            if (phase == HistoryPhase.CONTACTS) {
-                storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
-            }
             val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
             val progress = RestoreCount((reached ?: next).toLong(), end)
             restoreProgressFlow.update {
