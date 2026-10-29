@@ -38,17 +38,15 @@ marking it as new messages arrive while it's still open.
   **Update (2026-10-29):** that reasoning went stale the moment Phase 9
   added boosts as a specially-rendered chip — a boost (type 29) from
   anyone, on anyone's message, was inflating the badge, which a user in
-  an active tribe would actually notice. PeelCore's own
-  `countsAsUnreadSQL` only excludes a boost that *doesn't* target this
-  account's own message; this port has no column for what a boost
-  targets (it's `replyUuid` inside the message's JSON `body`, parsed in
-  Kotlin — `ConversationScreen.kt`'s `boostSummaries`), and
-  `json_extract` isn't reliably on this app's minSdk 26, so
-  `Storage.conversations()` now excludes every boost from the count
-  instead (`type != 29`) — undercounts a boost on your own message, but
-  no longer overcounts boosts between other people the way no filter at
-  all did. A real, documented difference from PeelCore, not a silent
-  one.
+  an active tribe would actually notice. Fixed properly, not
+  approximated: `message` gained real `replyUuid`/`threadUuid` columns
+  (`Storage.v6`, derived once from a message's JSON `body` at
+  `insertMessages` instead of re-parsed in Kotlin everywhere one was
+  needed), so `Storage.conversations()`'s unread count is now one
+  correlated SQL subquery matching PeelCore's own `countsAsUnreadSQL`
+  exactly: a boost counts toward unread only if it targets one of this
+  account's own messages. See `docs/phases/09-threads-boosts.md`'s
+  "Update" for the schema change itself.
 - No mentions at all, so the Unread section's PeelCore ordering (direct,
   then tribes that mention you, then other tribes) is simplified to
   direct then every unread tribe, no mention-based split.

@@ -293,6 +293,68 @@ class StorageTest {
     }
 
     @Test
+    fun `a boost on my own message counts as unread, a boost on someone else's doesn't`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = true, ready = true)
+        storage.insertMessages(
+            listOf(
+                // Mine, and someone else's, both already read.
+                MessageRow(uuid = "mine", serverIndex = 1, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 100, tag = null, paymentHash = null),
+                MessageRow(uuid = "theirs", serverIndex = 2, type = 0, chat = "alice", fromMe = false, sender = null, body = "hi", msat = null, timestamp = 200, tag = null, paymentHash = null),
+            ),
+        )
+        storage.setRead("alice", index = 2, pending = false)
+        assertEquals(0L, storage.conversations().single().unread)
+
+        // A boost on my own message: news to me.
+        storage.insertMessages(
+            listOf(
+                MessageRow(
+                    uuid = "boost-1", serverIndex = 3, type = 29, chat = "alice", fromMe = false, sender = null,
+                    body = """{"replyUuid":"mine"}""", msat = 1000, timestamp = 300, tag = null, paymentHash = null,
+                ),
+            ),
+        )
+        assertEquals(1L, storage.conversations().single().unread)
+
+        storage.setRead("alice", index = 3, pending = false)
+        assertEquals(0L, storage.conversations().single().unread)
+
+        // A boost on someone else's message: not news to me.
+        storage.insertMessages(
+            listOf(
+                MessageRow(
+                    uuid = "boost-2", serverIndex = 4, type = 29, chat = "alice", fromMe = false, sender = null,
+                    body = """{"replyUuid":"theirs"}""", msat = 1000, timestamp = 400, tag = null, paymentHash = null,
+                ),
+            ),
+        )
+        assertEquals(0L, storage.conversations().single().unread)
+    }
+
+    @Test
+    fun `insertMessages derives replyUuid and threadUuid columns from body`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.insertMessages(
+            listOf(
+                MessageRow(
+                    uuid = "1", serverIndex = 1, type = 0, chat = "alice", fromMe = false, sender = null,
+                    body = """{"content":"hi","replyUuid":"root-1","threadUuid":"root-1"}""", msat = null,
+                    timestamp = 100, tag = null, paymentHash = null,
+                ),
+                MessageRow(uuid = "root-1", serverIndex = 2, type = 0, chat = "alice", fromMe = true, sender = null, body = "hey", msat = null, timestamp = 50, tag = null, paymentHash = null),
+            ),
+        )
+
+        val rows = storage.messages("alice").associateBy { it.uuid }
+        assertEquals("root-1", rows["1"]?.replyUuid)
+        assertEquals("root-1", rows["1"]?.threadUuid)
+        assertNull(rows["root-1"]?.replyUuid)
+        assertNull(rows["root-1"]?.threadUuid)
+    }
+
+    @Test
     fun `a muted chat's unread count never shows`() {
         val storage = newStorage()
         storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)

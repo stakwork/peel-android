@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import org.json.JSONObject
 
 /// One contact as `message`/`contact` know it: a pubkey, and whatever name
 /// and photo its own messages have revealed so far (names and photos are
@@ -60,9 +61,21 @@ data class ConversationRow(
     val shownUnread: Long get() = if (muted) 0 else unread
 }
 
+/// What a message's own JSON `body` names as its reply/thread target —
+/// shared by `Storage.insertMessages` (deriving `message.replyUuid`/
+/// `threadUuid` for a row being written) and `Storage.v6` (backfilling
+/// every row already stored before those columns existed). File-private,
+/// not a `Storage` method, so the migration (on `Helper`, a different
+/// class) can call it too without either class reaching into the other.
+private fun extractReplyUuid(body: String?): String? =
+    body?.let { runCatching { JSONObject(it).optString("replyUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
+private fun extractThreadUuid(body: String?): String? =
+    body?.let { runCatching { JSONObject(it).optString("threadUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
 /// One stored message, trimmed to `message` v1's columns (PeelCore's
-/// `Storage+Migrations.swift`): no reply/thread/media fields yet, those
-/// come from a body a chat screen actually needs to render.
+/// `Storage+Migrations.swift`): no media fields yet, those come from a
+/// body a chat screen actually needs to render.
 data class MessageRow(
     val uuid: String?,
     val serverIndex: Long?,
@@ -83,6 +96,19 @@ data class MessageRow(
     /// A sent message's own delivery state (`PENDING`/`DELIVERED`/`FAILED`)
     /// — see `Storage.v4`. Always null for anything not `fromMe`.
     val status: String? = null,
+    /// What this message replies to, by uuid — `body`'s own `replyUuid`
+    /// field, a boost's too (it names what it boosts the same way a
+    /// reply names what it answers). PeelCore's typed `Message.replyUUID`
+    /// is always a real column, decoded once at write time; this port's
+    /// `body` stays raw JSON (nothing here decodes a whole message into
+    /// typed fields), so `replyUuid`/`threadUuid` are columns derived
+    /// from it once, in `Storage.insertMessages` — see `Storage.v6` — not
+    /// re-parsed out of JSON every time a reply, thread or boost needs
+    /// to know it, the way this port briefly did before v6.
+    val replyUuid: String? = null,
+    /// The thread this message belongs to, by its root's uuid — `body`'s
+    /// own `threadUuid` field, same derivation as `replyUuid` above.
+    val threadUuid: String? = null,
 )
 
 /// Everything Peel keeps on disk for one account: `coreState` (opaque
@@ -357,7 +383,10 @@ class Storage(context: Context, account: String = "default") {
         val rows = mutableListOf<MessageRow>()
         helper.readableDatabase.query(
             "message",
-            arrayOf("id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag", "paymentHash", "status"),
+            arrayOf(
+                "id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag",
+                "paymentHash", "status", "replyUuid", "threadUuid",
+            ),
             "chat = ?", arrayOf(chat), null, null, "timestamp ASC, id ASC",
         ).use { cursor ->
             while (cursor.moveToNext()) {
@@ -376,6 +405,8 @@ class Storage(context: Context, account: String = "default") {
                         tag = cursor.getString(10),
                         paymentHash = cursor.getString(11),
                         status = cursor.getString(12),
+                        replyUuid = cursor.getString(13),
+                        threadUuid = cursor.getString(14),
                     ),
                 )
             }
@@ -412,6 +443,15 @@ class Storage(context: Context, account: String = "default") {
                     put("tag", row.tag)
                     put("paymentHash", row.paymentHash)
                     put("status", row.status)
+                    // Derived from `body` here, once, at the one place
+                    // every message (sent or received) is written —
+                    // never from `row.replyUuid`/`threadUuid` directly,
+                    // since `body` is the actual source of truth and a
+                    // caller building a `MessageRow` by hand never sets
+                    // those two fields itself (`Engine.sendMessage`, say,
+                    // only ever sets `body`).
+                    put("replyUuid", extractReplyUuid(row.body))
+                    put("threadUuid", extractThreadUuid(row.body))
                 }
                 val inserted = db.insertWithOnConflict("message", null, values, SQLiteDatabase.CONFLICT_IGNORE)
                 if (inserted == -1L && row.uuid != null) {
@@ -533,18 +573,11 @@ class Storage(context: Context, account: String = "default") {
     /// yet (just key-exchanged, say) sorts last — SQLite treats `NULL` as
     /// lowest, which is what a `DESC` newest-first order wants here.
     ///
-    /// `type != 29` keeps a boost (PeelCore's `MessageType.boost`) out of
-    /// the unread count. PeelCore's own `countsAsUnreadSQL` only excludes
-    /// a boost that *doesn't* target one of this account's own messages —
-    /// a boost on your own message still counts there. This table has no
-    /// column for what a boost targets (it's `replyUuid` inside the
-    /// message's own JSON `body`, parsed in Kotlin, not SQL — see
-    /// `ConversationScreen.kt`'s `replyUuid`/`boostSummaries`), and
-    /// `json_extract` isn't reliably available on this app's minSdk 26,
-    /// so excluding every boost is the closest match SQL alone can do
-    /// here: it undercounts a boost on your own message, but doesn't
-    /// overcount every boost between other people the way no filter at
-    /// all did.
+    /// A boost only counts toward unread if it targets one of *this
+    /// account's own* messages (someone boosting a third party's message
+    /// is not news to you) — PeelCore's own `countsAsUnreadSQL` rule, one
+    /// correlated subquery now that `message.replyUuid` is a real column
+    /// (`Storage.v6`) rather than something buried in raw JSON `body`.
     fun conversations(): List<ConversationRow> {
         val rows = mutableListOf<ConversationRow>()
         helper.readableDatabase.rawQuery(
@@ -554,9 +587,12 @@ class Storage(context: Context, account: String = "default") {
                 (SELECT body FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
                 (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
                 (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
-                (SELECT COUNT(*) FROM message
-                    WHERE chat = c.pubkey AND fromMe = 0 AND type != 29
-                        AND serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)),
+                (SELECT COUNT(*) FROM message m
+                    WHERE m.chat = c.pubkey AND m.fromMe = 0
+                        AND m.serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)
+                        AND (m.type != 29 OR EXISTS (
+                            SELECT 1 FROM message t WHERE t.chat = c.pubkey AND t.uuid = m.replyUuid AND t.fromMe = 1
+                        ))),
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0)
             FROM contact c
             WHERE c.ready = 1
@@ -617,6 +653,7 @@ class Storage(context: Context, account: String = "default") {
             v3(db)
             v4(db)
             v5(db)
+            v6(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -627,6 +664,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 3) v3(db)
             if (oldVersion < 4) v4(db)
             if (oldVersion < 5) v5(db)
+            if (oldVersion < 6) v6(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -711,8 +749,45 @@ class Storage(context: Context, account: String = "default") {
             )
         }
 
+        // `message.replyUuid`/`threadUuid`: a reply's or boost's own
+        // target, and a reply's own thread, as real columns — both were
+        // only ever inside a message's raw JSON `body` before, re-parsed
+        // in Kotlin everywhere a reply, thread or boost needed to know
+        // it (`ConversationScreen.kt`'s own `replyUuid`/`threadUuid`
+        // functions, now reading the column instead). Lets a boost's
+        // unread check (`Storage.conversations()`) be one correlated SQL
+        // subquery, the way PeelCore's own typed `Message.replyUUID`
+        // always let `countsAsUnreadSQL` be, instead of a separate
+        // Kotlin pass over every unread boost.
+        //
+        // Backfills every row already stored under v2-v5: the column
+        // didn't exist for them to have been written into yet, so
+        // without this an account that restored before this version
+        // would have every old reply/thread/boost silently stop being
+        // found by uuid the moment this port started reading the column
+        // instead of the body.
+        private fun v6(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE message ADD COLUMN replyUuid TEXT")
+            db.execSQL("ALTER TABLE message ADD COLUMN threadUuid TEXT")
+            db.execSQL("CREATE INDEX message_replyUuid ON message (replyUuid)")
+            db.query("message", arrayOf("id", "body"), "body IS NOT NULL", null, null, null, null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(0)
+                    val body = cursor.getString(1)
+                    val replyUuid = extractReplyUuid(body)
+                    val threadUuid = extractThreadUuid(body)
+                    if (replyUuid != null || threadUuid != null) {
+                        db.execSQL(
+                            "UPDATE message SET replyUuid = ?, threadUuid = ? WHERE id = ?",
+                            arrayOf<Any?>(replyUuid, threadUuid, id),
+                        )
+                    }
+                }
+            }
+        }
+
         companion object {
-            const val VERSION = 5
+            const val VERSION = 6
         }
     }
 }

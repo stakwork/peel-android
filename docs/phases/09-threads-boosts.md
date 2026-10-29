@@ -74,12 +74,27 @@ triggers the collapse. `threadSummaries` is now called only when
 ## Decided
 
 - Both boosts and threads reuse the exact mechanism replies already
-  established (Phase 7): a message names another by `replyUuid` in its
-  own JSON body, looked up against whatever's already loaded in memory
-  — no new storage column, no new query, for either feature. A boost
-  is "a message whose type says boost, found by scanning what's
-  already loaded"; a thread is "a message whose body happens to also
-  carry `threadUuid`, grouped the same way."
+  established (Phase 7): a message names another by `replyUuid`. A
+  boost is "a message whose type says boost, naming what it boosts the
+  same field a reply uses"; a thread is "a message whose body also
+  carries `threadUuid`, grouped the same way."
+  **Update (2026-10-29):** this originally meant no new storage column
+  — `replyUuid`/`threadUuid` stayed inside each message's raw JSON
+  `body`, re-parsed in Kotlin (`ConversationScreen.kt`'s own
+  `replyUuid`/`threadUuid` functions) everywhere a reply, thread or
+  boost needed to know it. That held until the unread-count fix
+  ([phases/06-read-state.md](06-read-state.md)) needed to ask "does
+  this boost target one of my own messages" from *SQL*, which raw JSON
+  in a text column can't answer without `json_extract` (not reliable
+  at this app's minSdk 26). `message` now has real `replyUuid`/
+  `threadUuid` columns (`Storage.v6`), derived once at the one place
+  every message is written (`insertMessages`, from `body`, which stays
+  the source of truth) rather than re-parsed on every read — PeelCore's
+  own typed `Message.replyUUID` was always a real column for the same
+  reason. A migration backfills every row already stored before v6.
+  `ConversationScreen.kt`'s own `replyUuid`/`threadUuid` functions are
+  gone; every call site reads `row.replyUuid`/`row.threadUuid` directly
+  now.
 - The thread sheet is its own composable (`ThreadScreen`), not a mode
   of `ConversationScreen`'s own list — PeelCore's `ThreadSheet` is a
   separate sheet too, with its own composer always addressed at the

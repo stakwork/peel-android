@@ -244,7 +244,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         // active chat bumping to the bottom.
         val threads = remember(messages, isTribe) { if (isTribe) threadSummaries(messages) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
-            messages.filter { it.type != BOOST_MESSAGE_TYPE && threadUuid(it)?.let { root -> !threads.containsKey(root) } ?: true }
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
 
@@ -276,7 +276,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                     ((row.timestamp ?: 0L) - (previous.timestamp ?: 0L) > 5 * 60 * 1000L)
                 if (startsDay && row.timestamp != null) DayDivider(row.timestamp)
                 if (index == newMessageIndex) NewMessagesDivider()
-                val replyUuid = replyUuid(row)
+                val replyUuid = row.replyUuid
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
                 MessageRowView(
                     row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
@@ -361,7 +361,7 @@ private fun ThreadScreen(
 
     val root = messages.firstOrNull { it.uuid == threadRootUuid }
     val replies = remember(messages, threadRootUuid) {
-        messages.filter { threadUuid(it) == threadRootUuid }.sortedBy { it.timestamp ?: 0L }
+        messages.filter { it.threadUuid == threadRootUuid }.sortedBy { it.timestamp ?: 0L }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -497,14 +497,9 @@ private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("a
 private fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
-/// What `row` replies to, by uuid — `body`'s `replyUuid` field
-/// (`Engine.sendMessage`'s own `replyTo` parameter writes it; an incoming
-/// reply carries it the same way, PeelCore's `BodyFields.replyUuid`).
-private fun replyUuid(row: MessageRow): String? =
-    row.body?.let { runCatching { JSONObject(it).optString("replyUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
-
 /// A boost: a payment on another message, named the same way a reply
-/// names what it answers (`replyUuid`) — PeelCore's own `MessageType.boost`.
+/// names what it answers (`row.replyUuid`) — PeelCore's own
+/// `MessageType.boost`.
 private const val BOOST_MESSAGE_TYPE = 29
 
 private data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean)
@@ -518,19 +513,13 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
     val byTarget = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         if (row.type != BOOST_MESSAGE_TYPE) continue
-        val target = replyUuid(row) ?: continue
+        val target = row.replyUuid ?: continue
         byTarget.getOrPut(target) { mutableListOf() }.add(row)
     }
     return byTarget.mapValues { (_, boosts) ->
         BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: 0L }, boostedByMe = boosts.any { it.fromMe })
     }
 }
-
-/// `row`'s own `threadUuid`, the same way `replyUuid` is read — set by
-/// `Engine.sendMessage`'s `inThread` parameter, or carried the same way
-/// by an incoming message.
-private fun threadUuid(row: MessageRow): String? =
-    row.body?.let { runCatching { JSONObject(it).optString("threadUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
 
 /// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
 /// (`threadUuid ?? replyUuid ?? uuid`): a message already in a thread
@@ -539,7 +528,7 @@ private fun threadUuid(row: MessageRow): String? =
 /// why *every* reply ends up collapsed behind "N replies" once there's
 /// a second one — not a separate "make this a thread" action, the same
 /// way PeelCore's own `links(replyTo:inThread:in:)` works it out.
-private fun threadRoot(row: MessageRow): String = threadUuid(row) ?: replyUuid(row) ?: row.uuid ?: ""
+private fun threadRoot(row: MessageRow): String = row.threadUuid ?: row.replyUuid ?: row.uuid ?: ""
 
 private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Long?)
 
@@ -557,7 +546,7 @@ private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Lon
 private fun threadSummaries(messages: List<MessageRow>): Map<String, ThreadSummaryData> {
     val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
-        val root = threadUuid(row) ?: continue
+        val root = row.threadUuid ?: continue
         byRoot.getOrPut(root) { mutableListOf() }.add(row)
     }
     return byRoot.filterValues { it.size >= 2 }.mapValues { (_, replies) ->
