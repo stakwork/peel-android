@@ -15,6 +15,13 @@ const val ATTACHMENT_MESSAGE_TYPE = 6
 /// both need it.
 const val BOOST_MESSAGE_TYPE = 29
 
+/// A message of this type carries a call link — PeelCore's
+/// `MessageType.call`. `Engine.startCall` and `ConversationScreen`'s own
+/// call-card rendering both need it; a plain-text message can still be a
+/// call too (the Mac app's own convention, `CallLink.inMessage`'s own
+/// bare-link fallback), so this alone is not the whole check.
+const val CALL_MESSAGE_TYPE = 32
+
 /// What a one-tap boost sends before anyone has ever chosen their own
 /// amount, in msat — 10 sats, this port's own default (PeelCore's own
 /// `defaultBoostAmountMsat` is 100 sats; the user explicitly chose a

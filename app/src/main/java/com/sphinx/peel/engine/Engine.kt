@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -183,6 +184,40 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// persisted the same way so Profile's "Server" row survives a restart
     /// without a live connection. Null before the first successful connect.
     fun serverLabel(): String? = storage.value(Setting.SERVER)
+
+    /// This account's call server, `host[:port]` — PeelCore's own
+    /// `Engine.callServer()`/`configuredHost`: the one explicitly
+    /// recorded (`Setting.CALL_SERVER`, no settings screen writes this
+    /// yet), else the official apps' own `chat.sphinx.chat`, except when
+    /// connected to a local test server (loopback), which has none
+    /// unless configured — a local LSP has no matching call server by
+    /// default. Null, not an exception: callers (a call-link check, a
+    /// "Start a call" button) treat "no call server" as "calls are off
+    /// for this account", not a failure.
+    fun callServer(): String? {
+        storage.value(Setting.CALL_SERVER)?.let { return it }
+        val connected = storage.value(Setting.SERVER)?.let { ServerAddress.parse(it) } ?: return null
+        return if (ServerAddress.isLoopback(connected.host)) null else DEFAULT_CALL_SERVER
+    }
+
+    /// The engine's one connection to its call server, made again when the
+    /// link names a different one (the setting changed) — PeelCore's own
+    /// `callConnection(for:)`, trimmed: no `Failure.callOnAnotherServer`
+    /// check, since [link] only ever comes from [CallLink.inMessage]/
+    /// [CallLink.new], both of which already took `callServer()` as their
+    /// own `server` argument, so a mismatch can't reach here.
+    private var calls: CallServer? = null
+
+    /// Who is on `link`'s call, from the call server's presence feed, until
+    /// the collector stops — PeelCore's own `Engine.callPresence`.
+    fun callPresence(link: CallLink): Flow<CallPresence> {
+        val existing = calls
+        val server = if (existing != null && existing.host == link.server) existing else {
+            existing?.close()
+            CallServer(link.server).also { calls = it }
+        }
+        return server.presence(link.room)
+    }
 
     /// The publish half of `run`: whatever a result's `subscriptionTopics`,
     /// `registerTopic`/`registerPayload` and generic `topics`/`payloads`
@@ -457,6 +492,47 @@ class Engine(mnemonic: String, val storage: Storage) {
             uuid = sent?.uuid,
             serverIndex = null,
             type = BOOST_MESSAGE_TYPE,
+            chat = chat,
+            fromMe = true,
+            sender = null,
+            body = body,
+            msat = amountMsat,
+            timestamp = System.currentTimeMillis(),
+            tag = sent?.tag,
+            paymentHash = sent?.paymentHash,
+            status = "PENDING",
+        )
+        storage.insertMessages(listOf(row))
+        return row
+    }
+
+    /// Starts a call in a contact's chat or a tribe: a new room with a
+    /// random name on the call server, posted as a call message in the
+    /// `call::` form — PeelCore's own `Engine.startCall`. A tribe takes
+    /// only the 3-sat floor for it, never its own real per-message price
+    /// (`tribeMessageAmountMsat`'s own price+escrow) — PeelCore's own
+    /// comment on `startCall` is explicit about this: a call itself isn't
+    /// the thing the tribe charges for, the floor alone still applies.
+    /// Joining is the caller's — this round has no in-app call UI, so the
+    /// link is only ever handed off externally (an `Intent.ACTION_VIEW`),
+    /// same as `callServer()`'s own doc comment implies by returning a
+    /// plain string, not a connection.
+    suspend fun startCall(chat: String, isTribe: Boolean, audioOnly: Boolean): MessageRow {
+        check(transport != null) { "Not connected." }
+        val server = callServer() ?: error("No call server is configured for this account.")
+        val link = CallLink.new(server, audioOnly)
+        val amountMsat = if (isTribe) MESSAGE_FLOOR_MSAT else 0L
+        val body = JSONObject().apply { put("content", link.message) }.toString()
+        val myAlias = storage.value(Setting.ALIAS) ?: ""
+        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val result = run { time, stateBytes ->
+            coreSend(seed, time, chat, CALL_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
+        }
+        val sent = result.msgs.firstOrNull()
+        val row = MessageRow(
+            uuid = sent?.uuid,
+            serverIndex = null,
+            type = CALL_MESSAGE_TYPE,
             chat = chat,
             fromMe = true,
             sender = null,
@@ -888,7 +964,10 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// Stops whatever `start` has running — "Forget this account" needs
     /// this so a wiped `Storage` is never written to by a restore page
     /// still in flight.
-    fun cancel() = scope.cancel()
+    fun cancel() {
+        calls?.close()
+        scope.cancel()
+    }
 
     /// Resolves the broker from the public config and connects, then —
     /// only for an account restored from its words with nothing local yet
@@ -1189,6 +1268,10 @@ class Engine(mnemonic: String, val storage: Storage) {
     }
 
     companion object {
+        /// The official apps' own call server, same host as the main API —
+        /// PeelCore's own `Engine.defaultCallServer`.
+        private const val DEFAULT_CALL_SERVER = "chat.sphinx.chat"
+
         /// Bump whenever `backfillContactsIfNeeded`'s own logic changes in
         /// a way that fixes data an older version could have gotten
         /// wrong — this is the third such fix (see `Setting.CONTACTS_BACKFILLED`).

@@ -50,6 +50,7 @@ tasks.withType<Test>().configureEach {
 dependencies {
     implementation(project(":sphinxrs"))
     implementation(libs.hivemq.mqtt.client)
+    implementation(libs.okhttp)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

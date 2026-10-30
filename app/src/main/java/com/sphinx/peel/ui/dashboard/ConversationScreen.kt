@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Mic
@@ -54,6 +55,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -77,6 +79,9 @@ import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
 import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
+import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
+import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.MessageRow
@@ -282,6 +287,30 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         }
     }
 
+    // Starting a call hands off to an external app (a browser, or the
+    // official Sphinx app if installed) right away, the same as "Join"
+    // on a received call card does — this round has no in-app call UI
+    // of its own, so this is also this device's own only way to
+    // actually get onto the call it just started.
+    var startingCall by remember(chat) { mutableStateOf(false) }
+    fun startCall(audioOnly: Boolean) {
+        scope.launch {
+            startingCall = true
+            error = null
+            try {
+                val row = engine.startCall(chat, isTribe, audioOnly)
+                reload()
+                val server = engine.callServer()
+                val link = server?.let { CallLink.inMessage(previewContent(row), isCallType = true, server = it) }
+                link?.let { openExternally(context, it.url) }
+            } catch (e: Exception) {
+                error = e.message ?: "Could not start a call."
+            } finally {
+                startingCall = false
+            }
+        }
+    }
+
     val openRoot = openThreadRoot
     if (openRoot != null) {
         ThreadScreen(
@@ -313,6 +342,27 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             if (isAgent) {
                 Spacer(Modifier.width(8.dp))
                 AgentTag()
+            }
+            // Only when this account has a call server at all (`callServer()`'s
+            // own doc comment: null on a local test server, never configured) -
+            // on an account with none, calling is off, not merely unreachable.
+            if (engine.callServer() != null) {
+                var callMenuOpen by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { callMenuOpen = true }, enabled = !startingCall) {
+                        Icon(Icons.Filled.Call, contentDescription = "Start a call", tint = Theme.colors.text)
+                    }
+                    DropdownMenu(expanded = callMenuOpen, onDismissRequest = { callMenuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Start an audio call") },
+                            onClick = { callMenuOpen = false; startCall(audioOnly = true) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Start a video call") },
+                            onClick = { callMenuOpen = false; startCall(audioOnly = false) },
+                        )
+                    }
+                }
             }
         }
 
@@ -722,6 +772,18 @@ private fun senderDisplay(row: MessageRow, myAlias: String, isTribe: Boolean): T
 private fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
+/// Hands a call's link to whatever app the device has for it (a browser,
+/// or the official Sphinx app if it claims the link) — this round's own
+/// stand-in for an in-app call screen. A device with nothing that opens
+/// `https://` links at all is not something to crash over.
+private fun openExternally(context: android.content.Context, url: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: Exception) {
+        // Nothing sensible to do with no app willing to open it.
+    }
+}
+
 /// Whether `row` counts toward a thread at all — PeelCore's own
 /// `threadMessage` SQL filter (`type IN contentSQL AND noWords = 0`),
 /// used for both the 2+-threshold check and the list of replies a
@@ -855,6 +917,13 @@ private fun MessageRowView(
 ) {
     val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
     val content = previewContent(row)
+    // A call message (type 32), or - the Mac app's own convention, no
+    // `call::` wrapper there - plain text that is only a call link.
+    // `content` is already `previewContent`'s own unwrapped "content"
+    // field, exactly what `CallLink.inMessage` expects.
+    val callLink = remember(content, row.type) {
+        engine.callServer()?.let { CallLink.inMessage(content, isCallType = row.type == CALL_MESSAGE_TYPE, server = it) }
+    }
     // The device's own 12/24-hour setting, not a hardcoded format -
     // PeelCore's `Formatting.time` honors `Date.FormatStyle`'s locale
     // the same way; `SimpleDateFormat("HH:mm", ...)` ignored it outright.
@@ -905,7 +974,9 @@ private fun MessageRowView(
                 AttachmentView(row, engine, audioPlayer)
                 if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
             }
-            if (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE) {
+            if (callLink != null) {
+                CallBlock(callLink, engine)
+            } else if (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE) {
                 Text(
                     content,
                     style = MaterialTheme.typography.bodyMedium,
@@ -939,6 +1010,50 @@ private fun MessageRowView(
                 DropdownMenuItem(text = { Text("Boost") }, onClick = { menuOpen = false; onBoost() })
             }
         }
+    }
+}
+
+/// A call message: the call card's words, and Join through an external
+/// app — PeelCore's own `CallBlock`, trimmed: no "Open" (this round has
+/// no in-app call to reopen), so the button always reads "Join" and
+/// always hands off externally, whether or not this device is "on" the
+/// call in any sense this port can know about. The live participant
+/// count is new here, not something PeelCore's own card shows inline —
+/// a reasonable use for presence given there's no sidebar indicator or
+/// call banner to spend it on yet.
+@Composable
+private fun CallBlock(link: CallLink, engine: Engine) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var peopleHere by remember(link.room) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(link.room) {
+        engine.callPresence(link).collect { presence ->
+            peopleHere = (presence as? CallPresence.Live)?.people?.size
+        }
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Theme.colors.fieldFill)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (link.audioOnly) Icons.Filled.Call else Icons.Filled.Videocam,
+            contentDescription = null, tint = Theme.colors.secondaryText,
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+            val count = peopleHere
+            if (count != null && count > 0) {
+                Text(
+                    if (count == 1) "1 person here now" else "$count people here now",
+                    style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText,
+                )
+            }
+        }
+        TextButton(onClick = { openExternally(context, link.url) }) { Text("Join") }
     }
 }
 

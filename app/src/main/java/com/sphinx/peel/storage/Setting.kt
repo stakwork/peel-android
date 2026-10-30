@@ -65,4 +65,11 @@ enum class Setting(val key: String) {
     /// transient server hiccup never looks like "this account has no
     /// preferences file yet" and overwrites a real one.
     PREFERENCES_FILE_SEEN("preferencesFileSeen"),
+
+    /// This account's own call server, if ever explicitly configured —
+    /// PeelCore's own `Setting.callServer`. Unset on every account so
+    /// far (no settings screen writes it yet); `Engine.callServer()`
+    /// falls back to the official apps' own `chat.sphinx.chat` the same
+    /// way PeelCore's `configuredHost` does.
+    CALL_SERVER("callServer"),
 }

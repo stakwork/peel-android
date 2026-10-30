@@ -1,6 +1,6 @@
 # Peel for Android
 
-Last updated 2026-10-28. This is the architecture and the phase index, the
+Last updated 2026-10-30. This is the architecture and the phase index, the
 same role `peel`'s `docs/PLAN.md` plays for Mac and iPhone. Each phase has
 its own file under `docs/phases/` with what is done, what is open and what
 is decided; update it when you finish something, same rule as there.
@@ -172,6 +172,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 9 | Threads and boosts: collapsed "N replies" + a thread sheet, boost chips | built; see the file for what's open | [phases/09-threads-boosts.md](phases/09-threads-boosts.md) |
 | 10 | Search: the bottom bar's Search tab, filtering the chat list by name | built; see the file for what's open | [phases/10-search.md](phases/10-search.md) |
 | 11 | Profile and preferences sync: an editable name, the boost amount, synced via the memes-server preferences file | built; see the file for what's open | [phases/11-profile-preferences.md](phases/11-profile-preferences.md) |
+| 12 | Calls: call-link detection and validation, the call card, starting a call, the presence feed — no in-app join yet | built; see the file for what's open | [phases/12-calls.md](phases/12-calls.md) |
 
 ## Open questions
 
