@@ -11,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -35,16 +36,37 @@ sealed class CallPresence {
     fun people(): List<CallParticipant>? = (this as? Live)?.people
 }
 
-/// One account's call server: the presence feed (`/ws`), as the official
-/// apps use it (`GET /api/connection-details`, the ticket request, is not
-/// ported — this round has no in-app join, so nothing here ever needs a
-/// LiveKit token). Ported from PeelCore's `CallServer` actor, trimmed to
-/// presence alone. Not authenticated: the room name is the only secret.
+/// What a LiveKit client needs to join one call: the media server's address
+/// and an access token for the room. Lives only as long as one join —
+/// PeelCore's own `CallTicket`: never stored, logged, or shown (its own
+/// `toString`/`description` leaves `token` out, same reason).
+data class CallTicket(
+    val serverUrl: String,
+    val token: String,
+    val room: String,
+    val identity: String,
+    val participantName: String,
+    val expiresAtMs: Long,
+    val roomAdmin: Boolean,
+) {
+    override fun toString(): String =
+        "CallTicket($serverUrl, room $room, identity $identity, name $participantName, token not shown)"
+}
+
+/// One account's call server: the ticket request (`GET
+/// /api/connection-details`) and the presence feed (`/ws`), as the official
+/// apps use them. Ported from PeelCore's `CallServer` actor. Not
+/// authenticated: the room name is the only secret. The ticket request goes
+/// through the same `OkHttpClient` the presence socket uses — no cache, no
+/// cookies to worry about either (`OkHttpClient`'s own defaults have
+/// neither unless explicitly added, unlike `URLSession`'s own ephemeral-
+/// session requirement, which exists specifically to turn a default *on*
+/// that's already off here).
 ///
 /// Unlike the Swift actor (`URLSessionWebSocketTask`'s own explicit
 /// 30-second ping loop), OkHttp's own `pingInterval` does the keep-alive
-/// and the dead-connection detection in one place — nothing here re-sends
-/// pings by hand.
+/// and the dead-connection detection for the presence socket in one place —
+/// nothing here re-sends pings by hand.
 class CallServer(val host: String) {
     private val client = OkHttpClient.Builder()
         .pingInterval(30, TimeUnit.SECONDS)
@@ -64,6 +86,159 @@ class CallServer(val host: String) {
     private var failures = 0
     private var closed = false
     private val askingAgain = mutableSetOf<String>()
+
+    // MARK: - The ticket
+
+    sealed class TicketException(message: String) : Exception(message) {
+        object Unreachable : TicketException("the call server did not answer")
+        class Refused(val status: Int) : TicketException("the call server refused the call ticket (HTTP $status)")
+        object UnreadableReply : TicketException("the call server's reply was unreadable")
+        class MediaHostNotAllowed(val host: String?) :
+            TicketException("the call server named a media server Peel does not know (${host ?: "an unreadable address"})")
+        object MalformedToken : TicketException("the call server's token was unreadable")
+        object TokenForAnotherRoom : TicketException("the call server's token is for another room")
+        object TokenExpired : TicketException("the call server's token has already expired")
+    }
+
+    /// Asks for a token to join `link`'s room as `participantName`, with the
+    /// account's photo passed on — PeelCore's own `CallServer.ticket(for:
+    /// participantName:photoURL:)`.
+    suspend fun ticket(link: CallLink, participantName: String, photoUrl: String?): CallTicket {
+        val url = ticketUrl(link, participantName, photoUrl) ?: throw IllegalStateException("could not build the call ticket request")
+        val request = Request.Builder().url(url).header("Accept", "application/json").build()
+        val response = try {
+            withContext(Dispatchers.IO) { client.newCall(request).execute() }
+        } catch (e: Exception) {
+            throw TicketException.Unreachable
+        }
+        response.use {
+            if (!it.isSuccessful) throw TicketException.Refused(it.code)
+            val body = try {
+                it.body?.string()
+            } catch (e: Exception) {
+                null
+            } ?: throw TicketException.UnreadableReply
+            val json = try {
+                JSONObject(body)
+            } catch (e: Exception) {
+                throw TicketException.UnreadableReply
+            }
+            val serverUrlText = json.optString("serverUrl").takeIf { s -> s.isNotEmpty() } ?: throw TicketException.UnreadableReply
+            val participantToken = json.optString("participantToken").takeIf { s -> s.isNotEmpty() } ?: throw TicketException.UnreadableReply
+            return buildTicket(serverUrlText, participantToken, link.room, participantName)
+        }
+    }
+
+    /// `GET /api/connection-details` with every value percent-encoded to
+    /// unreserved characters, as the official apps' `urlEncode` does, so a
+    /// `+` arrives as `+` and never as a space.
+    private fun ticketUrl(link: CallLink, participantName: String, photoUrl: String?): String? {
+        val (scheme, callHost, port) = CallLink.baseURL(host) ?: return null
+        val authority = if (port == CallLink.defaultPort(scheme)) callHost else "$callHost:$port"
+        val items = mutableListOf("roomName=${CallLink.encode(link.room)}", "participantName=${CallLink.encode(participantName)}")
+        if (photoUrl != null) metadata(photoUrl)?.let { items.add("metadata=${CallLink.encode(it)}") }
+        link.callKey?.let { items.add("callKey=${CallLink.encode(it)}") }
+        link.hiveToken?.let { items.add("hiveToken=${CallLink.encode(it)}") }
+        return "$scheme://$authority/api/connection-details?${items.joinToString("&")}"
+    }
+
+    /// The LiveKit media servers each call server may name besides itself,
+    /// on port 443, by exact host, never a suffix (`*.livekit.cloud` would
+    /// admit any LiveKit tenant) — PeelCore's own `mediaHosts`. The official
+    /// apps' call server names `livekit.sphinx.chat`.
+    private val mediaHosts: Map<String, List<String>> = mapOf("chat.sphinx.chat" to listOf("livekit.sphinx.chat"))
+
+    /// The ticket in a reply, checked: the media server must be `wss://`
+    /// (or `https://`, read as it) on the call server's own host or one
+    /// recorded for it in [mediaHosts] (`ws://` only when the call server is
+    /// this device), and the token must be for `room` and not yet expired.
+    /// Its signature is the media server's to check.
+    internal fun buildTicket(serverUrlText: String, token: String, room: String, participantName: String, now: Long = System.currentTimeMillis()): CallTicket {
+        val serverUrl = mediaUrl(serverUrlText)
+        val claims = claimsOf(token)
+        if (claims.room != room) throw TicketException.TokenForAnotherRoom
+        val identity = claims.sub?.takeIf { isIdentity(it) } ?: throw TicketException.MalformedToken
+        val expMs = claims.expMs ?: throw TicketException.MalformedToken
+        if (expMs <= now) throw TicketException.TokenExpired
+        return CallTicket(serverUrl, token, room, identity, participantName, expMs, claims.roomAdmin)
+    }
+
+    internal fun mediaUrl(text: String): String {
+        if (text.toByteArray(Charsets.UTF_8).size > 2048) throw TicketException.MediaHostNotAllowed(null)
+        val uri = try {
+            java.net.URI(text)
+        } catch (e: Exception) {
+            throw TicketException.MediaHostNotAllowed(null)
+        }
+        val givenScheme = uri.scheme?.lowercase() ?: throw TicketException.MediaHostNotAllowed(null)
+        val mediaHost = uri.host?.lowercase() ?: throw TicketException.MediaHostNotAllowed(null)
+        if (uri.userInfo != null || uri.rawQuery != null || uri.fragment != null) throw TicketException.MediaHostNotAllowed(null)
+        // LiveKit reads `https://` as `wss://` and `http://` as `ws://`;
+        // the official call server has answered with `https://` since the
+        // same date PeelCore's own comment on this names.
+        val scheme = when (givenScheme) { "https" -> "wss"; "http" -> "ws"; else -> givenScheme }
+        val mediaPort = if (uri.port == -1) CallLink.defaultPort(if (scheme == "wss") "https" else "http") else uri.port
+        val named = endpoint(mediaHost, mediaPort, secure = scheme != "ws")
+        val (ownScheme, ownHost, ownPort) = CallLink.baseURL(host) ?: throw TicketException.MediaHostNotAllowed(null)
+        val loopback = ownScheme == "http"
+        val allowed = listOf(endpoint(ownHost, ownPort, secure = !loopback)) +
+            // Only the call server itself on its default port: not another one on the same host.
+            (if (!host.contains(':')) mediaHosts[ownHost] ?: emptyList() else emptyList()).map { endpoint(it, null, secure = true) }
+        val plainHostOrNull = named.takeIf { it.all { c -> c.isLetterOrDigit() || c in ".-:" } }
+        if (!(scheme == "wss" || (scheme == "ws" && loopback)) || named !in allowed) throw TicketException.MediaHostNotAllowed(plainHostOrNull)
+        val authority = if (mediaPort == CallLink.defaultPort(if (scheme == "wss") "https" else "http")) mediaHost else "$mediaHost:$mediaPort"
+        return "$scheme://$authority"
+    }
+
+    /// `host:port`, with the scheme's default port written out.
+    private fun endpoint(endpointHost: String, port: Int?, secure: Boolean): String {
+        val p = port ?: (if (secure) 443 else 80)
+        return if (endpointHost.contains(':') && port == null) endpointHost else "$endpointHost:$p"
+    }
+
+    internal data class Claims(val sub: String?, val expMs: Long?, val room: String?, val roomAdmin: Boolean)
+
+    /// The parts of a LiveKit token this port reads, decoded without
+    /// checking the signature (Peel has no key) — a bare base64url JWT
+    /// payload decode, not a general JWT library: this account did not
+    /// issue the token, the call server did, and nothing here trusts it
+    /// for anything beyond "which room, whose identity, until when."
+    internal fun claimsOf(token: String): Claims {
+        val parts = token.split(".")
+        if (parts.size < 2) throw TicketException.MalformedToken
+        val json = try {
+            JSONObject(String(base64UrlDecode(parts[1]), Charsets.UTF_8))
+        } catch (e: Exception) {
+            throw TicketException.MalformedToken
+        }
+        val sub = json.optString("sub").takeIf { it.isNotEmpty() }
+        val exp = if (json.has("exp")) json.optDouble("exp") else null
+        val expMs = exp?.let { (it * 1000).toLong() }
+        val video = json.optJSONObject("video")
+        val room = video?.optString("room")?.takeIf { it.isNotEmpty() }
+        val roomAdmin = video?.optBoolean("roomAdmin", false) ?: false
+        return Claims(sub, expMs, room, roomAdmin)
+    }
+
+    private fun base64UrlDecode(text: String): ByteArray {
+        val padded = text.replace('-', '+').replace('_', '/').let { it + "=".repeat((4 - it.length % 4) % 4) }
+        return java.util.Base64.getDecoder().decode(padded)
+    }
+
+    /// An identity is matched exactly (a leave names it), so one with a
+    /// control character is refused rather than cleaned.
+    private fun isIdentity(identity: String): Boolean =
+        identity.length in 1..256 && identity == identity.filter { !it.isISOControl() }
+
+    /// `{"profilePictureUrl":"<url>"}`, the only metadata Peel sends (no
+    /// pubkey: others could read it but not check it).
+    private fun metadata(photoUrl: String): String? {
+        val json = JSONObject()
+        json.put("profilePictureUrl", photoUrl)
+        return json.toString()
+    }
+
+    // MARK: - Presence
 
     /// Who is on the call in `room`, now and as it changes, starting with
     /// [CallPresence.Unknown]. The first collector for a room subscribes on
@@ -305,6 +480,27 @@ class CallServer(val host: String) {
             val rawAvatar = fields.optString("avatarUrl", "").takeIf { it.isNotEmpty() }
             val avatarUrl = rawAvatar?.takeIf { it.length <= 2048 && isPublicHttps(it) }
             return CallParticipant(identity, nickname, avatarUrl)
+        }
+
+        /// Someone in the LiveKit room itself, from the name and metadata
+        /// (`{"profilePictureUrl":…}`) they joined with — PeelCore's own
+        /// `CallParticipant.init(identity:name:metadata:)`: the exact same
+        /// sanitizing [participant] already does for the presence feed,
+        /// reused rather than re-implemented, so a name is trimmed/control-
+        /// stripped/length-capped and a photo is public-https-checked the
+        /// same way regardless of which of the two feeds it arrived on.
+        fun fromLiveKitRoom(identity: String, name: String?, metadata: String?): CallParticipant? {
+            val fields = JSONObject().put("identity", identity)
+            if (name != null) fields.put("nickname", name)
+            if (metadata != null && metadata.toByteArray(Charsets.UTF_8).size <= 4096) {
+                try {
+                    JSONObject(metadata).optString("profilePictureUrl").takeIf { it.isNotEmpty() }
+                        ?.let { fields.put("avatarUrl", it) }
+                } catch (e: Exception) {
+                    // Not JSON, or not an object: no photo, same as none sent.
+                }
+            }
+            return participant(fields)
         }
 
         /// An identity is matched exactly (a leave names it), so one with a

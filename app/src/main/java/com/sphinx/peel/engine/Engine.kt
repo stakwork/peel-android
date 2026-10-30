@@ -208,15 +208,35 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// own `server` argument, so a mismatch can't reach here.
     private var calls: CallServer? = null
 
+    /// The engine's one connection to its call server, made again when
+    /// [link] names a different one (the setting changed) — PeelCore's own
+    /// `callConnection(for:)`, trimmed: no `Failure.callOnAnotherServer`
+    /// check, since [link] only ever comes from [CallLink.inMessage]/
+    /// [CallLink.new], both of which already took `callServer()` as their
+    /// own `server` argument, so a mismatch can't reach here.
+    private fun callConnection(link: CallLink): CallServer {
+        val existing = calls
+        if (existing != null && existing.host == link.server) return existing
+        existing?.close()
+        return CallServer(link.server).also { calls = it }
+    }
+
     /// Who is on `link`'s call, from the call server's presence feed, until
     /// the collector stops — PeelCore's own `Engine.callPresence`.
-    fun callPresence(link: CallLink): Flow<CallPresence> {
-        val existing = calls
-        val server = if (existing != null && existing.host == link.server) existing else {
-            existing?.close()
-            CallServer(link.server).also { calls = it }
-        }
-        return server.presence(link.room)
+    fun callPresence(link: CallLink): Flow<CallPresence> = callConnection(link).presence(link.room)
+
+    /// A ticket to join `link`'s call: the LiveKit server and a token, asked
+    /// of this account's call server under this account's own name and
+    /// photo — PeelCore's own `Engine.callTicket(for:in:)`, trimmed: no
+    /// tribe-specific sent-alias/sent-photo resolution (nothing else this
+    /// port sends uses one either — `sendMessage`/`sendBoost`/`startCall`
+    /// all post under the plain account alias, tribe or not), just the same
+    /// "a blank name joins as 'Peel user', not the tribes registry's own
+    /// 'Unknown'" fallback PeelCore's own version keeps regardless.
+    suspend fun callTicket(link: CallLink): CallTicket {
+        val alias = storage.value(Setting.ALIAS)?.trim()?.takeIf { it.isNotEmpty() } ?: "Peel user"
+        val photo = storage.value(Setting.PHOTO_URL)?.takeIf { it.startsWith("https://") }
+        return callConnection(link).ticket(link, alias, photo)
     }
 
     /// The publish half of `run`: whatever a result's `subscriptionTopics`,

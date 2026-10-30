@@ -6,6 +6,11 @@
          recording, requested at runtime, same as the system picker and
          camera already needed no manifest-time grant beyond this. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Calls (CallSession): the camera for a video call, requested at
+         runtime, same as the mic above — RECORD_AUDIO already covers a
+         call's own microphone, this is the one call-specific addition. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="false"

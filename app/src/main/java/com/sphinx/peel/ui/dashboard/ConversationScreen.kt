@@ -90,6 +90,7 @@ import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AudioPlayer
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.PeelLogo
+import com.sphinx.peel.ui.call.CallScreen
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.components.formatDuration
 import com.sphinx.peel.ui.components.prepareImageForSending
@@ -118,6 +119,13 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
     var draft by remember(chat) { mutableStateOf("") }
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
     var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
+    // The call this device is on, and whether it started with the camera
+    // requested on — set by either a Join (CallBlock) or a Start (the
+    // header menu), read by the CallScreen early-return below. Null means
+    // this screen shows its ordinary content; replacing the whole screen
+    // with CallScreen is the same pattern `openThreadRoot` already uses
+    // for ThreadScreen.
+    var activeCall by remember(chat) { mutableStateOf<Pair<CallLink, Boolean>?>(null) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
@@ -287,11 +295,8 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         }
     }
 
-    // Starting a call hands off to an external app (a browser, or the
-    // official Sphinx app if installed) right away, the same as "Join"
-    // on a received call card does — this round has no in-app call UI
-    // of its own, so this is also this device's own only way to
-    // actually get onto the call it just started.
+    // Starts a call, posts its message, then joins it in-app — CallScreen,
+    // replacing this screen's content, the same way the thread sheet does.
     var startingCall by remember(chat) { mutableStateOf(false) }
     fun startCall(audioOnly: Boolean) {
         scope.launch {
@@ -302,13 +307,23 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                 reload()
                 val server = engine.callServer()
                 val link = server?.let { CallLink.inMessage(previewContent(row), isCallType = true, server = it) }
-                link?.let { openExternally(context, it.url) }
+                if (link != null) activeCall = link to !audioOnly else error = "Could not start a call."
             } catch (e: Exception) {
                 error = e.message ?: "Could not start a call."
             } finally {
                 startingCall = false
             }
         }
+    }
+
+    val call = activeCall
+    if (call != null) {
+        val (callLink, callCamera) = call
+        CallScreen(
+            engine = engine, chat = chat, title = title, link = callLink, camera = callCamera,
+            onBack = { activeCall = null },
+        )
+        return
     }
 
     val openRoot = openThreadRoot
@@ -318,6 +333,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             threadRootUuid = openRoot, messages = messages,
             onBack = { openThreadRoot = null },
             onSent = { scope.launch { reload() } },
+            onJoinCall = { link -> activeCall = link to false },
         )
         return
     }
@@ -429,6 +445,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                     onOpenThread = { row.uuid?.let { openThreadRoot = it } },
                     onReply = { replyTo = row },
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
+                    onJoinCall = { link -> activeCall = link to false },
                 )
             }
         }
@@ -505,6 +522,7 @@ private fun ThreadScreen(
     messages: List<MessageRow>,
     onBack: () -> Unit,
     onSent: () -> Unit,
+    onJoinCall: (CallLink) -> Unit,
 ) {
     var draft by remember(threadRootUuid) { mutableStateOf("") }
     var error by remember(threadRootUuid) { mutableStateOf<String?>(null) }
@@ -663,6 +681,7 @@ private fun ThreadScreen(
                         replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                         boosts = rootBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
                         onBoost = { sendBoost(root) }.takeIf { canBoost(root, rootBoosts) },
+                        onJoinCall = onJoinCall,
                     )
                     HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                 }
@@ -685,6 +704,7 @@ private fun ThreadScreen(
                     replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
+                    onJoinCall = onJoinCall,
                 )
             }
         }
@@ -771,18 +791,6 @@ private fun senderDisplay(row: MessageRow, myAlias: String, isTribe: Boolean): T
 /// `Engine.sendMessage` writes, and the one `mapMessage` stores as is.
 private fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
-
-/// Hands a call's link to whatever app the device has for it (a browser,
-/// or the official Sphinx app if it claims the link) — this round's own
-/// stand-in for an in-app call screen. A device with nothing that opens
-/// `https://` links at all is not something to crash over.
-private fun openExternally(context: android.content.Context, url: String) {
-    try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    } catch (e: Exception) {
-        // Nothing sensible to do with no app willing to open it.
-    }
-}
 
 /// Whether `row` counts toward a thread at all — PeelCore's own
 /// `threadMessage` SQL filter (`type IN contentSQL AND noWords = 0`),
@@ -914,6 +922,7 @@ private fun MessageRowView(
     onOpenThread: () -> Unit,
     onReply: () -> Unit,
     onBoost: (() -> Unit)? = null,
+    onJoinCall: (CallLink) -> Unit = {},
 ) {
     val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
     val content = previewContent(row)
@@ -975,7 +984,7 @@ private fun MessageRowView(
                 if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
             }
             if (callLink != null) {
-                CallBlock(callLink, engine)
+                CallBlock(callLink, engine, onJoinCall)
             } else if (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE) {
                 Text(
                     content,
@@ -1013,17 +1022,17 @@ private fun MessageRowView(
     }
 }
 
-/// A call message: the call card's words, and Join through an external
-/// app — PeelCore's own `CallBlock`, trimmed: no "Open" (this round has
-/// no in-app call to reopen), so the button always reads "Join" and
-/// always hands off externally, whether or not this device is "on" the
-/// call in any sense this port can know about. The live participant
-/// count is new here, not something PeelCore's own card shows inline —
-/// a reasonable use for presence given there's no sidebar indicator or
-/// call banner to spend it on yet.
+/// A call message: the call card's words, and Join through CallScreen —
+/// PeelCore's own `CallBlock`, trimmed: no "Open" in place of "Join" (this
+/// screen is fully replaced by CallScreen while you're on a call, so its
+/// own call card is never visible to ask that of in the first place — see
+/// `CallScreen`'s own doc comment on why there's no persistent background
+/// call yet to need that distinction for). The live participant count is
+/// new here, not something PeelCore's own card shows inline — a
+/// reasonable use for presence given there's no sidebar indicator or call
+/// banner to spend it on yet.
 @Composable
-private fun CallBlock(link: CallLink, engine: Engine) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> Unit) {
     var peopleHere by remember(link.room) { mutableStateOf<Int?>(null) }
     LaunchedEffect(link.room) {
         engine.callPresence(link).collect { presence ->
@@ -1053,7 +1062,7 @@ private fun CallBlock(link: CallLink, engine: Engine) {
                 )
             }
         }
-        TextButton(onClick = { openExternally(context, link.url) }) { Text("Join") }
+        TextButton(onClick = { onJoinCall(link) }) { Text("Join") }
     }
 }
 

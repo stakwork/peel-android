@@ -144,7 +144,10 @@ data class CallLink(
         private fun isAlphanumeric(c: Char): Boolean = c in '0'..'9' || c in 'A'..'Z' || c in 'a'..'z'
 
         /// Unreserved characters only, so `+`, `/` and `=` are always escaped.
-        private fun encode(value: String): String = buildString {
+        /// Visibility relaxed to `internal` (from `private`) so `CallServer`'s
+        /// own ticket request — the same account's call server, the same
+        /// percent-encoding rules — can reuse this rather than a second copy.
+        internal fun encode(value: String): String = buildString {
             for (byte in value.toByteArray(Charsets.UTF_8)) {
                 val unsigned = byte.toInt() and 0xFF
                 val c = unsigned.toChar()
@@ -179,14 +182,16 @@ data class CallLink(
             }
         }
 
-        private fun defaultPort(scheme: String): Int = if (scheme == "https") 443 else 80
+        internal fun defaultPort(scheme: String): Int = if (scheme == "https") 443 else 80
 
         private fun hasDefaultPort(scheme: String, port: Int): Boolean = port == defaultPort(scheme)
 
         /// `name[:port]` and nothing else, so a link cannot smuggle a path or
         /// credentials; http for this device, https for everything else.
-        /// Null for anything that is not a plain host.
-        private fun baseURL(server: String): Triple<String, String, Int>? {
+        /// Null for anything that is not a plain host. `internal`, same
+        /// reason as [encode]: `CallServer`'s own ticket request resolves
+        /// the call server's base URL the exact same way a link does.
+        internal fun baseURL(server: String): Triple<String, String, Int>? {
             if (server.isEmpty() || !server.all { isAlphanumeric(it) || it in ".-:" }) return null
             val colon = server.indexOf(':')
             val host = (if (colon >= 0) server.substring(0, colon) else server).lowercase()

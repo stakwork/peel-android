@@ -1,5 +1,12 @@
 # Phase 12 — Calls
 
+**Superseded the same day:** everything below describes this phase as
+first shipped — link detection, the call card, presence, external
+hand-off. [Phase 13](13-livekit-calls.md), written right after, replaced
+the external hand-off with a real in-app join; this file is kept as the
+record of that first, deliberately smaller round and why it was scoped
+that way, not as the current behavior of "Join"/"Start a call".
+
 ## Status (2026-10-30)
 
 **Built, scoped deliberately:** call messages and presence, nothing
@@ -53,12 +60,13 @@ a manual 30-second ping loop for, in one line.
 
 **Open:**
 
-- No in-app join — the LiveKit SDK, a real audio/video room UI
-  (mute/camera/leave), is the single largest remaining piece. Starting
-  or joining a call still works for everyone *else* on it; this
-  device's own user leaves Peel to actually be on one.
+- **In-app join is built — see [phases/13-livekit-calls.md](13-livekit-calls.md).**
+  `CallBlock`'s Join and the header's Start both now bring up a real
+  call screen (LiveKit, tiles, mic/camera) in place of the external
+  hand-off this phase shipped with.
 - No screen share, no in-call chat (`CallChat.swift`'s own side-panel
-  messages during a call) — both are in-app-join features, same reason.
+  messages during a call) — neither is in Phase 13 either, see that
+  file's own "Open".
 - No Hive-originated calls (Stadeum's "call with Jamie") — no Hive/
   Workspaces integration exists on this port at all yet.
 - No sidebar "live call" indicator (PeelCore's own `WatchedCall`,

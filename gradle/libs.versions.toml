@@ -16,6 +16,12 @@ coil = "3.0.4"
 # (CallServer.kt) — java.net has no WebSocket client on this minSdk,
 # and this is the one already on the classpath, not a second one.
 okhttp = "4.12.0"
+# The real in-app call (CallSession.kt) — peel's own iPhone/Mac apps are
+# on client-sdk-swift 2.10.2; this is the Android SDK's own latest at
+# the time this was added (2026-10-30), not a matched pair — the two
+# SDKs version independently, same as any two platforms' native
+# LiveKit clients talking to the same room.
+livekit = "2.29.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -37,6 +43,7 @@ hivemq-mqtt-client = { group = "com.hivemq", name = "hivemq-mqtt-client", versio
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+livekit-android = { group = "io.livekit", name = "livekit-android", version.ref = "livekit" }
 
 [plugins]
 # AGP 9+ compiles Kotlin itself; no org.jetbrains.kotlin.android plugin.
