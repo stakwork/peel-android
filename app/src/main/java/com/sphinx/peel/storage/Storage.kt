@@ -6,6 +6,15 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 
+/// `engine/Attachment.kt`'s own `ATTACHMENT_MESSAGE_TYPE`/
+/// `DELETE_MESSAGE_TYPE`, copied as plain literals rather than imported —
+/// `Engine` already depends on `Storage`, so importing the other
+/// direction here would make the two packages depend on each other.
+/// `Storage.applyDeletes` is the one place in this file that needs to
+/// know a message's type by its number at all.
+private const val attachmentMessageType = 6
+private const val deleteMessageType = 17
+
 /// One contact as `message`/`contact` know it: a pubkey, and whatever name
 /// and photo its own messages have revealed so far (names and photos are
 /// not core state — PeelCore's `contact` table comment says the same).
@@ -81,6 +90,15 @@ private fun extractReplyUuid(body: String?): String? =
 private fun extractThreadUuid(body: String?): String? =
     body?.let { runCatching { JSONObject(it).optString("threadUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
 
+/// A row's own claimed sender alias, from its raw `sender` JSON — used
+/// only by `Storage.applyDeletes`'s own authorization check (matching a
+/// tribe delete's sender against its target's, the same way
+/// `ConversationScreen.kt`'s own `senderAlias` does for display; kept as
+/// a separate one-line copy here rather than a cross-layer import, since
+/// storage has no reason to depend on a UI file).
+private fun aliasOf(senderJson: String?): String? =
+    senderJson?.let { runCatching { JSONObject(it).optString("alias") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
 /// One stored message, trimmed to `message` v1's columns (PeelCore's
 /// `Storage+Migrations.swift`): no media fields yet, those come from a
 /// body a chat screen actually needs to render.
@@ -117,6 +135,11 @@ data class MessageRow(
     /// The thread this message belongs to, by its root's uuid — `body`'s
     /// own `threadUuid` field, same derivation as `replyUuid` above.
     val threadUuid: String? = null,
+    /// Deleted for everyone — PeelCore's own `Message.deleted`, set here
+    /// only by `insertMessages`'s own apply-on-receipt step (a type-17
+    /// message naming this one), never by a caller building a row by
+    /// hand. `body` is cleared alongside it (`Storage.v8`).
+    val deleted: Boolean = false,
 )
 
 /// Everything Peel keeps on disk for one account: `coreState` (opaque
@@ -393,7 +416,7 @@ class Storage(context: Context, account: String = "default") {
             "message",
             arrayOf(
                 "id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag",
-                "paymentHash", "status", "replyUuid", "threadUuid",
+                "paymentHash", "status", "replyUuid", "threadUuid", "deleted",
             ),
             "chat = ?", arrayOf(chat), null, null, "timestamp ASC, id ASC",
         ).use { cursor ->
@@ -415,6 +438,7 @@ class Storage(context: Context, account: String = "default") {
                         status = cursor.getString(12),
                         replyUuid = cursor.getString(13),
                         threadUuid = cursor.getString(14),
+                        deleted = cursor.getInt(15) != 0,
                     ),
                 )
             }
@@ -469,9 +493,73 @@ class Storage(context: Context, account: String = "default") {
                     )
                 }
             }
+            applyDeletes(db, rows)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
+        }
+    }
+
+    /// A type-17 message in this batch deletes the message it names by
+    /// `replyUuid`, for everyone — PeelCore's own `applyDelete`, ported
+    /// with its exact authorization rule minus the one piece this port
+    /// cannot check (a tribe *owner* deleting someone else's message: no
+    /// membership/role table exists here yet, `docs/phases/14-message-
+    /// menu.md`'s own "Open"). Re-reads each delete row's own *stored*
+    /// state rather than trusting the `MessageRow` passed in, because the
+    /// same uuid may have just been inserted fresh (a received delete) or
+    /// resolved a conflict (this device's own delete, finally echoed back
+    /// — `insertMessages`'s own `status` flip above, in the very same
+    /// transaction, already landed by the time this runs).
+    ///
+    /// A delete still `fromMe` and `PENDING` (not yet confirmed the
+    /// server has it) is skipped — PeelCore's own comment on this is
+    /// exact: "a delete that fails to send leaves the message as
+    /// everyone else still sees it." The next batch that confirms it
+    /// (an echo, or `markSendStatus`) applies it then.
+    private fun applyDeletes(db: SQLiteDatabase, rows: List<MessageRow>) {
+        val deleteUuids = rows.filter { it.type == deleteMessageType }.mapNotNull { it.uuid }.distinct()
+        for (deleteUuid in deleteUuids) {
+            db.query(
+                "message", arrayOf("chat", "fromMe", "sender", "status", "replyUuid"),
+                "uuid = ? AND type = ?", arrayOf(deleteUuid, deleteMessageType.toString()), null, null, null,
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) return@use
+                val chat = cursor.getString(0)
+                val deleteFromMe = cursor.getInt(1) != 0
+                val deleteSender = cursor.getString(2)
+                val status = cursor.getString(3)
+                val replyUuid = cursor.getString(4) ?: return@use
+                if (deleteFromMe && status == "PENDING") return@use
+
+                db.query(
+                    "message", arrayOf("id", "type", "fromMe", "sender", "deleted"),
+                    "chat = ? AND uuid = ?", arrayOf(chat, replyUuid), null, null, null,
+                ).use { target ->
+                    if (!target.moveToFirst()) return@use
+                    val type = target.getInt(1)
+                    if (type != 0 && type != attachmentMessageType) return@use
+                    if (target.getInt(4) != 0) return@use // already deleted
+                    val targetFromMe = target.getInt(2) != 0
+                    val targetSender = target.getString(3)
+                    val isTribe = db.query(
+                        "contact", arrayOf("isTribe"), "pubkey = ?", arrayOf(chat), null, null, null,
+                    ).use { c -> c.moveToFirst() && c.getInt(0) != 0 }
+                    val allowed = if (deleteFromMe) {
+                        targetFromMe
+                    } else if (isTribe) {
+                        val deleterAlias = aliasOf(deleteSender)
+                        !targetFromMe && deleterAlias != null && deleterAlias == aliasOf(targetSender)
+                    } else {
+                        !targetFromMe
+                    }
+                    if (!allowed) return@use
+                    db.execSQL(
+                        "UPDATE message SET deleted = 1, body = NULL WHERE id = ?",
+                        arrayOf(target.getLong(0)),
+                    )
+                }
+            }
         }
     }
 
@@ -680,6 +768,7 @@ class Storage(context: Context, account: String = "default") {
             v5(db)
             v6(db)
             v7(db)
+            v8(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -692,6 +781,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 5) v5(db)
             if (oldVersion < 6) v6(db)
             if (oldVersion < 7) v7(db)
+            if (oldVersion < 8) v8(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -829,8 +919,24 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("ALTER TABLE contact ADD COLUMN escrowMsat INTEGER NOT NULL DEFAULT 0")
         }
 
+        // `message.deleted`: set only by `insertMessages`'s own
+        // apply-on-receipt step (`applyDeletes`), never by a caller
+        // building a row by hand — PeelCore's own `Message.deleted`,
+        // trimmed to the one column this port's simpler, no-separate-
+        // content-columns `message` table needs (PeelCore's own
+        // `applyDelete` also clears `content`/`mediaType`/`fileName`/
+        // `fileSize`/`mentionsMe`; this port's equivalent is just
+        // clearing `body`, the one column any of those would have come
+        // from). No backfill needed: a fresh column defaulting to 0 is
+        // already correct for every row stored before this version —
+        // none of them could have been deleted by a mechanism that did
+        // not exist yet.
+        private fun v8(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE message ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+        }
+
         companion object {
-            const val VERSION = 7
+            const val VERSION = 8
         }
     }
 }

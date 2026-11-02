@@ -567,6 +567,50 @@ class Engine(mnemonic: String, val storage: Storage) {
         return row
     }
 
+    /// Deletes a message for everyone: a type 17 message naming it in
+    /// `replyUuid` — PeelCore's own `Engine.deleteMessage(id:)`. Whether
+    /// this account may is the caller's own job (`canDelete` in
+    /// `ConversationScreen.kt` — the same shape `canBoost` already has,
+    /// checked before the menu even offers it, not re-checked here); a
+    /// tribe delete pays the tribe's own price like any ordinary message
+    /// (never the no-floor boost-style add-on), PeelCore's own comment on
+    /// `deleteMessage` is explicit about this. The row is only actually
+    /// hidden once `Storage.insertMessages`'s own apply-on-receipt step
+    /// sees this echoed back confirmed — the same "wait for the server to
+    /// have it" rule `startCall`'s own call-site doesn't need but a
+    /// delete, which other devices and other people's clients must also
+    /// come to agree on, does.
+    suspend fun deleteMessage(chat: String, targetUuid: String, isTribe: Boolean): MessageRow {
+        check(transport != null) { "Not connected." }
+        val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
+        val body = JSONObject().apply {
+            put("content", "")
+            put("replyUuid", targetUuid)
+        }.toString()
+        val myAlias = storage.value(Setting.ALIAS) ?: ""
+        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val result = run { time, stateBytes ->
+            coreSend(seed, time, chat, DELETE_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
+        }
+        val sent = result.msgs.firstOrNull()
+        val row = MessageRow(
+            uuid = sent?.uuid,
+            serverIndex = null,
+            type = DELETE_MESSAGE_TYPE,
+            chat = chat,
+            fromMe = true,
+            sender = null,
+            body = body,
+            msat = amountMsat,
+            timestamp = System.currentTimeMillis(),
+            tag = sent?.tag,
+            paymentHash = sent?.paymentHash,
+            status = "PENDING",
+        )
+        storage.insertMessages(listOf(row))
+        return row
+    }
+
     /// This account's own one-tap boost amount, in msat — whatever was
     /// last chosen here or taken from another device
     /// (`syncBoostAmount`), else `BOOST_AMOUNT_MSAT`'s own default.

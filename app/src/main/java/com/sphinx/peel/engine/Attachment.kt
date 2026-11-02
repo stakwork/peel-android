@@ -22,6 +22,12 @@ const val BOOST_MESSAGE_TYPE = 29
 /// bare-link fallback), so this alone is not the whole check.
 const val CALL_MESSAGE_TYPE = 32
 
+/// A message of this type deletes another, named by `replyUuid` the same
+/// way a reply or a boost names its own target — PeelCore's own
+/// `MessageType.delete`. `Engine.deleteMessage` and
+/// `Storage.insertMessages`'s own apply-on-receipt step both need it.
+const val DELETE_MESSAGE_TYPE = 17
+
 /// What a one-tap boost sends before anyone has ever chosen their own
 /// amount, in msat — 10 sats, this port's own default (PeelCore's own
 /// `defaultBoostAmountMsat` is 100 sats; the user explicitly chose a

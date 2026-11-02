@@ -295,6 +295,19 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         }
     }
 
+    fun deleteMessage(target: MessageRow) {
+        val targetUuid = target.uuid ?: return
+        scope.launch {
+            error = null
+            try {
+                engine.deleteMessage(chat, targetUuid, isTribe)
+                reload()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not delete that message."
+            }
+        }
+    }
+
     // Starts a call, posts its message, then joins it in-app — CallScreen,
     // replacing this screen's content, the same way the thread sheet does.
     var startingCall by remember(chat) { mutableStateOf(false) }
@@ -446,6 +459,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                     onReply = { replyTo = row },
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                     onJoinCall = { link -> activeCall = link to false },
+                    onDelete = { deleteMessage(row) },
                 )
             }
         }
@@ -651,6 +665,19 @@ private fun ThreadScreen(
         }
     }
 
+    fun deleteMessage(target: MessageRow) {
+        val targetUuid = target.uuid ?: return
+        scope.launch {
+            error = null
+            try {
+                engine.deleteMessage(chat, targetUuid, isTribe)
+                onSent()
+            } catch (e: Exception) {
+                error = e.message ?: "Could not delete that message."
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -676,12 +703,19 @@ private fun ThreadScreen(
             if (root != null) {
                 item(key = "root") {
                     val rootBoosts = root.uuid?.let { boosts[it] }
+                    // `threadSummary` here is only ever read by `canDelete`
+                    // for its own `replyCount` — a real one (participant
+                    // avatars, "N replies" text) would be this root's own
+                    // collapsed row in the *main* list, not itself, inside
+                    // the thread sheet that's already open because of it.
                     MessageRowView(
                         row = root, startsRun = true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                         replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
-                        boosts = rootBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
+                        boosts = rootBoosts, threadSummary = null, deleteReplyCount = replies.size,
+                        onOpenThread = {}, onReply = {},
                         onBoost = { sendBoost(root) }.takeIf { canBoost(root, rootBoosts) },
                         onJoinCall = onJoinCall,
+                        onDelete = { deleteMessage(root) },
                     )
                     HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                 }
@@ -705,6 +739,7 @@ private fun ThreadScreen(
                     boosts = rowBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                     onJoinCall = onJoinCall,
+                    onDelete = { deleteMessage(row) },
                 )
             }
         }
@@ -804,7 +839,7 @@ private fun previewContent(row: MessageRow): String =
 /// uses, plus a text reply must actually have words (an attachment
 /// always counts, caption or not).
 private fun isThreadContent(row: MessageRow): Boolean {
-    if (row.type != 0 && row.type != ATTACHMENT_MESSAGE_TYPE) return false
+    if (row.deleted || (row.type != 0 && row.type != ATTACHMENT_MESSAGE_TYPE)) return false
     return row.type == ATTACHMENT_MESSAGE_TYPE || previewContent(row).isNotBlank()
 }
 
@@ -837,7 +872,38 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
 /// "Open"), and no call-link exclusion (this port has no calls at all
 /// yet to produce one).
 private fun canBoost(row: MessageRow, boosts: BoostSummary?): Boolean =
-    !row.fromMe && row.uuid != null && (row.type == 0 || row.type == ATTACHMENT_MESSAGE_TYPE) && boosts?.boostedByMe != true
+    !row.fromMe && !row.deleted && row.uuid != null && (row.type == 0 || row.type == ATTACHMENT_MESSAGE_TYPE) &&
+        boosts?.boostedByMe != true
+
+/// Whether Delete is offered — PeelCore's own `Message.isDeletable`
+/// (`(fromMe || ownsTribe) && isLinkable(inTribe:) && threadCount < 2`),
+/// trimmed: no `ownsTribe` bypass (this port tracks no tribe roles/
+/// membership at all yet, so a tribe owner deleting someone else's
+/// message doesn't work here — `docs/phases/14-message-menu.md`'s own
+/// "Open"). `isLinkable`'s own delivery check: an undelivered send of
+/// your own can't be deleted either (nothing has reached anyone else to
+/// delete yet — Retry or just let it go, not this). `replyCount` is the
+/// caller's own job to get right: the main list's own `threadSummaries`
+/// map for a row shown there, `ThreadScreen`'s own `replies.size` for
+/// the root row shown *inside* the thread it starts (whose own
+/// `threadSummary` there is always null — that's the "N replies" chip
+/// for the main list's collapsed row, not something to show a second
+/// time on the very screen those replies are already listed on).
+private fun canDelete(row: MessageRow, replyCount: Int): Boolean {
+    if (!row.fromMe) return false
+    if (row.deleted || row.uuid == null || (row.type != 0 && row.type != ATTACHMENT_MESSAGE_TYPE)) return false
+    if (row.status == "PENDING" || row.status == "FAILED") return false
+    return replyCount < 2
+}
+
+/// The first `http(s)://` link in plain text — a plain scan, not
+/// PeelCore's own full markup parser (`MessageMarkup.firstLink`, built
+/// for a renderer that understands `[text](url)` and the rest of actual
+/// markdown; this port's own message text is always drawn plain, so a
+/// bare URL is the only kind of "link in the text" that can appear at
+/// all).
+private val linkRegex = Regex("""https?://[^\s]+""")
+private fun firstLink(text: String): String? = linkRegex.find(text)?.value?.trimEnd('.', ',', ')', ']', '!', '?')
 
 /// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
 /// (`threadUuid ?? replyUuid ?? uuid`): a message already in a thread
@@ -923,6 +989,8 @@ private fun MessageRowView(
     onReply: () -> Unit,
     onBoost: (() -> Unit)? = null,
     onJoinCall: (CallLink) -> Unit = {},
+    onDelete: (() -> Unit)? = null,
+    deleteReplyCount: Int = threadSummary?.replyCount ?: 0,
 ) {
     val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
     val content = previewContent(row)
@@ -939,13 +1007,14 @@ private fun MessageRowView(
     val timeContext = androidx.compose.ui.platform.LocalContext.current
     val time = row.timestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
     var menuOpen by remember { mutableStateOf(false) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     Box {
         Row(
             Modifier
                 .fillMaxWidth()
                 .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
-                .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null) menuOpen = true })
+                .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null && !row.deleted) menuOpen = true })
                 .padding(top = if (startsRun) 8.dp else 1.dp, bottom = 2.dp),
         ) {
         Box(Modifier.width(32.dp)) {
@@ -979,13 +1048,19 @@ private fun MessageRowView(
                 QuoteBox(parent = parent, myAlias = myAlias)
                 Spacer(Modifier.height(2.dp))
             }
-            if (row.type == ATTACHMENT_MESSAGE_TYPE) {
+            if (row.deleted) {
+                Text(
+                    "This message has been deleted",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                    color = Theme.colors.secondaryText,
+                )
+            } else if (row.type == ATTACHMENT_MESSAGE_TYPE) {
                 AttachmentView(row, engine, audioPlayer)
                 if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
             }
-            if (callLink != null) {
+            if (!row.deleted && callLink != null) {
                 CallBlock(callLink, engine, onJoinCall)
-            } else if (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE) {
+            } else if (!row.deleted && (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE)) {
                 Text(
                     content,
                     style = MaterialTheme.typography.bodyMedium,
@@ -1006,10 +1081,12 @@ private fun MessageRowView(
             }
         }
         }
-        // Long-press: Reply, and Boost when it's someone else's
-        // content message this account hasn't boosted yet — PeelCore's
-        // own `MessageMenu` (`canBoost`), trimmed to the two actions
-        // this port actually has (no Copy, Copy link or Delete).
+        // Long-press: Reply, Boost (someone else's content message this
+        // account hasn't boosted yet), Copy, Copy link, Delete (your own
+        // deletable content) — PeelCore's own `MessageMenu`. Opens only
+        // for a content row with a uuid at all (the `combinedClickable`
+        // above), so nothing here needs to re-check that.
+        val linkToCopy = callLink?.url ?: firstLink(content)
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("Reply") }, onClick = { menuOpen = false; onReply() })
             if (onBoost != null) {
@@ -1017,6 +1094,24 @@ private fun MessageRowView(
                 // choice, unlike PeelCore's own menu
                 // (`model.quickBoostLabel`), which does name the amount.
                 DropdownMenuItem(text = { Text("Boost") }, onClick = { menuOpen = false; onBoost() })
+            }
+            if (content.isNotBlank()) {
+                DropdownMenuItem(
+                    text = { Text("Copy") },
+                    onClick = { menuOpen = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(content)) },
+                )
+            }
+            if (linkToCopy != null) {
+                DropdownMenuItem(
+                    text = { Text("Copy link") },
+                    onClick = { menuOpen = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(linkToCopy)) },
+                )
+            }
+            if (onDelete != null && canDelete(row, deleteReplyCount)) {
+                DropdownMenuItem(
+                    text = { Text("Delete", color = Theme.colors.destructive) },
+                    onClick = { menuOpen = false; onDelete() },
+                )
             }
         }
     }
@@ -1369,7 +1464,7 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
     ) {
         Text(name, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = PersonHue.of(hueKey).fill)
         Text(
-            previewContent(parent),
+            if (parent.deleted) "Message deleted" else previewContent(parent),
             style = MaterialTheme.typography.labelSmall,
             color = Theme.colors.secondaryText,
             maxLines = 1,

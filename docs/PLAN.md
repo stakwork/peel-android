@@ -1,6 +1,6 @@
 # Peel for Android
 
-Last updated 2026-10-30. This is the architecture and the phase index, the
+Last updated 2026-11-02. This is the architecture and the phase index, the
 same role `peel`'s `docs/PLAN.md` plays for Mac and iPhone. Each phase has
 its own file under `docs/phases/` with what is done, what is open and what
 is decided; update it when you finish something, same rule as there.
@@ -113,7 +113,9 @@ fills, trimmed):
 - `message`: one row per message a restore or a live fetch brings back;
   `status` (Phase 5) is a sent row's own delivery state
   (`PENDING`/`DELIVERED`/`FAILED`), always null for anything not sent
-  from this device.
+  from this device; `deleted` (Phase 14) is set only by
+  `Storage.applyDeletes`, a type-17 message naming this one and
+  confirmed delivered — never by a caller building a row by hand.
 - `contact`: a pubkey, its alias/photo (parsed from its own messages, not
   core state — names and photos never are, and never for a tribe, whose
   real name/photo come from the tribes server, Phase 4), whether
@@ -174,6 +176,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 11 | Profile and preferences sync: an editable name, the boost amount, synced via the memes-server preferences file | built; see the file for what's open | [phases/11-profile-preferences.md](phases/11-profile-preferences.md) |
 | 12 | Calls: call-link detection and validation, the call card, starting a call, the presence feed | superseded same day by Phase 13's in-app join; see that file | [phases/12-calls.md](phases/12-calls.md) |
 | 13 | LiveKit calls: a real in-app join (LiveKit Android SDK, a tile grid, mic/camera/leave) — no persistent background call, screen share or in-call chat yet | built; see the file for what's open | [phases/13-livekit-calls.md](phases/13-livekit-calls.md) |
+| 14 | Message menu: Copy, Copy link, Delete (a real for-everyone delete, not a local hide) — no tribe-owner delete yet | built; see the file for what's open | [phases/14-message-menu.md](phases/14-message-menu.md) |
 
 ## Open questions
 
