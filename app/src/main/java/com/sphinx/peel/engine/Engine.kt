@@ -647,7 +647,7 @@ class Engine(mnemonic: String, val storage: Storage) {
 
     /// This account's own one-tap boost amount, in msat — whatever was
     /// last chosen here or taken from another device
-    /// (`syncBoostAmount`), else `BOOST_AMOUNT_MSAT`'s own default.
+    /// (`syncPreferences`), else `BOOST_AMOUNT_MSAT`'s own default.
     fun boostAmountMsat(): Long = storage.value(Setting.BOOST_AMOUNT_MSAT)?.toLongOrNull() ?: BOOST_AMOUNT_MSAT
 
     /// The person chose a new boost amount in Profile: written here,
@@ -661,7 +661,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// 1)`, never `now` alone) — PeelCore's own `setPreference` keeps
     /// this same guarantee. Without it, two choices made back to back
     /// (tap Save, immediately change your mind, tap Save again) can
-    /// land in the same whole second; `syncBoostAmount`'s own
+    /// land in the same whole second; `syncPreferences`'s own
     /// strictly-greater comparison against the file would then treat
     /// that tie as "nothing new to upload," and the very next sync —
     /// which fetches the file this device's own first choice already
@@ -671,7 +671,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     suspend fun setBoostAmount(sats: Long) {
         require(sats > 0) { "the boost amount must be more than zero" }
         val oldDate = storage.value(Setting.BOOST_AMOUNT_UPDATED_AT)?.toLongOrNull() ?: 0L
-        val date = maxOf(System.currentTimeMillis() / 1000, oldDate + 1)
+        val date = PreferencesMerge.nextDate(System.currentTimeMillis() / 1000, oldDate)
         storage.apply(
             Storage.Commit(
                 settings = mapOf(
@@ -680,68 +680,84 @@ class Engine(mnemonic: String, val storage: Storage) {
                 ),
             ),
         )
-        runCatching { syncBoostAmount() }
+        runCatching { syncPreferences() }
     }
 
-    /// Merges this account's boost amount with the memes-server
-    /// preferences file: fetches and decrypts it, takes the file's
-    /// `tip_amount` if it's at least as new as this device's own, else
-    /// (this device's is newer, or the file has none) writes this
-    /// device's into the file and uploads it — PeelCore's own
-    /// `syncPreferences`, specialised to the one key this port
-    /// actually syncs (see `PreferencesFile`'s own doc comment). A
-    /// transport-less or offline call just does nothing; this is
-    /// always best-effort, never something a caller need surface as an
-    /// error.
-    suspend fun syncBoostAmount() {
+    /// This device's value and date for `spec`, in the spec's unit.
+    private fun localPreference(spec: PreferencesMerge.Spec): PreferencesMerge.Local? = when (spec.key) {
+        PreferencesFile.TIP_AMOUNT_KEY -> storage.value(Setting.BOOST_AMOUNT_MSAT)?.toLongOrNull()?.let {
+            PreferencesMerge.Local(it / 1000, storage.value(Setting.BOOST_AMOUNT_UPDATED_AT)?.toLongOrNull() ?: 0L)
+        }
+        else -> storage.value(Setting.PAYMENT_CONFIRMATION_MSAT)?.toLongOrNull()?.let {
+            PreferencesMerge.Local(it, storage.value(Setting.PAYMENT_CONFIRMATION_UPDATED_AT)?.toLongOrNull() ?: 0L)
+        }
+    }
+
+    private fun takePreference(spec: PreferencesMerge.Spec, local: PreferencesMerge.Local): Pair<Setting, String> = when (spec.key) {
+        PreferencesFile.TIP_AMOUNT_KEY -> Setting.BOOST_AMOUNT_MSAT to (local.value * 1000).toString()
+        else -> Setting.PAYMENT_CONFIRMATION_MSAT to local.value.toString()
+    }
+
+    private fun dateSetting(spec: PreferencesMerge.Spec): Setting =
+        if (spec.key == PreferencesFile.TIP_AMOUNT_KEY) Setting.BOOST_AMOUNT_UPDATED_AT else Setting.PAYMENT_CONFIRMATION_UPDATED_AT
+
+    /// Syncs in the background (a change made in Profile, which isn't suspending).
+    fun syncPreferencesInBackground() {
+        scope.launch { runCatching { syncPreferences() } }
+    }
+
+    /// Merges every preference this port syncs (`PreferencesMerge.SPECS`:
+    /// the boost amount `tip_amount` and `peel.payment_confirmation_msat`)
+    /// with the memes-server preferences file: fetches and decrypts it,
+    /// takes what the file's items say where they win (newest date, then
+    /// each key's apply policy), uploads what this device chose later —
+    /// PeelCore's `syncPreferences`. Every other item and top-level field
+    /// goes back byte for byte. Best-effort: offline or without a
+    /// transport it does nothing, and a file the official apps couldn't
+    /// read is neither read nor written.
+    suspend fun syncPreferences() {
         if (transport == null) return
         val memes = MemesServer(MEMES_HOST)
         val secret = coreNodeKeys("bitcoin", seed).secret
         val fetched = withMemes(memes) { auth -> memes.preferences(auth) }
-        val localMsat = storage.value(Setting.BOOST_AMOUNT_MSAT)?.toLongOrNull()
-        val localDate = storage.value(Setting.BOOST_AMOUNT_UPDATED_AT)?.toLongOrNull() ?: 0L
+        val now = System.currentTimeMillis() / 1000
 
+        val file: PreferencesFile?
         if (fetched == null) {
-            if (!mayStartPreferencesFile(MEMES_HOST) || localMsat == null) return
-            val file = PreferencesFile.empty()
-            file.setTipAmount(localMsat / 1000, localDate)
-            uploadPreferencesFile(memes, secret, file)
+            // Only a device that may start the file does; never on a mere "not found".
+            if (!mayStartPreferencesFile(MEMES_HOST)) return
+            file = null
+        } else {
+            val sealed = android.util.Base64.decode(fetched.trim(), android.util.Base64.DEFAULT)
+            file = PreferencesFile.parse(String(MediaCrypto.decrypt(sealed, secret), Charsets.UTF_8))
             markPreferencesFileSeen()
-            return
         }
 
-        val sealed = android.util.Base64.decode(fetched.trim(), android.util.Base64.DEFAULT)
-        val plain = MediaCrypto.decrypt(sealed, secret)
-        val file = PreferencesFile.parse(String(plain, Charsets.UTF_8))
-        markPreferencesFileSeen()
-
-        val (fileSats, fileDate) = file.tipAmount() ?: (null to 0L)
-        when {
-            localMsat != null && localDate > fileDate -> {
-                if (fileSats != localMsat / 1000 || fileDate != localDate) {
-                    file.setTipAmount(localMsat / 1000, localDate)
-                    uploadPreferencesFile(memes, secret, file)
+        val target = file ?: PreferencesFile.empty()
+        var upload = false
+        for (spec in PreferencesMerge.SPECS) {
+            val local = localPreference(spec)
+            when (val outcome = PreferencesMerge.decide(spec, file, local, now)) {
+                is PreferencesMerge.Outcome.Upload -> {
+                    target.setEntry(spec.key, spec.format(outcome.local.value), outcome.local.date)
+                    upload = true
                 }
-            }
-            fileSats != null -> {
-                val fileMsat = fileSats * 1000
-                if (fileMsat != localMsat || fileDate != localDate) {
-                    storage.apply(
-                        Storage.Commit(
-                            settings = mapOf(
-                                Setting.BOOST_AMOUNT_MSAT to fileMsat.toString(),
-                                Setting.BOOST_AMOUNT_UPDATED_AT to fileDate.toString(),
-                            ),
-                        ),
-                    )
+                is PreferencesMerge.Outcome.Take -> {
+                    // Only over what was merged against: a change made here while
+                    // the fetch was out goes up on the next sync instead.
+                    if (localPreference(spec) == local) {
+                        val (setting, value) = takePreference(spec, outcome.local)
+                        storage.apply(
+                            Storage.Commit(settings = mapOf(setting to value, dateSetting(spec) to outcome.local.date.toString())),
+                        )
+                    }
                 }
+                PreferencesMerge.Outcome.Nothing -> {}
             }
-            localMsat != null && localDate > 0 -> {
-                // The file exists but has never carried a tip_amount of
-                // its own; this device's own real choice goes up.
-                file.setTipAmount(localMsat / 1000, localDate)
-                uploadPreferencesFile(memes, secret, file)
-            }
+        }
+        if (upload) {
+            uploadPreferencesFile(memes, secret, target)
+            if (file == null) markPreferencesFileSeen()
         }
     }
 
@@ -1085,7 +1101,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             fetchReadsAndMutes()
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             refreshTribeNames()
-            runCatching { syncBoostAmount() }
+            runCatching { syncPreferences() }
         }
     }
 
@@ -1129,7 +1145,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             if (!connectAndRegister()) return@launch
             fetchReadsAndMutes()
             if (!restoreProgressFlow.value.restoring) catchUpMessages()
-            runCatching { syncBoostAmount() }
+            runCatching { syncPreferences() }
         }
     }
 

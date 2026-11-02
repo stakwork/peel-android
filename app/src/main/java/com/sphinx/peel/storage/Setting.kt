@@ -75,6 +75,12 @@ enum class Setting(val key: String) {
 
     /// Payments and invoices over this many msat need the person's
     /// confirmation first — PeelCore's `paymentConfirmationMsat`
-    /// (default 100 sats, 0 asks every time). Local to this device, as there.
+    /// (default 100 sats, 0 asks every time). Synced as Peel's
+    /// `peel.payment_confirmation_msat`, taken from another device only when stricter.
     PAYMENT_CONFIRMATION_MSAT("paymentConfirmationMsat"),
+
+    /// When `PAYMENT_CONFIRMATION_MSAT` was last chosen here (or taken from
+    /// the preferences file), in whole seconds; absent for a value never
+    /// chosen, which is never uploaded (`peel.payment_confirmation_msat`).
+    PAYMENT_CONFIRMATION_UPDATED_AT("paymentConfirmationUpdatedAt"),
 }

@@ -29,12 +29,10 @@ const val CALL_MESSAGE_TYPE = 32
 const val DELETE_MESSAGE_TYPE = 17
 
 /// What a one-tap boost sends before anyone has ever chosen their own
-/// amount, in msat — 10 sats, this port's own default (PeelCore's own
-/// `defaultBoostAmountMsat` is 100 sats; the user explicitly chose a
-/// different number for this port, not a porting mistake). Once someone
+/// amount, in msat — 100 sats, PeelCore's own `defaultBoostAmountMsat`. Once someone
 /// sets it from Profile, `Engine.boostAmountMsat()` reads their own
 /// choice instead — see `Setting.BOOST_AMOUNT_MSAT`.
-const val BOOST_AMOUNT_MSAT = 10_000L
+const val BOOST_AMOUNT_MSAT = 100_000L
 
 /// What an attachment message's JSON says — PeelCore's
 /// `AttachmentFields`, trimmed to what sending an image and receiving
