@@ -1006,7 +1006,7 @@ private fun MessageRowView(
                 .fillMaxWidth()
                 .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
                 .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null && !row.deleted) menuOpen = true })
-                .padding(top = if (startsRun) 8.dp else 1.dp, bottom = 2.dp),
+                .padding(top = if (startsRun) 8.dp else 4.dp, bottom = 2.dp),
         ) {
         Box(Modifier.width(32.dp)) {
             if (startsRun) {
