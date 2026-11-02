@@ -3,6 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Push needs the Firebase project's own google-services.json (app/, never
+// committed). Without it the plugin is not applied and the build still
+// works; the app then has no FCM and runs on its MQTT connection alone.
+val hasGoogleServices = file("google-services.json").exists()
+if (hasGoogleServices) apply(plugin = "com.google.gms.google-services")
+
 android {
     namespace = "com.sphinx.peel"
     compileSdk = 36
@@ -13,6 +19,12 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
+        // iOS keeps registering with the hub behind `PeelPushFlags.registerWithHub`
+        // (off by default: the server keeps one push token per account).
+        // Same here: -Ppeel.push.registerWithHub=true/false overrides; unset
+        // it is on only when google-services.json is present.
+        val register = (project.findProperty("peel.push.registerWithHub") as String?)?.toBoolean() ?: hasGoogleServices
+        buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", register.toString())
     }
 
     buildTypes {
@@ -28,6 +40,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -56,6 +69,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.process)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

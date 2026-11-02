@@ -324,6 +324,9 @@ class Storage(context: Context, account: String = "default") {
     /// captured the same way at open).
     fun lastRead(chat: String): Long? = readChatState(helper.readableDatabase, chat)?.lastRead
 
+    /// `chatState.muteLevel` for `chat`: 0 all, 1 mentions only, 2 muted.
+    fun muteLevel(chat: String): Int = readChatState(helper.readableDatabase, chat)?.muteLevel ?: 0
+
     /// Read markers set here while offline, not yet sent — PeelCore's
     /// `pendingReads`. What `Engine.fetchReadsAndMutes`'s
     /// `publishPendingReads` resends once a connection answers `getReads`.

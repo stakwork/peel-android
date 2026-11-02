@@ -1,6 +1,15 @@
 package com.sphinx.peel
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import com.sphinx.peel.engine.ConnectionWatcher
+import com.sphinx.peel.push.MessageNotifier
+import com.sphinx.peel.push.Notifications
+import com.sphinx.peel.push.PushRegistrar
+import com.sphinx.peel.ui.dashboard.DeepLink
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -15,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -29,8 +39,26 @@ import com.sphinx.peel.ui.onboarding.RestoringAccountScreen
 import com.sphinx.peel.ui.theme.PeelTheme
 
 class MainActivity : ComponentActivity() {
+    /// What a tapped notification asked for, until `MainTabs` has opened it.
+    private var deepLink by mutableStateOf<DeepLink?>(null)
+
+    private val askNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        deepLink = DeepLink.from(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Notifications.createChannels(applicationContext)
+        // Android 13+: asked once, here, as iOS asks once when an account opens.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Notifications.permitted(this)) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        deepLink = DeepLink.from(intent)
         val secretStore = FileSecretStore(applicationContext)
         val storage = Storage(applicationContext)
         setContent {
@@ -40,7 +68,7 @@ class MainActivity : ComponentActivity() {
                 // content inside is pushed clear of them.
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        PeelApp(secretStore, storage)
+                        PeelApp(secretStore, storage, deepLink) { deepLink = null }
                     }
                 }
             }
@@ -64,7 +92,7 @@ private sealed class Screen {
 /// `Engine.start()` is never called twice for the same account and its
 /// connection survives moving between these screens.
 @Composable
-private fun PeelApp(secretStore: SecretStore, storage: Storage) {
+private fun PeelApp(secretStore: SecretStore, storage: Storage, deepLink: DeepLink?, onDeepLinkHandled: () -> Unit) {
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
@@ -76,29 +104,28 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage) {
         Screen.Lock -> LockScreen(secretStore, storage) { engine -> screen = Screen.Home(engine) }
         is Screen.Restoring -> RestoringAccountScreen(current.engine) { screen = Screen.Home(current.engine) }
         is Screen.Home -> {
-            ResumeOnForeground(current.engine)
-            MainTabs(current.engine, storage, secretStore) { screen = Screen.Onboarding }
+            KeepConnected(current.engine, storage)
+            MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { screen = Screen.Onboarding }
         }
     }
 }
 
-/// Calls `Engine.resume()` each time the app returns to the foreground —
-/// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up,
-/// triggered the Android way. Skips the very first `ON_RESUME`: the
-/// lifecycle is already resumed when this observer is added (right after
-/// `start()` just ran, making this screen reachable at all), so Android
-/// replays that event into it immediately, and `resume()` would only
-/// race `start()`'s own first connection.
+/// Everything that keeps an open account reachable: reconnect on network
+/// change and when the app comes to the front (`ConnectionWatcher`), the
+/// push token registered with the server (`PushRegistrar`) and the
+/// notifications for what arrives in the background (`MessageNotifier`).
+/// The engine itself reconnects with backoff after a drop.
 @Composable
-private fun ResumeOnForeground(engine: Engine) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(engine, lifecycleOwner) {
-        var first = true
-        val observer = LifecycleEventObserver { _, event ->
-            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
-            if (first) first = false else engine.resume()
+private fun KeepConnected(engine: Engine, storage: Storage) {
+    val context = LocalContext.current.applicationContext
+    DisposableEffect(engine) {
+        val watcher = ConnectionWatcher(context, engine).also { it.start() }
+        val notifier = MessageNotifier(context, storage, engine).also { it.attach() }
+        PushRegistrar.accountOpened(context, engine)
+        onDispose {
+            watcher.stop()
+            notifier.detach()
+            PushRegistrar.accountClosed()
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 }

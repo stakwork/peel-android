@@ -34,12 +34,18 @@ class Transport(
     private val password: String,
     private val allowUntrustedCertificate: Boolean = false,
 ) {
+    /// Set by `Engine` once connected: called when the broker connection
+    /// ends without [close] having been asked for.
+    @Volatile var onLost: (() -> Unit)? = null
+    @Volatile private var closing = false
+
     private val client: Mqtt3AsyncClient = run {
         val builder = MqttClient.builder()
             .useMqttVersion3()
             .identifier(clientID)
             .serverHost(server.host)
             .serverPort(server.port)
+            .addDisconnectedListener { if (!closing) onLost?.invoke() }
         if (server.tls) {
             // allowUntrustedCertificate has no effect yet: a dev build
             // against a self-signed test server needs a custom
@@ -50,6 +56,8 @@ class Transport(
         }
         builder.buildAsync()
     }
+
+    val isConnected: Boolean get() = client.state.isConnected
 
     /// Messages from the broker, from the moment this is collected.
     /// Completes when the connection closes.
@@ -62,6 +70,9 @@ class Transport(
 
     suspend fun connect() {
         client.connectWith()
+            // The MQTT keep-alive: a PINGREQ every 30 seconds, and the
+            // client drops the connection (-> onLost) when none is answered.
+            .keepAlive(KEEP_ALIVE_SECONDS)
             .simpleAuth()
             .username(username)
             .password(password.toByteArray(Charsets.UTF_8))
@@ -90,6 +101,7 @@ class Transport(
     }
 
     suspend fun close() {
+        closing = true
         client.disconnect().await()
     }
 }
@@ -102,3 +114,5 @@ private suspend fun <T> CompletableFuture<T>.await(): T = suspendCancellableCoro
     }
     continuation.invokeOnCancellation { cancel(true) }
 }
+
+private const val KEEP_ALIVE_SECONDS = 30

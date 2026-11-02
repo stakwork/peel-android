@@ -9,3 +9,4 @@ captures/
 .cxx/
 *.apk
 *.aab
+app/google-services.json

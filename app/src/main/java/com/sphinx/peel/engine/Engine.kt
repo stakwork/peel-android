@@ -21,6 +21,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -47,6 +50,7 @@ import uniffi.sphinxrs.rootSignMs as coreRootSignMs
 import uniffi.sphinxrs.send as coreSend
 import uniffi.sphinxrs.signBase64 as coreSignBase64
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
+import uniffi.sphinxrs.setPushToken as coreSetPushToken
 import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 
 /// Drives one account against the Sphinx core: the engine foundation
@@ -91,6 +95,19 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// same as PeelUI's `AppModel.attach` does with its own account tasks.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var started = false
+
+    /// Called after each successful (re)connect, once registered and caught
+    /// up — where `PushRegistrar` registers the push token (iOS:
+    /// `PushCoordinator.connected()`).
+    @Volatile var onConnected: (() -> Unit)? = null
+
+    /// Called with each message the live listener receives (not sent ones),
+    /// for `MessageNotifier`.
+    @Volatile var onIncoming: ((List<MessageRow>) -> Unit)? = null
+
+    /// The one reconnect in flight, if any (PeelCore's `reconnectTask`).
+    private var reconnectJob: Job? = null
+    @Volatile private var keepConnected = false
 
     private val connectionStateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = connectionStateFlow.asStateFlow()
@@ -291,6 +308,15 @@ class Engine(mnemonic: String, val storage: Storage) {
             val connection = Transport(server, clientID = xpub, username = loginTime, password = signature)
             connection.connect()
             transport = connection
+            // After a good connect only: an unexpected drop (the broker
+            // closing, the keep-alive going unanswered, the network going)
+            // starts the reconnect loop. `Transport.close()` never fires it.
+            connection.onLost = {
+                if (transport === connection) {
+                    connectionStateFlow.value = ConnectionState.Failed("Connection lost.")
+                    scheduleReconnect(immediately = false)
+                }
+            }
             // Before the register publish, not after: the same small race
             // this already had (a very fast answer could still beat the
             // collector actually attaching), not a new one.
@@ -339,6 +365,10 @@ class Engine(mnemonic: String, val storage: Storage) {
                 // below, not a second copy — `storeMessages` is the one
                 // place this happens now.
                 storeMessages(handled)
+                onIncoming?.let { notify ->
+                    val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe }
+                    if (rows.isNotEmpty()) runCatching { notify(rows) }
+                }
                 inboundResults.emit(handled)
             }
         }
@@ -1015,7 +1045,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     }
 
     suspend fun disconnect() = mutex.withLock {
-        transport?.close()
+        runCatching { transport?.close() }
         transport = null
         // So the next `connect()` starts a fresh collector on the new
         // Transport: without this, `startListening` stayed a no-op after
@@ -1029,6 +1059,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// this so a wiped `Storage` is never written to by a restore page
     /// still in flight.
     fun cancel() {
+        keepConnected = false
         calls?.close()
         scope.cancel()
     }
@@ -1045,13 +1076,91 @@ class Engine(mnemonic: String, val storage: Storage) {
     fun start() {
         if (started) return
         started = true
+        keepConnected = true
         scope.launch {
             backfillContactsIfNeeded()
-            if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
-            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
-            refreshTribeNames()
-            runCatching { syncBoostAmount() }
+            if (!establish(first = true) || transport?.isConnected != true) scheduleReconnect(immediately = false)
+        }
+    }
+
+    /// Everything after a connect that makes it a usable session: reads and
+    /// mutes, the restore or the catch-up, and (first time only) tribe
+    /// names. False when the connect itself failed.
+    private suspend fun establish(first: Boolean): Boolean {
+        if (!connectAndRegister()) return false
+        fetchReadsAndMutes()
+        if (restoreProgressFlow.value.restoring) {
+            if (first) runRestore()
+        } else {
+            catchUpMessages()
+        }
+        if (first) refreshTribeNames()
+        runCatching { syncBoostAmount() }
+        onConnected?.let { runCatching { it() } }
+        return true
+    }
+
+    /// Reconnects with backoff until connected or [stop]ped (PeelCore's
+    /// `reconnectLoop`: 1s, 2s, 4s … capped at a minute, with jitter so a
+    /// server coming back is not hit by every client at once). One loop at a
+    /// time; `immediately` skips the first wait (the network came back, the
+    /// app came to the front, a push woke the process).
+    private fun scheduleReconnect(immediately: Boolean) {
+        if (!started || !keepConnected) return
+        if (!immediately && reconnectJob?.isActive == true) return
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            var attempt = 0
+            if (!immediately) delay(backoffMs(attempt++))
+            while (isActive && keepConnected) {
+                disconnect()
+                if (establish(first = false) && transport?.isConnected == true) return@launch
+                delay(backoffMs(attempt++))
+            }
+        }
+    }
+
+    private fun backoffMs(attempt: Int): Long {
+        val base = 1_000L shl attempt.coerceAtMost(6)
+        return minOf(base, 60_000L) + (0..500).random()
+    }
+
+    /// The device came online or changed network (`ConnectionWatcher`): a
+    /// connection that lived through a network change is usually dead
+    /// though nothing has said so yet, so this reconnects, now. Not while
+    /// a connect is already running.
+    fun networkChanged() {
+        if (connectionStateFlow.value == ConnectionState.Connecting) return
+        scheduleReconnect(immediately = true)
+    }
+
+    /// Keeps no connection from here on (a deliberate sign-out).
+    fun stop() {
+        keepConnected = false
+        reconnectJob?.cancel()
+    }
+
+    /// Whether the broker connection is up right now.
+    val isConnected: Boolean get() = connectionStateFlow.value == ConnectionState.Connected
+
+    /// Registers the FCM token with the server through the core
+    /// (`setPushToken`), as iOS' `Engine.registerPushToken` does through
+    /// `setPushTokenForApp`. Sends nothing, and answers false, unless
+    /// connected, with a valid push key and a token.
+    fun registerPushToken(token: String, pushKey: String, done: (Boolean) -> Unit = {}) {
+        scope.launch {
+            val ok = try {
+                if (transport == null || token.isEmpty() || pushKey.length != 64) {
+                    false
+                } else {
+                    run { time, state -> coreSetPushToken(seed, time, state, token, pushKey) }
+                    true
+                }
+            } catch (e: Exception) {
+                Log.w("Engine", "push registration failed: ${e.javaClass.simpleName}")
+                false
+            }
+            done(ok)
         }
     }
 
@@ -1090,13 +1199,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// being non-null. A no-op before `start()` has ever run.
     fun resume() {
         if (!started) return
-        scope.launch {
-            disconnect()
-            if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
-            if (!restoreProgressFlow.value.restoring) catchUpMessages()
-            runCatching { syncBoostAmount() }
-        }
+        scheduleReconnect(immediately = true)
     }
 
     /// Each known tribe's real name and photo, from its own registry —
