@@ -1,6 +1,6 @@
 # Peel for Android
 
-Last updated 2026-11-02. This is the architecture and the phase index, the
+Last updated 2026-11-02 (Phase 15). This is the architecture and the phase index, the
 same role `peel`'s `docs/PLAN.md` plays for Mac and iPhone. Each phase has
 its own file under `docs/phases/` with what is done, what is open and what
 is decided; update it when you finish something, same rule as there.
@@ -177,6 +177,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 12 | Calls: call-link detection and validation, the call card, starting a call, the presence feed | superseded same day by Phase 13's in-app join; see that file | [phases/12-calls.md](phases/12-calls.md) |
 | 13 | LiveKit calls: a real in-app join (LiveKit Android SDK, a tile grid, mic/camera/leave) — no persistent background call, screen share or in-call chat yet | built; see the file for what's open | [phases/13-livekit-calls.md](phases/13-livekit-calls.md) |
 | 14 | Message menu: Copy, Copy link, Delete (a real for-everyone delete, not a local hide) — no tribe-owner delete yet | built; see the file for what's open | [phases/14-message-menu.md](phases/14-message-menu.md) |
+| 15 | Calls keep running in the background: a call survives leaving its screen, a banner (dot, title, running time, mute, leave) on every other screen — no cross-chat switch confirmation, no foreground service for real OS backgrounding | built; see the file for what's open | [phases/15-call-background.md](phases/15-call-background.md) |
 
 ## Open questions
 

@@ -1,17 +1,14 @@
 package com.sphinx.peel.ui.call
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -21,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -43,13 +39,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,119 +48,56 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import com.sphinx.peel.engine.CallLink
-import com.sphinx.peel.engine.CallTicket
-import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.theme.Theme
 import io.livekit.android.renderer.SurfaceViewRenderer
 import io.livekit.android.room.track.VideoTrack
-import kotlin.coroutines.resume
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 /// The call screen: the chat and the running time on top, one tile per
 /// person, the control bar — PeelCore's own `IOSCallScreen`, trimmed: no
 /// screen sharing, no device menus, no keep-on-top (this round has none of
-/// what any of those need). Replaces the whole chat screen while on the
-/// call, the same way `ThreadScreen` replaces it for a thread — leaving
-/// (the chevron, not the system back gesture, matching every other screen
-/// in this port) ends the call; there is no persistent background call or
-/// banner to return to yet (`docs/phases/13-livekit-calls.md`'s own
-/// "Open").
+/// what any of those need). A pure renderer of [phase] — fetching the
+/// ticket, owning the [CallSession], and deciding whether a call is even
+/// active at all live above this, in `MainTabs` (`docs/phases/15-call-
+/// background.md`): this screen comes and goes (the chevron hides it, a
+/// tap on `CallBanner` brings it back) without the call itself ending —
+/// only `onLeave` does that.
 @Composable
-fun CallScreen(engine: Engine, chat: String, title: String, link: CallLink, camera: Boolean, onBack: () -> Unit) {
-    var ticket by remember(link) { mutableStateOf<CallTicket?>(null) }
-    var ticketError by remember(link) { mutableStateOf<String?>(null) }
-    var fetching by remember(link) { mutableStateOf(true) }
-    var attempt by remember(link) { mutableStateOf(0) }
-
-    LaunchedEffect(link, attempt) {
-        fetching = true
-        ticketError = null
-        try {
-            ticket = engine.callTicket(link)
-        } catch (e: Exception) {
-            ticketError = e.message ?: "Could not join the call."
-        } finally {
-            fetching = false
-        }
-    }
-
-    val currentTicket = ticket
-    if (currentTicket == null) {
-        Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
-            CallHeader(title = title, status = if (fetching) "Connecting…" else "", onBack = onBack)
+fun CallScreen(phase: CallPhase, onHide: () -> Unit, onLeave: () -> Unit, onRetry: () -> Unit) {
+    when (phase) {
+        is CallPhase.Connecting -> Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
+            CallHeader(title = phase.title, status = "Connecting…", onBack = onHide)
             Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (fetching) {
-                    CircularProgressIndicator(color = Theme.colors.accent)
-                } else {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            ticketError ?: "Could not join the call.",
-                            color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
-                        )
-                        TextButton(onClick = { attempt += 1 }) { Text("Try again") }
-                    }
+                CircularProgressIndicator(color = Theme.colors.accent)
+            }
+        }
+        is CallPhase.Failed -> Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
+            CallHeader(title = phase.title, status = "", onBack = onHide)
+            Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(phase.error, color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = onRetry) { Text("Try again") }
                 }
             }
         }
-        return
-    }
-
-    val context = LocalContext.current
-    val appContext = context.applicationContext
-
-    // A system permission dialog needs an ActivityResultLauncher, which
-    // only exists here — CallSession only ever calls these two closures,
-    // whether it's the automatic "microphone on after connecting" or an
-    // explicit tap on the control bar.
-    var micContinuation by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
-    var cameraContinuation by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
-    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        micContinuation?.invoke(granted)
-        micContinuation = null
-    }
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        cameraContinuation?.invoke(granted)
-        cameraContinuation = null
-    }
-
-    suspend fun askMic(): Boolean {
-        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return true
-        return suspendCancellableCoroutine { cont ->
-            micContinuation = { granted -> cont.resume(granted) }
-            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        is CallPhase.Active -> {
+            val session = phase.session
+            Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
+                CallHeader(title = session.title, status = CallStatusText(session), onBack = onHide)
+                Box(Modifier.weight(1f).fillMaxSize()) { CallStage(session) }
+                CallControls(session, onLeave = onLeave, onRejoin = onRetry)
+            }
         }
-    }
-    suspend fun askCamera(): Boolean {
-        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) return true
-        return suspendCancellableCoroutine { cont ->
-            cameraContinuation = { granted -> cont.resume(granted) }
-            cameraLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    val session = remember(currentTicket) {
-        CallSession(appContext, currentTicket, link, chat, title, camera, askMicPermission = ::askMic, askCameraPermission = ::askCamera)
-    }
-    DisposableEffect(session) { onDispose { session.leave() } }
-
-    Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
-        CallHeader(title = session.title, status = CallStatusText(session), onBack = onBack)
-        Box(Modifier.weight(1f).fillMaxSize()) { CallStage(session) }
-        CallControls(session, onLeave = onBack, onRejoin = { ticket = null; attempt += 1 })
     }
 }
 
 /// The running time, ticking every second while connected; otherwise what
 /// the connection is doing.
 @Composable
-private fun CallStatusText(session: CallSession): String {
+internal fun CallStatusText(session: CallSession): String {
     val now by produceState(initialValue = System.currentTimeMillis(), session.state) {
         while (true) {
             value = System.currentTimeMillis()
@@ -212,7 +140,11 @@ private fun CallStage(session: CallSession) {
         modifier = Modifier.fillMaxSize(),
     ) {
         items(tiles, key = { it.identity }) { tile ->
-            CallTileView(tile, session, modifier = Modifier.fillMaxWidth().aspectRatio(if (columns == 1) 16f / 10f else 1f))
+            // 4:3 for one or two people (closer to the real app's own
+            // proportions — a tall-ish rectangle, not a wide letterboxed
+            // one) stacked in a single column; square once there are
+            // enough people to need a real grid.
+            CallTileView(tile, session, modifier = Modifier.fillMaxWidth().aspectRatio(if (columns == 1) 4f / 3f else 1f))
         }
     }
 }
@@ -311,7 +243,7 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
                 RoundControlButton(icon = Icons.Filled.Cameraswitch, on = true, refused = false, label = "Flip camera", onClick = session::flipCamera)
             }
             IconButton(
-                onClick = { session.leave(); onLeave() },
+                onClick = onLeave,
                 modifier = Modifier.size(64.dp, 52.dp).clip(RoundedCornerShape(50)).background(Theme.colors.destructive),
             ) {
                 Icon(Icons.Filled.CallEnd, contentDescription = "Leave the call", tint = Theme.colors.text)
@@ -355,7 +287,7 @@ private fun RoundControlButton(icon: androidx.compose.ui.graphics.vector.ImageVe
 }
 
 @Composable
-private fun CallNote(text: String, action: String? = null, onAction: () -> Unit = {}) {
+internal fun CallNote(text: String, action: String? = null, onAction: () -> Unit = {}) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(text, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
         if (action != null) {

@@ -286,3 +286,37 @@ class CallSession(
         room.initVideoRenderer(renderer)
     }
 }
+
+/// Where a join or a start is, for whatever's showing it — the call
+/// screen (`CallScreen`) when it's in front, the banner (`CallBanner`)
+/// on every other screen while it isn't. Held above `MainTabs`' own
+/// `ConversationScreen`/tab content, not scoped to either, so the call
+/// itself outlives navigating away from the screen that started it —
+/// `docs/phases/15-call-background.md`'s own replacement for Phase 13's
+/// "no persistent background call."
+sealed class CallPhase {
+    /// A ticket is being fetched (`Engine.callTicket`) — before a real
+    /// [CallSession], and so before there's a room to connect at all.
+    data class Connecting(val chat: String, val title: String, val link: CallLink, val camera: Boolean) : CallPhase()
+
+    /// The ticket request itself failed — refused, unreachable, an
+    /// unreadable reply. Distinct from [CallSession]'s own
+    /// [CallConnectionState.LOST] (a session that *had* a ticket and a
+    /// room, then lost the connection): there is no session to have lost
+    /// anything on yet.
+    data class Failed(val chat: String, val title: String, val link: CallLink, val camera: Boolean, val error: String) : CallPhase()
+
+    /// A real session — connecting, connected, reconnecting or lost; see
+    /// [CallSession.state] for which.
+    data class Active(val session: CallSession) : CallPhase()
+}
+
+// Extension properties, not members: `Connecting`/`Failed` already have
+// their own `chat`/`title`/`link`/`camera` (constructor properties), and
+// an extension never collides with those the way a same-named member on
+// the sealed class itself would (Kotlin would then require every
+// subclass to mark its own property `override`, for no benefit here).
+val CallPhase.chat: String get() = when (this) { is CallPhase.Connecting -> chat; is CallPhase.Failed -> chat; is CallPhase.Active -> session.chat }
+val CallPhase.title: String get() = when (this) { is CallPhase.Connecting -> title; is CallPhase.Failed -> title; is CallPhase.Active -> session.title }
+val CallPhase.link: CallLink get() = when (this) { is CallPhase.Connecting -> link; is CallPhase.Failed -> link; is CallPhase.Active -> session.link }
+val CallPhase.camera: Boolean get() = when (this) { is CallPhase.Connecting -> camera; is CallPhase.Failed -> camera; is CallPhase.Active -> session.wantsCamera }

@@ -112,20 +112,19 @@ import org.json.JSONObject
 /// No thread, calls, pinned message, mentions or boosts yet — see
 /// `docs/phases/05-conversation.md`/`docs/phases/07-reply.md`.
 @Composable
-fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: () -> Unit) {
+fun ConversationScreen(
+    engine: Engine,
+    storage: Storage,
+    chat: String,
+    onBack: () -> Unit,
+    onJoinCall: (chat: String, title: String, link: CallLink, camera: Boolean) -> Unit,
+) {
     val isAgent = chat == engine.agentPubkey
     var conversation by remember(chat) { mutableStateOf<com.sphinx.peel.storage.ConversationRow?>(null) }
     var messages by remember(chat) { mutableStateOf(emptyList<MessageRow>()) }
     var draft by remember(chat) { mutableStateOf("") }
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
     var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
-    // The call this device is on, and whether it started with the camera
-    // requested on — set by either a Join (CallBlock) or a Start (the
-    // header menu), read by the CallScreen early-return below. Null means
-    // this screen shows its ordinary content; replacing the whole screen
-    // with CallScreen is the same pattern `openThreadRoot` already uses
-    // for ThreadScreen.
-    var activeCall by remember(chat) { mutableStateOf<Pair<CallLink, Boolean>?>(null) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
@@ -308,8 +307,10 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
         }
     }
 
-    // Starts a call, posts its message, then joins it in-app — CallScreen,
-    // replacing this screen's content, the same way the thread sheet does.
+    // Starts a call, posts its message, then hands off to whatever's
+    // holding the actual call above this screen (`MainTabs`) to join it
+    // in-app — the same `onJoinCall` a received call card's own Join
+    // already calls.
     var startingCall by remember(chat) { mutableStateOf(false) }
     fun startCall(audioOnly: Boolean) {
         scope.launch {
@@ -320,23 +321,13 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                 reload()
                 val server = engine.callServer()
                 val link = server?.let { CallLink.inMessage(previewContent(row), isCallType = true, server = it) }
-                if (link != null) activeCall = link to !audioOnly else error = "Could not start a call."
+                if (link != null) onJoinCall(chat, title, link, !audioOnly) else error = "Could not start a call."
             } catch (e: Exception) {
                 error = e.message ?: "Could not start a call."
             } finally {
                 startingCall = false
             }
         }
-    }
-
-    val call = activeCall
-    if (call != null) {
-        val (callLink, callCamera) = call
-        CallScreen(
-            engine = engine, chat = chat, title = title, link = callLink, camera = callCamera,
-            onBack = { activeCall = null },
-        )
-        return
     }
 
     val openRoot = openThreadRoot
@@ -346,7 +337,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
             threadRootUuid = openRoot, messages = messages,
             onBack = { openThreadRoot = null },
             onSent = { scope.launch { reload() } },
-            onJoinCall = { link -> activeCall = link to false },
+            onJoinCall = { link -> onJoinCall(chat, title, link, false) },
         )
         return
     }
@@ -458,7 +449,7 @@ fun ConversationScreen(engine: Engine, storage: Storage, chat: String, onBack: (
                     onOpenThread = { row.uuid?.let { openThreadRoot = it } },
                     onReply = { replyTo = row },
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
-                    onJoinCall = { link -> activeCall = link to false },
+                    onJoinCall = { link -> onJoinCall(chat, title, link, false) },
                     onDelete = { deleteMessage(row) },
                 )
             }

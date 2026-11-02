@@ -74,15 +74,12 @@ and Jamie/Hive picks) — see "Open" and "Decided".
 
 **Open:**
 
-- No persistent background call / on-call banner (PeelCore's own
-  `IOSOnCallBar`, `onCallBannerInset()`) — leaving the call screen ends
-  the call. Adding this means a call session that outlives
-  `ConversationScreen`'s own composition (held somewhere above
-  `MainTabs`, the way `Engine` itself is), plus the cross-chat "leave
-  the call in #design and join this one instead?" confirmation
-  PeelCore's own `CallStore.otherCall`/`callSwitchConfirmation` exists
-  for — a real, separable piece of its own, not a small addition to
-  what's here.
+- **Persistent background call / on-call banner is built** — see
+  [phases/15-call-background.md](15-call-background.md). Still open
+  from that phase: the cross-chat "leave and join a different one?"
+  confirmation, and real OS-level backgrounding (no foreground
+  service yet — this is "survives switching screens inside Peel," not
+  "survives Android backgrounding the app").
 - No screen sharing (no Android equivalent of iOS's broadcast
   extension / Mac's screen picker built), so no focus/pin layout
   either — `CallTile` has no `isScreen` field to need one.
