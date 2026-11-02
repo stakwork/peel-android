@@ -4,6 +4,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.sphinx.peel.engine.InvoiceRecord
+import com.sphinx.peel.engine.PaymentRecord
 import org.json.JSONObject
 
 /// `engine/Attachment.kt`'s own `ATTACHMENT_MESSAGE_TYPE`/
@@ -410,7 +412,9 @@ class Storage(context: Context, account: String = "default") {
     /// shows. Not paged yet: fine for how little history a real account
     /// here has per chat so far, revisit once a busy tribe makes "load
     /// more" worth building.
-    fun messages(chat: String): List<MessageRow> {
+    fun messages(chat: String): List<MessageRow> = readMessages("chat = ?", arrayOf(chat), "timestamp ASC, id ASC")
+
+    private fun readMessages(selection: String, args: Array<String>, orderBy: String): List<MessageRow> {
         val rows = mutableListOf<MessageRow>()
         helper.readableDatabase.query(
             "message",
@@ -418,7 +422,7 @@ class Storage(context: Context, account: String = "default") {
                 "id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag",
                 "paymentHash", "status", "replyUuid", "threadUuid", "deleted",
             ),
-            "chat = ?", arrayOf(chat), null, null, "timestamp ASC, id ASC",
+            selection, args, null, null, orderBy,
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 rows.add(
@@ -748,6 +752,175 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
+    // MARK: - Money (invoices and the server's payment history)
+
+    /// Writes an invoice record, refusing to replace a record that is not
+    /// failed with one that would pay again: a second send for a hash that is
+    /// pending or paid is turned down (returns false), so the same invoice
+    /// can never be paid twice from here — PeelCore's `Storage.apply`
+    /// invoice guard. An incoming (receive) record is replaced freely only
+    /// while still open.
+    fun saveInvoice(record: InvoiceRecord): Boolean {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            val existing = readInvoice(db, record.paymentHash, record.incoming)
+            if (existing != null && existing.status != InvoiceRecord.Status.FAILED && existing.status != InvoiceRecord.Status.OPEN) {
+                return false
+            }
+            val values = ContentValues().apply {
+                put("paymentHash", record.paymentHash)
+                put("incoming", if (record.incoming) 1 else 0)
+                put("bolt11", record.bolt11)
+                put("amountMsat", record.amountMsat)
+                put("memo", record.memo)
+                put("payee", record.payee)
+                put("createdAt", record.createdAt)
+                put("expiresAt", record.expiresAt)
+                put("status", record.status.raw)
+                put("paidAt", record.paidAt)
+                put("paidMsat", record.paidMsat)
+                put("tag", record.tag)
+                put("chat", record.chat)
+                put("error", record.error)
+            }
+            db.insertWithOnConflict("invoice", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+            return true
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun invoice(paymentHash: String, incoming: Boolean): InvoiceRecord? =
+        readInvoice(helper.readableDatabase, paymentHash, incoming)
+
+    /// Newest first.
+    fun invoices(): List<InvoiceRecord> {
+        helper.readableDatabase.rawQuery("SELECT * FROM invoice ORDER BY createdAt DESC", null).use { c ->
+            val out = mutableListOf<InvoiceRecord>()
+            while (c.moveToNext()) out.add(invoiceFrom(c))
+            return out
+        }
+    }
+
+    private fun readInvoice(db: SQLiteDatabase, hash: String, incoming: Boolean): InvoiceRecord? =
+        db.rawQuery("SELECT * FROM invoice WHERE paymentHash = ? AND incoming = ?", arrayOf(hash, if (incoming) "1" else "0")).use { c ->
+            if (c.moveToFirst()) invoiceFrom(c) else null
+        }
+
+    private fun invoiceFrom(c: android.database.Cursor): InvoiceRecord = InvoiceRecord(
+        paymentHash = c.getString(c.getColumnIndexOrThrow("paymentHash")),
+        incoming = c.getInt(c.getColumnIndexOrThrow("incoming")) != 0,
+        bolt11 = c.getString(c.getColumnIndexOrThrow("bolt11")),
+        amountMsat = c.getLong(c.getColumnIndexOrThrow("amountMsat")),
+        memo = c.getString(c.getColumnIndexOrThrow("memo")),
+        payee = c.getString(c.getColumnIndexOrThrow("payee")),
+        createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")),
+        expiresAt = c.getColumnIndexOrThrow("expiresAt").let { if (c.isNull(it)) null else c.getLong(it) },
+        status = InvoiceRecord.Status.of(c.getString(c.getColumnIndexOrThrow("status"))),
+        paidAt = c.getColumnIndexOrThrow("paidAt").let { if (c.isNull(it)) null else c.getLong(it) },
+        paidMsat = c.getColumnIndexOrThrow("paidMsat").let { if (c.isNull(it)) null else c.getLong(it) },
+        tag = c.getColumnIndexOrThrow("tag").let { if (c.isNull(it)) null else c.getString(it) },
+        chat = c.getColumnIndexOrThrow("chat").let { if (c.isNull(it)) null else c.getString(it) },
+        error = c.getColumnIndexOrThrow("error").let { if (c.isNull(it)) null else c.getString(it) },
+    )
+
+    /// An invoice of ours that the server says was paid (a history row, a
+    /// type-3 message): settled, never moved backwards. For one we made, an
+    /// amount under what it asked is UNDERPAID, as PeelCore settles it.
+    fun settleInvoice(paymentHash: String, incoming: Boolean, paidMsat: Long?, atMs: Long) {
+        val record = invoice(paymentHash, incoming) ?: return
+        if (record.status == InvoiceRecord.Status.PAID || record.status == InvoiceRecord.Status.UNDERPAID) return
+        val under = incoming && paidMsat != null && paidMsat < record.amountMsat
+        helper.writableDatabase.execSQL(
+            "UPDATE invoice SET status = ?, paidAt = ?, paidMsat = ?, error = NULL WHERE paymentHash = ? AND incoming = ?",
+            arrayOf<Any?>(
+                (if (under) InvoiceRecord.Status.UNDERPAID else InvoiceRecord.Status.PAID).raw,
+                atMs, paidMsat, paymentHash, if (incoming) 1 else 0,
+            ),
+        )
+    }
+
+    /// The mixer's word on a payment's tag: COMPLETE settles it, FAILED
+    /// frees it to be tried again. Only a pending record moves.
+    fun markInvoiceSendStatus(tag: String, delivered: Boolean, error: String? = null) {
+        helper.writableDatabase.execSQL(
+            "UPDATE invoice SET status = ?, paidAt = ?, error = ? WHERE tag = ? AND incoming = 0 AND status = 'PENDING'",
+            arrayOf<Any?>(
+                if (delivered) InvoiceRecord.Status.PAID.raw else InvoiceRecord.Status.FAILED.raw,
+                if (delivered) System.currentTimeMillis() else null,
+                if (delivered) null else (error ?: "failed"),
+                tag,
+            ),
+        )
+    }
+
+    /// A send of ours the server's history shows failed: free to be paid again.
+    fun failPendingInvoice(paymentHash: String, error: String?) {
+        helper.writableDatabase.execSQL(
+            "UPDATE invoice SET status = 'FAILED', error = ? WHERE paymentHash = ? AND incoming = 0 AND status = 'PENDING'",
+            arrayOf<Any?>(error ?: "failed", paymentHash),
+        )
+    }
+
+    /// A page of the server's history, stored (a row seen again is replaced:
+    /// its error may have been filled in since).
+    fun insertPayments(rows: List<PaymentRecord>) {
+        if (rows.isEmpty()) return
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            for (row in rows) {
+                val values = ContentValues().apply {
+                    put("rhash", row.rhash)
+                    put("ts", row.ts)
+                    put("amountMsat", row.amountMsat)
+                    put("incoming", if (row.incoming) 1 else 0)
+                    put("msgIndex", row.msgIndex)
+                    put("remote", if (row.remote) 1 else 0)
+                    put("error", row.error)
+                }
+                db.insertWithOnConflict("payment", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /// Stored history, newest first, at most `limit` rows.
+    fun payments(limit: Int): List<PaymentRecord> =
+        helper.readableDatabase.rawQuery("SELECT * FROM payment ORDER BY ts DESC LIMIT ?", arrayOf(limit.toString())).use { c ->
+            val out = mutableListOf<PaymentRecord>()
+            while (c.moveToNext()) {
+                out.add(
+                    PaymentRecord(
+                        rhash = c.getString(c.getColumnIndexOrThrow("rhash")),
+                        ts = c.getLong(c.getColumnIndexOrThrow("ts")),
+                        amountMsat = c.getLong(c.getColumnIndexOrThrow("amountMsat")),
+                        incoming = c.getInt(c.getColumnIndexOrThrow("incoming")) != 0,
+                        msgIndex = c.getColumnIndexOrThrow("msgIndex").let { if (c.isNull(it)) null else c.getLong(it) },
+                        remote = c.getInt(c.getColumnIndexOrThrow("remote")) != 0,
+                        error = c.getColumnIndexOrThrow("error").let { if (c.isNull(it)) null else c.getString(it) },
+                    ),
+                )
+            }
+            out
+        }
+
+    fun oldestPaymentTimestamp(): Long? = scalarLong("SELECT MIN(ts) FROM payment")
+
+    fun newestPaymentTimestamp(): Long? = scalarLong("SELECT MAX(ts) FROM payment")
+
+    private fun scalarLong(sql: String): Long? =
+        helper.readableDatabase.rawQuery(sql, null).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+
+    /// The message with this payment hash, if stored: how a history row finds
+    /// its chat, note and counterpart.
+    fun messageByPaymentHash(hash: String): MessageRow? =
+        readMessages("paymentHash = ?", arrayOf(hash), "id ASC").firstOrNull()
+
     fun close() = helper.close()
 
     /// Wipes this account's whole database. "Forget this account" (dev)
@@ -769,6 +942,7 @@ class Storage(context: Context, account: String = "default") {
             v6(db)
             v7(db)
             v8(db)
+            v9(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -782,6 +956,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 6) v6(db)
             if (oldVersion < 7) v7(db)
             if (oldVersion < 8) v8(db)
+            if (oldVersion < 9) v9(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -935,8 +1110,50 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("ALTER TABLE message ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
         }
 
+        // `invoice` and `payment`, ported from PeelCore's Storage+Migrations
+        // (the columns Android's Payments feature reads): an invoice made
+        // here or paid here, and the server's payment history (fetch_payments).
+        private fun v9(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE invoice (
+                    paymentHash TEXT NOT NULL,
+                    incoming INTEGER NOT NULL,
+                    bolt11 TEXT NOT NULL,
+                    amountMsat INTEGER NOT NULL,
+                    memo TEXT NOT NULL,
+                    payee TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    expiresAt INTEGER,
+                    status TEXT NOT NULL,
+                    paidAt INTEGER,
+                    paidMsat INTEGER,
+                    tag TEXT,
+                    chat TEXT,
+                    error TEXT,
+                    PRIMARY KEY (paymentHash, incoming)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX invoice_tag ON invoice(tag)")
+            db.execSQL(
+                """
+                CREATE TABLE payment (
+                    rhash TEXT PRIMARY KEY NOT NULL,
+                    ts INTEGER NOT NULL,
+                    amountMsat INTEGER NOT NULL,
+                    incoming INTEGER NOT NULL,
+                    msgIndex INTEGER,
+                    remote INTEGER NOT NULL,
+                    error TEXT
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX payment_ts ON payment(ts)")
+        }
+
         companion object {
-            const val VERSION = 8
+            const val VERSION = 9
         }
     }
 }

@@ -68,6 +68,14 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// threads on its own; `@Volatile` gives it that without needing the
     /// lock just to read it.
     private val mutex = Mutex()
+
+    /// One history fetch or invoice request at a time: the server's answer
+    /// names no request, so a second ask while one is out could be taken as
+    /// the first's answer (PeelCore's `money.awaitingPayments`/`awaitingInvoice`).
+    internal val moneyLock = Mutex()
+
+    /// Payment hashes being paid right now: a second tap on Pay is refused.
+    internal val sendsInFlight: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
     private val clock = UniqueClock(storage.value(Setting.CLOCK)?.toLongOrNull() ?: 0)
     @Volatile private var state: Map<String, ByteArray> = storage.loadCoreState()
     private var transport: Transport? = null
@@ -133,10 +141,19 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// runs against stale state. Ported from PeelCore's Engine.swift
     /// (`run`, which always both commits and publishes); its
     /// message/contact/tribe/payment bookkeeping is not here.
-    suspend fun run(call: (time: String, state: ByteArray) -> RunReturn): RunReturn = mutex.withLock {
+    ///
+    /// `beforePublish` runs after the commit and before anything is
+    /// published, still under the lock: a payment writes its own pending
+    /// record there, so a send that may have gone is never unrecorded
+    /// (PeelCore's `commitAndPublish(invoices:)`).
+    suspend fun run(
+        beforePublish: (RunReturn) -> Unit = {},
+        call: (time: String, state: ByteArray) -> RunReturn,
+    ): RunReturn = mutex.withLock {
         val time = clock.next()
         val result = call(time, StateCodec.encode(state))
         commitLocked(result, time)
+        beforePublish(result)
         publishLocked(result)
         result
     }
@@ -162,7 +179,10 @@ class Engine(mnemonic: String, val storage: Storage) {
         // nothing from that to be worth doing — it's what lets Profile
         // show a real balance instead of nothing at all.
         val settings = mutableMapOf(Setting.CLOCK to time)
-        result.newBalance?.let { settings[Setting.BALANCE_MSAT] = it.toString() }
+        result.newBalance?.let {
+            settings[Setting.BALANCE_MSAT] = it.toString()
+            balanceFlow.value = it.toLong()
+        }
 
         storage.apply(
             Storage.Commit(
@@ -178,6 +198,15 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// yet), only ever updated as a side effect of `commitLocked`. Null
     /// before the first call that reports one.
     fun balanceMsat(): Long? = storage.value(Setting.BALANCE_MSAT)?.toLongOrNull()
+
+    private val balanceFlow = MutableStateFlow(storage.value(Setting.BALANCE_MSAT)?.toLongOrNull())
+
+    /// The balance as it moves: what the Payments tab and a payment's own
+    /// checks watch (PeelUI's `AppModel.balanceMsat`). Null until a core call has reported one.
+    val balance: StateFlow<Long?> = balanceFlow.asStateFlow()
+
+    /// Whether a broker connection exists to publish to.
+    internal val isConnected: Boolean get() = transport != null
 
     /// The broker this account last connected to, as `host:port` with its
     /// scheme (`ServerAddress.toString`) — PeelCore's own `Engine.setServer`,
@@ -366,8 +395,12 @@ class Engine(mnemonic: String, val storage: Storage) {
         val sentStatus = result.sentStatus?.let { runCatching { JSONObject(it) }.getOrNull() }
         val tag = sentStatus?.optString("tag")?.takeIf { it.isNotEmpty() }
         if (tag != null) {
-            storage.markSendStatus(tag, delivered = sentStatus.optString("status") != "FAILED")
+            val delivered = sentStatus.optString("status") != "FAILED"
+            storage.markSendStatus(tag, delivered = delivered)
+            // Paying an invoice is tracked by its tag the same way.
+            storage.markInvoiceSendStatus(tag, delivered, sentStatus.optString("error").takeIf { it.isNotEmpty() })
         }
+        storeMoney(result, rows)
         // Read markers and mutes, same "whatever `RunReturn` carries it"
         // reasoning as `sentStatus` — PeelCore's `receive(_:)` special-
         // cases the `"getreads"` topic kind to re-trigger
@@ -490,14 +523,15 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// (`boostAmountMsat()`) plus, in a tribe, its own price and escrow
     /// (`tribePaymentPriceMsat`, no floor) — PeelCore's own
     /// `quickBoost`, trimmed to its everyday one-tap path. No
-    /// confirmation threshold: that depends on a balance this port
-    /// doesn't track (no Payments tab, no payment history), so there's
-    /// nothing to check the total against here; a boost that can't
-    /// actually be afforded fails the same way any other send can,
-    /// surfaced as a plain error, not predicted ahead of time.
+    /// confirmation threshold, as PeelCore's one-tap boost has none; the
+    /// balance is checked when known (`checkPayment`, `Payments.kt`), so a
+    /// boost that can't be afforded is refused with words instead of failing at the server.
     suspend fun sendBoost(chat: String, targetUuid: String, isTribe: Boolean): MessageRow {
         check(transport != null) { "Not connected." }
         val amountMsat = boostAmountMsat() + (if (isTribe) tribePaymentPriceMsat(chat) else 0L)
+        // One tap sends unasked (PeelCore's `.unasked`): only the balance
+        // is checked, here when one is known (a ping is added in a DM).
+        checkPayment(amountMsat, confirmedMsat = null, unasked = true, reserveMsat = if (isTribe) 0L else PING_MSAT)
         val body = JSONObject().apply {
             put("content", "")
             put("replyUuid", targetUuid)
@@ -1002,7 +1036,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// restore call takes: the real answer is not the ask's own return
     /// value, it is whatever the server publishes back later. Null on
     /// [timeoutMs] with nothing matching.
-    private suspend fun askAndAwait(
+    internal suspend fun askAndAwait(
         timeoutMs: Long,
         expect: (RunReturn) -> Boolean,
         ask: suspend () -> RunReturn,

@@ -50,6 +50,10 @@ import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.SecretStoreFailure
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.PaymentRules
+import com.sphinx.peel.engine.Sats
+import com.sphinx.peel.engine.paymentConfirmationMsat
+import com.sphinx.peel.engine.setPaymentConfirmation
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
@@ -101,6 +105,8 @@ private fun YouMain(
     var confirmingForget by remember { mutableStateOf(false) }
     var editingName by remember { mutableStateOf(false) }
     var editingBoostAmount by remember { mutableStateOf(false) }
+    var editingConfirmation by remember { mutableStateOf(false) }
+    var confirmationMsat by remember { mutableStateOf(engine.paymentConfirmationMsat()) }
     var alias by remember { mutableStateOf(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() }) }
     var boostAmountMsat by remember { mutableStateOf(engine.boostAmountMsat()) }
     // `balanceMsat` only ever moves as a side effect of some other call's
@@ -136,7 +142,7 @@ private fun YouMain(
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    balanceMsat?.let { "${it / 1000} sats" } ?: "–",
+                    balanceMsat?.let { Sats.format(it) } ?: "–",
                     color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -193,6 +199,12 @@ private fun YouMain(
                 )
                 AccountDivider()
                 AccountRow(
+                    label = "Confirm payments",
+                    value = if (confirmationMsat == 0L) "Always" else "Over ${Sats.format(confirmationMsat)}",
+                    onClick = { editingConfirmation = true },
+                )
+                AccountDivider()
+                AccountRow(
                     label = "Server",
                     value = (engine.serverLabel() ?: "None") + "\n" + connectionLabel(connection),
                     onClick = null,
@@ -242,11 +254,20 @@ private fun YouMain(
     if (editingBoostAmount) {
         var draft by remember { mutableStateOf((boostAmountMsat / 1000).toString()) }
         var error by remember { mutableStateOf<String?>(null) }
+        // The amount typed that the person has already been told is over the
+        // confirmation limit: saving it again is the confirmation (a payment
+        // over the threshold takes a second tap, PeelCore's `setBoostAmount`).
+        var askedFor by remember { mutableStateOf<Long?>(null) }
         AlertDialog(
             onDismissRequest = { editingBoostAmount = false },
             title = { Text("Boost amount") },
             text = {
                 Column {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (preset in listOf(10L, 50L, 100L, 500L, 1_000L)) {
+                            TextButton(onClick = { draft = preset.toString(); askedFor = null; error = null }) { Text("$preset") }
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         BasicTextField(
                             value = draft,
@@ -268,6 +289,9 @@ private fun YouMain(
                     val sats = draft.toLongOrNull()
                     if (sats == null || sats <= 0) {
                         error = "Enter a whole number of sats, more than zero."
+                    } else if (PaymentRules.needsConfirmation(sats * 1000, askedFor, confirmationMsat)) {
+                        askedFor = sats * 1000
+                        error = "Every boost sends ${Sats.format(sats * 1000)}, more than your confirmation limit. Save again to confirm."
                     } else {
                         boostAmountMsat = sats * 1000
                         editingBoostAmount = false
@@ -278,6 +302,36 @@ private fun YouMain(
                 }) { Text("Save") }
             },
             dismissButton = { TextButton(onClick = { editingBoostAmount = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (editingConfirmation) {
+        val choices = listOf(0L, 100L, 1_000L, 10_000L).map { it * 1000 }.let { if (confirmationMsat in it) it else it + confirmationMsat }
+        AlertDialog(
+            onDismissRequest = { editingConfirmation = false },
+            title = { Text("Confirm payments") },
+            text = {
+                Column {
+                    Text(
+                        "Payments and boosts over this amount ask you to confirm first.",
+                        style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+                    )
+                    for (msat in choices) {
+                        TextButton(onClick = {
+                            engine.setPaymentConfirmation(msat)
+                            confirmationMsat = msat
+                            editingConfirmation = false
+                        }) {
+                            Text(
+                                (if (msat == 0L) "Always" else "Over ${Sats.format(msat)}") + if (msat == confirmationMsat) "  ✓" else "",
+                                color = Theme.colors.text,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { editingConfirmation = false }) { Text("Cancel") } },
         )
     }
 

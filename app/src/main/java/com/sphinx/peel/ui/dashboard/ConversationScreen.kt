@@ -81,6 +81,12 @@ import com.sphinx.peel.engine.AttachmentKind
 import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.DIRECT_PAYMENT_MESSAGE_TYPE
+import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
+import com.sphinx.peel.ui.payments.ChatMoneyAction
+import com.sphinx.peel.ui.payments.ChatMoneyDialog
+import com.sphinx.peel.ui.payments.PaymentMessage
+import com.sphinx.peel.ui.payments.RequestMessage
 import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
@@ -126,6 +132,7 @@ fun ConversationScreen(
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
     var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
+    var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
     val audioPlayer = remember(chat) { AudioPlayer() }
@@ -406,7 +413,7 @@ fun ConversationScreen(
         // active chat bumping to the bottom.
         val threads = remember(messages, isTribe, myAlias) { if (isTribe) threadSummaries(messages, myAlias) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
-            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
 
@@ -451,6 +458,7 @@ fun ConversationScreen(
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                     onJoinCall = { link -> onJoinCall(chat, title, link, false) },
                     onDelete = { deleteMessage(row) },
+                    onMoneyError = { error = it },
                 )
             }
         }
@@ -484,6 +492,8 @@ fun ConversationScreen(
             onReleaseRecord = { voiceRecorder.release() },
             onCancelRecord = { voiceRecorder.cancel() },
             sendingLabel = sendingLabel,
+            onSendSats = { moneyAction = ChatMoneyAction.SEND }.takeIf { !isTribe && !isAgent },
+            onRequestSats = { moneyAction = ChatMoneyAction.REQUEST }.takeIf { !isTribe && !isAgent },
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
@@ -504,6 +514,13 @@ fun ConversationScreen(
                 }
             },
         )
+        moneyAction?.let { action ->
+            ChatMoneyDialog(
+                action, engine, chat, title,
+                onDismiss = { moneyAction = null },
+                onDone = { moneyAction = null; scope.launch { reload() } },
+            )
+        }
     }
 }
 
@@ -839,6 +856,12 @@ private fun isThreadContent(row: MessageRow): Boolean {
 /// `VoiceMessage.cancelDistance` (80 points).
 private const val VOICE_CANCEL_DISTANCE_DP = 80
 
+/// Money messages that are bookkeeping, not a row: the type-3 note a payer's
+/// app sends once a request is paid (it flips the request to Paid), and the
+/// paid-attachment purchase messages (7, 8, 9: not supported here,
+/// `docs/money-parity.md`). PeelCore's `shownInChats` leaves them out too.
+private val HIDDEN_MONEY_TYPES = setOf(3, 7, 8, 9)
+
 private data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean)
 
 /// Every boost in `messages`, summed per message it boosts — PeelCore's
@@ -981,6 +1004,7 @@ private fun MessageRowView(
     onBoost: (() -> Unit)? = null,
     onJoinCall: (CallLink) -> Unit = {},
     onDelete: (() -> Unit)? = null,
+    onMoneyError: (String) -> Unit = {},
     deleteReplyCount: Int = threadSummary?.replyCount ?: 0,
 ) {
     val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
@@ -1049,7 +1073,11 @@ private fun MessageRowView(
                 AttachmentView(row, engine, audioPlayer)
                 if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
             }
-            if (!row.deleted && callLink != null) {
+            if (!row.deleted && row.type == DIRECT_PAYMENT_MESSAGE_TYPE) {
+                PaymentMessage(row, name)
+            } else if (!row.deleted && row.type == INVOICE_MESSAGE_TYPE) {
+                RequestMessage(row, name, engine, engine.storage, onError = onMoneyError)
+            } else if (!row.deleted && callLink != null) {
                 CallBlock(callLink, engine, onJoinCall)
             } else if (!row.deleted && (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE)) {
                 Text(
@@ -1530,6 +1558,10 @@ private fun Composer(
     onCancelRecord: () -> Unit,
     sendingLabel: String?,
     onSend: () -> Unit,
+    /// Sats to a person (a DM, not a tribe or the agent): the attach menu's
+    /// "Send sats" and "Request sats". Null hides them.
+    onSendSats: (() -> Unit)? = null,
+    onRequestSats: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         if (replyTarget != null) {
@@ -1579,6 +1611,8 @@ private fun Composer(
                     // app has no dedicated video picker either; a video
                     // reaches the send path through this same option there.
                     DropdownMenuItem(text = { Text("File") }, onClick = { attachMenuOpen = false; onPickFile() })
+                    if (onSendSats != null) DropdownMenuItem(text = { Text("Send sats") }, onClick = { attachMenuOpen = false; onSendSats() })
+                    if (onRequestSats != null) DropdownMenuItem(text = { Text("Request sats") }, onClick = { attachMenuOpen = false; onRequestSats() })
                 }
             }
             Box(

@@ -72,4 +72,9 @@ enum class Setting(val key: String) {
     /// falls back to the official apps' own `chat.sphinx.chat` the same
     /// way PeelCore's `configuredHost` does.
     CALL_SERVER("callServer"),
+
+    /// Payments and invoices over this many msat need the person's
+    /// confirmation first — PeelCore's `paymentConfirmationMsat`
+    /// (default 100 sats, 0 asks every time). Local to this device, as there.
+    PAYMENT_CONFIRMATION_MSAT("paymentConfirmationMsat"),
 }

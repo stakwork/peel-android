@@ -29,6 +29,11 @@ sections for code that isn't written yet.
     state-map format), `UniqueClock`, `ServerAddress`, `Transport` (MQTT,
     HiveMQ client, built but not connected to anything). Ported from
     `peel`'s `Engine.swift`, `StateCodec.swift`, `Transport.swift`.
+  - `engine/Payments.kt`, `Invoice.kt`, `Sats.kt` — money: balance checks,
+    invoices, payment history, pay/request/send (ported from `Engine+Payments.swift`,
+    `Invoice.swift`, `Sats.swift`); see `docs/money-parity.md`.
+  - `ui/payments/` — the Payments tab, Receive/Send, the QR scanner (CameraX +
+    ZXing) and the in-chat payment and request rows.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
