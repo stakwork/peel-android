@@ -973,9 +973,18 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `getMutes`' own answers arrive asynchronously, same asymmetry as
     /// every other history ask, and land in `storeMessages` (which
     /// `askAndAwait`'s listener already runs every inbound `RunReturn`
-    /// through) — this only sends the asks and then flushes whatever this
-    /// device moved locally while it had nothing to send it to.
-    private suspend fun fetchReadsAndMutes() {
+    /// through) — this only sends the asks (the wait and the flush of
+    /// whatever this device moved locally while it had nothing to send it to
+    /// run in the background).
+    private fun fetchReadsAndMutes() {
+        // Not awaited by the caller (iOS only sends the two asks): each
+        // wait is up to `historyWaitMs`, and a fresh restore has no reads or
+        // mutes to answer, so awaiting here stalled the contacts restore for
+        // up to a minute after "Connected". Answers land through the listener.
+        scope.launch { fetchReadsAndMutesAwaiting() }
+    }
+
+    private suspend fun fetchReadsAndMutesAwaiting() {
         askAndAwait(historyWaitMs, expect = { it.lastRead != null }) {
             run { time, stateBytes -> coreGetReads(seed, time, stateBytes) }
         }
@@ -1056,7 +1065,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         scope.launch {
             backfillContactsIfNeeded()
             if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
+            // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
+            // an earlier answer cannot be used.
+            if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             refreshTribeNames()
             runCatching { syncBoostAmount() }
@@ -1101,7 +1112,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
+            // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
+            // an earlier answer cannot be used.
+            if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
             // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             runCatching { syncBoostAmount() }
@@ -1291,7 +1304,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// (`setLastMessagesOnChats`). Chats whose newest message is incoming
     /// are left alone.
     private suspend fun settleReadsAfterRestore() {
-        fetchReadsAndMutes()
+        fetchReadsAndMutesAwaiting()
         for (conversation in storage.conversations()) {
             if (storage.newestMessageFromMe(conversation.chat)) markRead(conversation.chat)
         }

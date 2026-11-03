@@ -222,6 +222,19 @@ class StorageTest {
     }
 
     @Test
+    fun `a later message of a tribe keeps the name updateTribeInfo stored`() {
+        val storage = newStorage()
+        storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)
+        storage.updateTribeInfo("tribe1", "The Watercooler", "https://example.com/tribe.jpg")
+        storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)
+        storage.upsertContact("tribe1", alias = "Paul", photoUrl = null, isTribe = false)
+
+        val c = storage.conversations()[0]
+        assertEquals("The Watercooler", c.alias)
+        assertEquals("https://example.com/tribe.jpg", c.photoUrl)
+    }
+
+    @Test
     fun `updateTribeInfo fills in a known tribe's real name and photo`() {
         val storage = newStorage()
         storage.upsertContact("tribe1", alias = null, photoUrl = null, isTribe = true, ready = true)

@@ -663,11 +663,11 @@ class Storage(context: Context, account: String = "default") {
     /// messages, by the look of them) — so one of those can be the first
     /// call seen for a chat, writing a member's name in as if it belonged
     /// to the chat itself, before a later call reveals it's a tribe.
-    /// Always nulling here (rather than only at the moment `isTribe`
-    /// turns true) fixes that regardless of call order, and also heals a
-    /// row a previous, buggier version of this method already got wrong
-    /// — confirmed on a real account (`docs/phases/04-dashboard.md`) — the
-    /// next time anything calls this for that pubkey.
+    /// A row that already was a tribe keeps its stored name/photo; they
+    /// are nulled only when a row is newly recognised as a tribe, which
+    /// fixes that regardless of call order, and also heals a row a
+    /// previous, buggier version of this method already got wrong
+    /// — confirmed on a real account (`docs/phases/04-dashboard.md`).
     fun upsertContact(pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean = false) =
         upsertContact(helper.writableDatabase, pubkey, alias, photoUrl, isTribe, ready)
 
@@ -676,8 +676,15 @@ class Storage(context: Context, account: String = "default") {
         val tribe = isTribe || existing?.isTribe == true
         val values = ContentValues().apply {
             put("pubkey", pubkey)
-            put("alias", if (tribe) null else (alias ?: existing?.alias))
-            put("photoUrl", if (tribe) null else (photoUrl ?: existing?.photoUrl))
+            // A tribe's name/photo are never taken from the message, but one
+            // already stored for a row that was a tribe (`updateTribeInfo`,
+            // the registry's own answer) is kept: nulling it here made every
+            // later message of the tribe reset its name to the public key.
+            // A row only just recognised as a tribe still drops what a member's
+            // message wrote into it.
+            val keepTribeInfo = tribe && existing?.isTribe == true
+            put("alias", if (tribe) (if (keepTribeInfo) existing?.alias else null) else (alias ?: existing?.alias))
+            put("photoUrl", if (tribe) (if (keepTribeInfo) existing?.photoUrl else null) else (photoUrl ?: existing?.photoUrl))
             put("isTribe", if (tribe) 1 else 0)
             put("ready", if (ready || existing?.ready == true) 1 else 0)
             // `CONFLICT_REPLACE` replaces the whole row — a price fetched
