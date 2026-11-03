@@ -676,8 +676,15 @@ class Storage(context: Context, account: String = "default") {
         val tribe = isTribe || existing?.isTribe == true
         val values = ContentValues().apply {
             put("pubkey", pubkey)
-            put("alias", if (tribe) null else (alias ?: existing?.alias))
-            put("photoUrl", if (tribe) null else (photoUrl ?: existing?.photoUrl))
+            // A tribe's name/photo are never taken from the message, but one
+            // already stored for a row that was a tribe (`updateTribeInfo`,
+            // the registry's own answer) is kept: nulling it here made every
+            // later message of the tribe reset its name to the public key.
+            // A row only just recognised as a tribe still drops what a member's
+            // message wrote into it.
+            val keepTribeInfo = tribe && existing?.isTribe == true
+            put("alias", if (tribe) (if (keepTribeInfo) existing?.alias else null) else (alias ?: existing?.alias))
+            put("photoUrl", if (tribe) (if (keepTribeInfo) existing?.photoUrl else null) else (photoUrl ?: existing?.photoUrl))
             put("isTribe", if (tribe) 1 else 0)
             put("ready", if (ready || existing?.ready == true) 1 else 0)
             // `CONFLICT_REPLACE` replaces the whole row — a price fetched
