@@ -36,6 +36,8 @@ sections for code that isn't written yet.
     state-map format), `UniqueClock`, `ServerAddress`, `Transport` (MQTT,
     HiveMQ client, built but not connected to anything). Ported from
     `peel`'s `Engine.swift`, `StateCodec.swift`, `Transport.swift`.
+  - `engine/RestoreCursor.kt` — a restore's resumable position
+    (`Setting.RESTORE_CURSOR`); see `docs/phases/03-restoring.md`.
   - `engine/Payments.kt`, `Invoice.kt`, `Sats.kt` — money: balance checks,
     invoices, payment history, pay/request/send (ported from `Engine+Payments.swift`,
     `Invoice.swift`, `Sats.swift`); see `docs/money-parity.md`.

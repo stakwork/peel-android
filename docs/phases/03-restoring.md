@@ -93,10 +93,8 @@ is its own large system (see the Journal). This phase stores real
 contacts and messages correctly for the direct-message case; a tribe's
 messages land as a generic chat under the tribe's own pubkey, not a
 `tribe` row with membership/roles. No chat UI reads `contact`/`message`
-yet — `HomeScreen` still says so explicitly. No resumable restore (a
-restore that fails partway starts over from the beginning next time, not
-from where it stopped — PeelCore's `HistoryCursor` tracks a resumable
-cursor; this phase's `Engine.page` does not). No keep-alive and no way
+yet — `HomeScreen` still says so explicitly. Restore is now resumable (see "Restore findings and resumable
+cursor" below). No keep-alive and no way
 to *detect* a dropped connection (no ping, no HiveMQ connection-state
 callback): `resume()` always disconnects and reconnects on its own,
 regardless of whether the old connection was actually still good, rather
@@ -336,6 +334,80 @@ wrong one. That rules out the fix this note previously assumed was
 possible; what's left is finding out why Android would still be slower
 than iOS at the exact same one-at-a-time design, which needs a timed
 restore to actually answer rather than more reading.
+
+## Restore findings and resumable cursor
+
+**Base:** stacked on `feat/preferences-sync` (PR #3), itself stacked on
+`feat/money-scope-2` (PR #2). Neither #2 nor #3 (nor #1) was merged into
+`main` when this was written.
+
+**iOS flow** (`Engine+History.swift`, `HistoryCursor.swift`). On coming
+online, `resumeHistory` asks `getMsgsCounts` for a restore and
+`HistoryCursor.plan` makes up to two `Run`s: contacts
+(`fetchFirstMsgsPerKey`), then messages (`fetchMsgsBatch`), 100 per page
+(`historyPageSize`). The cursor holds the run in flight (`next`, `end`) and,
+for a catch-up, `from`, kept as `Setting.historyFrom` — the one persisted
+piece, so a catch-up resumes. A restore's own run is *not* persisted on iOS
+either (`restoring` stays set and `resumeHistory` starts from counts again);
+iOS's resilience is that `from` survives and the watchdog (30 s) pauses
+history with Resume offered instead of marking it done. Pages are strictly
+one at a time: they carry no request id (`advance`'s comment). A page behind
+the cursor is ignored as a duplicate or stale reply.
+
+**Android flow (before).** `Engine.runRestore` → `page` loop: ask, wait on
+the one inbound `SharedFlow`, next. Per page: core `handle` + `commit` under
+the engine mutex, `storeMessages` (one transaction for the messages, then
+*two more autocommit writes per message* for its contact: `readContact` +
+`INSERT OR REPLACE`), then the waiter wakes. Two correctness holes:
+(1) a page that timed out `break`-ed and the restore was still marked
+**Finished** — history silently missing, no resume; (2) nothing persisted
+the position, and `resume()` skipped restoring accounts or, worse,
+disconnected a restore in flight.
+
+**Likely causes of slower-than-iOS** (from reading; *not measured* — no
+device or real account in this environment):
+1. Per-message autocommit contact writes: ~11.6k messages ⇒ ~23k extra
+   journaled commits, each a sync on Android's default rollback-journal
+   mode. This is the strongest candidate: it is pure per-message overhead
+   iOS (GRDB, one transaction per commit) does not have.
+2. No WAL: every commit (per page: core state, messages, progress) syncs
+   a rollback journal and the main file. iOS's GRDB uses WAL.
+3. A small race in `askAndAwait`: the waiter was a lazily dispatched
+   `async` on a `SharedFlow` with no replay, so an answer arriving before
+   it subscribed would be dropped and cost the full 30 s timeout.
+4. Not changed, still plausible: the core call itself (decrypting 100
+   onions per page through JNI — depends on how `libsphinxrs.so` was built,
+   e.g. optimisation level), and the whole core state being encoded and
+   passed in twice per page. The round-trip count (~120) is the same as iOS.
+   Parallel or larger fetches are **not** safe: pages carry no request id,
+   and the page size is the server's/iOS's 100.
+
+**What changed.**
+- `RestoreCursor` (pure, tested): phase, next index, end, and whether/where
+  a messages run follows. Kept in `Setting.RESTORE_CURSOR` after every
+  page (non-secret: indices only), removed in the same transaction that sets
+  `NEEDS_RESTORE=0` (`Commit.deleteSettings`). A restart or failure resumes
+  at the page it stopped on without asking `getMsgsCounts` again; unreadable
+  cursor ⇒ starts from counts as before. It is written after its page is
+  stored, so a crash can repeat one page; storing is idempotent.
+- A page timeout or missing counts now **fails** the restore (reported in
+  `restoreProgress`, cursor kept) instead of finishing it. `resume()` (every
+  return to the foreground) re-runs a failed restore from its cursor, and
+  no longer reconnects underneath one that is running (`restoreRunning`).
+- `insertMessages(rows, contacts)`: a page's messages and the contacts they
+  reveal in one transaction. SQLite WAL enabled (`Helper.onConfigure`).
+- `askAndAwait` subscribes before it asks (`CoroutineStart.UNDISPATCHED`).
+- Timing: the listener now logs `PeelHistory: N msgs: core handle+commit Xms,
+  store Yms`, beside each page's total round trip, to split core time from
+  storage from network on a real restore.
+
+**Caveats.** Not run against a real account or device, so the speed-up is
+unmeasured: take a logcat (`adb logcat -s PeelHistory`) before/after.
+Engine's restore loop has no JVM unit test (needs the native `sphinxrs`);
+the cursor and storage halves are tested. WAL is a storage-wide change
+(tested only under Robolectric). No Retry button on the restore screen yet
+— a failed restore retries on the next foreground or launch. No iOS-style
+`liveAbove` gap tracking or stall watchdog.
 
 ## Done
 
