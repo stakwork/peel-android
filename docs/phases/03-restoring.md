@@ -446,5 +446,12 @@ outcome is `Failed`, and `resume()` retries `runRestore()` (restarting from
 index 0 is safe: `insertMessages` is `INSERT OR IGNORE`). Tribes are also
 recognised from groupJoin (14)/memberApprove (20) messages even without
 `sender.host` (as on iOS), `BACKFILL_VERSION` is "4", and
-`refreshTribeNames()` uses each tribe's own stored `host` first, retries
-failures once and runs again at the end of a successful restore.
+`refreshTribeNames()` retries failures once and runs again at the end of a
+successful restore. It uses only the account's own tribes host
+(`Setting.TRIBE_HOST`), never a host a message names, so a stranger cannot
+make Peel fetch from a host of their choosing (as `discoveredTribe`).
+
+Contacts progress (peel `HistoryCursor` fix): the total is the item count
+`firstForEachKey`, not the highest server index; progress is the number of
+messages fetched, capped at the total. The "Contacts & Tribes" line is
+active from Connected, with a progress bar, and done once messages begin.

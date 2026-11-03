@@ -1113,9 +1113,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// config call failed) leaves every tribe showing by its pubkey, same
     /// as before this existed.
     private suspend fun refreshTribeNames() {
-        val defaultHost = storage.value(Setting.TRIBE_HOST)
-        val failed = mutableListOf<Pair<String, String>>()
-        suspend fun attempt(chat: String, host: String): Boolean = try {
+        // Only the account's own tribes host, never one a message names:
+        // a stranger must not be able to make Peel fetch from a host of
+        // their choosing (`Engine.discoveredTribe`'s same rule).
+        val host = storage.value(Setting.TRIBE_HOST)?.takeIf { it.isNotEmpty() } ?: return
+        val failed = mutableListOf<String>()
+        suspend fun attempt(chat: String): Boolean = try {
             val info = TribeInfo.fetch(chat, host)
             storage.updateTribeInfo(chat, info.name, info.img, info.pricePerMessageMsat, info.escrowMsat)
             true
@@ -1124,13 +1127,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
         for (tribe in storage.conversations()) {
             if (!tribe.isTribe || tribe.alias != null) continue
-            val host = (storage.tribeHost(tribe.chat) ?: defaultHost)?.let { cleanHost(it) }?.takeIf { it.isNotEmpty() } ?: continue
-            if (!attempt(tribe.chat, host)) failed.add(tribe.chat to host)
+            if (!attempt(tribe.chat)) failed.add(tribe.chat)
         }
         if (failed.isEmpty()) return
         delay(2_000)
-        for ((chat, host) in failed) {
-            if (!attempt(chat, host)) Log.w("PeelTribes", "no tribe info for $chat from $host")
+        for (chat in failed) {
+            if (!attempt(chat)) Log.w("PeelTribes", "no tribe info for $chat from $host")
         }
     }
 
@@ -1153,13 +1155,18 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (restoreRunning) return
         restoreRunning = true
         try {
+            restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, null)) }
             val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
                 run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
             }
             val counts = parseCounts(countsAnswer?.msgsCounts)
                 ?: throw IllegalStateException("The server did not report your message history. Will retry.")
-            if (counts.firstForEachKey > 0) {
-                val done = page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
+            // An item count, not the highest server index (that only says
+            // when to stop paging) — peel's `HistoryCursor` fix.
+            val contactTotal = counts.firstForEachKey
+            restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, contactTotal)) }
+            if (contactTotal > 0) {
+                val done = page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex, total = contactTotal) { time, stateBytes, next ->
                     coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
                 }
                 if (!done) throw IllegalStateException("Restoring contacts timed out. Will retry.")
@@ -1169,6 +1176,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 // the final state after this phase already includes
                 // everything any one of its pages revealed.
                 storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
+                restoreProgressFlow.update { it.copy(contacts = RestoreCount(contactTotal, contactTotal)) }
             }
             if (counts.total > 0) {
                 val done = page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
@@ -1189,8 +1197,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
     @Volatile private var restoreRunning = false
 
-    /// iOS's post-restore read pass: ask `getReads` again now that history
-    /// is stored, then mark every chat whose newest message is ours as read
+    /// iOS's post-restore read pass (`historyEnded`): the first `getReads`
+    /// came before the restore rebuilt the contacts, and the core drops
+    /// markers for contacts it does not know — the root cause of every
+    /// chat showing unread after a restore. So ask `getReads` again now
+    /// that history is stored, then mark every chat whose newest message is ours as read
     /// (`setLastMessagesOnChats`). Chats whose newest message is incoming
     /// are left alone.
     private suspend fun settleReadsAfterRestore() {
@@ -1199,10 +1210,6 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             if (storage.newestMessageFromMe(conversation.chat)) markRead(conversation.chat)
         }
     }
-
-    /// A host as `TribeInfo.fetch` wants it: no scheme, path or whitespace.
-    private fun cleanHost(raw: String): String =
-        raw.trim().substringAfter("://").substringBefore('/').trim()
 
     /// Fetches every message from where this device's own history stands
     /// forward — PeelCore's own `syncMessages`, run on *every* connection
@@ -1228,14 +1235,16 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
     /// One phase's pages, back to back, each one committed (state, the
     /// messages it carried, the contacts they reveal) before the next is
-    /// asked for. Starts at [start] (0 for a restore's own phases; where
+    /// asked for. With [total] (contacts: an item count), progress is the
+    /// number of messages fetched so far out of it, not a server index. Starts at [start] (0 for a restore's own phases; where
     /// this device's history already stands, for a catch-up — see
     /// `catchUpMessages`). Stops on no answer in [historyWaitMs] (PeelCore's
     /// watchdog, simplified to "stop" rather than "resume later"), an
     /// empty page (the server has nothing more for this phase), or once
     /// `next` passes `end`.
-    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, call: (String, ByteArray, ULong) -> RunReturn): Boolean {
+    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, total: Long? = null, call: (String, ByteArray, ULong) -> RunReturn): Boolean {
         var next = start
+        var restored = 0L
         while (true) {
             // Timed deliberately: the protocol gives a history page no
             // request id (`HistoryCursor.advance`'s own comment on
@@ -1255,7 +1264,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // Already stored: the same listener that delivered this result
             // to askAndAwait ran it through `storeMessages` first.
             val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
-            val progress = RestoreCount((reached ?: next).toLong(), end)
+            restored += result.msgs.size
+            val progress = if (total != null) RestoreCount(minOf(restored, total), total) else RestoreCount((reached ?: next).toLong(), end)
             restoreProgressFlow.update {
                 if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
             }

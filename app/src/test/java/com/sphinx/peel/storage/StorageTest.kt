@@ -450,38 +450,36 @@ class StorageTest {
     }
 
     private fun msg(uuid: String, index: Long, type: Int, chat: String, fromMe: Boolean = false, sender: String? = null, replyUuid: String? = null) =
-        MessageRow(uuid = uuid, serverIndex = index, type = type, chat = chat, fromMe = fromMe, sender = sender, body = "b", msat = null, timestamp = index, tag = null, paymentHash = null)
+        MessageRow(uuid = uuid, serverIndex = index, type = type, chat = chat, fromMe = fromMe, sender = sender, body = if (replyUuid != null) """{"replyUuid":"$replyUuid"}""" else "b", msat = null, timestamp = index, tag = null, paymentHash = null)
 
     @Test
-    fun `unread ignores key exchange and tribe join or approve but counts normal messages`() {
+    fun `unread counts only text, attachment, payment, invoice and call`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        val ignored = listOf(10, 11, 14, 20, 33, 35, 36, 37, 38)
+        storage.insertMessages(
+            ignored.mapIndexed { i, type -> msg("i$i", i + 1L, type, "alice") } +
+                listOf(0, 6, 5, 2, 32).mapIndexed { i, type -> msg("c$i", 100L + i, type, "alice") },
+        )
+
+        assertEquals(5L, storage.conversations().single().unread)
+    }
+
+    @Test
+    fun `a boost counts as unread only when it targets our message`() {
         val storage = newStorage()
         storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
         storage.insertMessages(
             listOf(
-                msg("a", 1, 10, "alice"),
-                msg("b", 2, 11, "alice"),
-                msg("c", 3, 33, "alice"),
-                msg("d", 4, 14, "alice"),
-                msg("e", 5, 20, "alice"),
-                msg("f", 6, 0, "alice"),
+                msg("mine", 1, 0, "alice", fromMe = true),
+                msg("theirs", 2, 0, "alice"),
+                msg("b1", 3, 29, "alice", replyUuid = "mine"),
+                msg("b2", 4, 29, "alice", replyUuid = "theirs"),
             ),
         )
 
-        assertEquals(1L, storage.conversations().single().unread)
-    }
-
-    @Test
-    fun `tribeHost reads host from a stored sender`() {
-        val storage = newStorage()
-        storage.insertMessages(
-            listOf(
-                msg("a", 1, 0, "tribe", sender = """{"pubkey":"tribe","alias":"x"}"""),
-                msg("b", 2, 0, "tribe", sender = """{"pubkey":"tribe","host":"tribes.example.com"}"""),
-            ),
-        )
-
-        assertEquals("tribes.example.com", storage.tribeHost("tribe"))
-        assertNull(storage.tribeHost("other"))
+        // "theirs" and the boost of "mine".
+        assertEquals(2L, storage.conversations().single().unread)
     }
 
     @Test
