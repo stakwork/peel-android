@@ -8,6 +8,7 @@ android {
 
     defaultConfig {
         minSdk = 26
+            // Note: a library's abiFilters do not constrain the app; see :app release buildType.
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }

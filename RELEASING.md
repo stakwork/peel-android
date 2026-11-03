@@ -31,6 +31,8 @@ Add these under **Settings > Secrets and variables > Actions**:
 2. `versionName` = `MAJOR.MINOR.PATCH`; `versionCode` = `major*10000 + minor*100 + patch` (v1.2.3 -> 10203).
 3. Create and **publish** a GitHub release for the tag. The workflow builds from that tag and uploads `peel-<version>.apk` to the release.
 
+The release APK is arm64-v8a only (debug builds keep x86_64 for emulators). CI verifies the prebuilt `libsphinxrs.so` checksums (`bash scripts/verify-sphinxrs-checksums.sh`); provenance is recorded in `sphinxrs/SPHINXRS_PROVENANCE.md`.
+
 ## Play Store (later)
 
 To also produce an AAB for Google Play, uncomment the "Build AAB" step (`./gradlew bundleRelease`) in `release.yml` and add an upload step for `app/build/outputs/bundle/release/*.aab`.
