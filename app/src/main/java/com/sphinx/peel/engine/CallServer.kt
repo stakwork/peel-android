@@ -181,11 +181,13 @@ class CallServer(val host: String) {
         val named = endpoint(mediaHost, mediaPort, secure = scheme != "ws")
         val (ownScheme, ownHost, ownPort) = CallLink.baseURL(host) ?: throw TicketException.MediaHostNotAllowed(null)
         val loopback = ownScheme == "http"
+        // Release builds accept only wss/https, even for a loopback call server.
+        if (loopback && !NetworkPolicy.plainLoopbackAllowed(com.sphinx.peel.BuildConfig.DEBUG)) throw TicketException.MediaHostNotAllowed(null)
         val allowed = listOf(endpoint(ownHost, ownPort, secure = !loopback)) +
             // Only the call server itself on its default port: not another one on the same host.
             (if (!host.contains(':')) mediaHosts[ownHost] ?: emptyList() else emptyList()).map { endpoint(it, null, secure = true) }
         val plainHostOrNull = named.takeIf { it.all { c -> c.isLetterOrDigit() || c in ".-:" } }
-        if (!(scheme == "wss" || (scheme == "ws" && loopback)) || named !in allowed) throw TicketException.MediaHostNotAllowed(plainHostOrNull)
+        if (!NetworkPolicy.mediaSchemeAllowed(scheme, loopback, com.sphinx.peel.BuildConfig.DEBUG) || named !in allowed) throw TicketException.MediaHostNotAllowed(plainHostOrNull)
         val authority = if (mediaPort == CallLink.defaultPort(if (scheme == "wss") "https" else "http")) mediaHost else "$mediaHost:$mediaPort"
         return "$scheme://$authority"
     }
