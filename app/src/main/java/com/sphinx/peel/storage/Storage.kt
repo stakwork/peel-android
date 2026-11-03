@@ -196,6 +196,9 @@ class Storage(context: Context, account: String = "default") {
         val state: Map<String, ByteArray> = emptyMap(),
         val deleteState: List<String> = emptyList(),
         val settings: Map<Setting, String> = emptyMap(),
+        /// Settings removed in the same transaction (e.g. a finished
+        /// restore's cursor goes in the commit that marks it finished).
+        val deleteSettings: List<Setting> = emptyList(),
     )
 
     fun apply(commit: Commit) {
@@ -219,6 +222,9 @@ class Storage(context: Context, account: String = "default") {
                     put("value", value)
                 }
                 db.insertWithOnConflict("setting", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            for (setting in commit.deleteSettings) {
+                db.delete("setting", "key = ?", arrayOf(setting.key))
             }
             db.setTransactionSuccessful()
         } finally {
@@ -460,8 +466,8 @@ class Storage(context: Context, account: String = "default") {
     /// the server: moved to `DELIVERED` rather than left exactly as
     /// `insertWithOnConflict` would leave it (unmatched silently, since
     /// `CONFLICT_IGNORE` cannot also update the row it left alone).
-    fun insertMessages(rows: List<MessageRow>) {
-        if (rows.isEmpty()) return
+    fun insertMessages(rows: List<MessageRow>, contacts: List<ContactRow> = emptyList()) {
+        if (rows.isEmpty() && contacts.isEmpty()) return
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
@@ -498,6 +504,12 @@ class Storage(context: Context, account: String = "default") {
                 }
             }
             applyDeletes(db, rows)
+            // The contacts these messages reveal go in the same
+            // transaction (in order, so "newest wins" still holds): a
+            // restore page used to cost one transaction for its messages
+            // plus two more writes *per message* for the contact, each
+            // its own journal sync.
+            for (c in contacts) upsertContact(db, c.pubkey, c.alias, c.photoUrl, c.isTribe, c.ready)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -607,8 +619,10 @@ class Storage(context: Context, account: String = "default") {
     /// row a previous, buggier version of this method already got wrong
     /// — confirmed on a real account (`docs/phases/04-dashboard.md`) — the
     /// next time anything calls this for that pubkey.
-    fun upsertContact(pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean = false) {
-        val db = helper.writableDatabase
+    fun upsertContact(pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean = false) =
+        upsertContact(helper.writableDatabase, pubkey, alias, photoUrl, isTribe, ready)
+
+    private fun upsertContact(db: SQLiteDatabase, pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean) {
         val existing = readContact(db, pubkey)
         val tribe = isTribe || existing?.isTribe == true
         val values = ContentValues().apply {
@@ -933,6 +947,13 @@ class Storage(context: Context, account: String = "default") {
     }
 
     private class Helper(context: Context, name: String) : SQLiteOpenHelper(context, name, null, VERSION) {
+        // WAL: a commit appends to the log instead of syncing a rollback
+        // journal and the main file, which every restore page (and each of
+        // its commits) used to pay. `deleteDatabase` removes -wal/-shm too.
+        override fun onConfigure(db: SQLiteDatabase) {
+            db.enableWriteAheadLogging()
+        }
+
         override fun onCreate(db: SQLiteDatabase) {
             v1(db)
             v2(db)

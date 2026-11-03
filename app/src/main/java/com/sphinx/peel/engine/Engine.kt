@@ -8,7 +8,9 @@ import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -99,6 +101,8 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// same as PeelUI's `AppModel.attach` does with its own account tasks.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var started = false
+    /// A restore is paging right now: a second `start`/`resume` must not run another.
+    @Volatile private var restoreRunning = false
 
     private val connectionStateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = connectionStateFlow.asStateFlow()
@@ -353,6 +357,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         val connection = transport ?: return
         scope.launch {
             connection.inbound().collect { message ->
+                val startedAt = SystemClock.elapsedRealtime()
                 val handled = mutex.withLock {
                     val handleTime = clock.next()
                     val result = coreHandle(
@@ -367,7 +372,11 @@ class Engine(mnemonic: String, val storage: Storage) {
                 // any) reads the same already-stored result once it gets it
                 // below, not a second copy — `storeMessages` is the one
                 // place this happens now.
+                val handledAt = SystemClock.elapsedRealtime()
                 storeMessages(handled)
+                if (handled.msgs.isNotEmpty()) {
+                    Log.d("PeelHistory", "${handled.msgs.size} msgs: core handle+commit ${handledAt - startedAt}ms, store ${SystemClock.elapsedRealtime() - handledAt}ms")
+                }
                 inboundResults.emit(handled)
             }
         }
@@ -380,11 +389,8 @@ class Engine(mnemonic: String, val storage: Storage) {
     private fun storeMessages(result: RunReturn) {
         val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
         if (rows.isNotEmpty()) {
-            storage.insertMessages(rows)
-            for (row in rows) {
-                val hint = contactHint(row) ?: continue
-                storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
-            }
+            // Messages and the contacts they reveal in one transaction.
+            storage.insertMessages(rows, rows.mapNotNull { contactHint(it) })
         }
         // The mixer's one live word on a tag this device sent under —
         // PeelCore's `liveStatus`: FAILED as it comes, anything else
@@ -1058,7 +1064,9 @@ class Engine(mnemonic: String, val storage: Storage) {
         ask: suspend () -> RunReturn,
     ): RunReturn? = withTimeoutOrNull(timeoutMs) {
         coroutineScope {
-            val waiter = async { inboundResults.first(expect) }
+            // Subscribed before the ask goes out: the flow has no replay, so an
+            // answer beating a lazily scheduled collector would be lost (30 s wait).
+            val waiter = async(start = CoroutineStart.UNDISPATCHED) { inboundResults.first(expect) }
             ask()
             waiter.await()
         }
@@ -1139,12 +1147,13 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// so this always reconnects first rather than guess from `transport`
     /// being non-null. A no-op before `start()` has ever run.
     fun resume() {
-        if (!started) return
+        if (!started || restoreRunning) return
         scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
             fetchReadsAndMutes()
-            if (!restoreProgressFlow.value.restoring) catchUpMessages()
+            // A restore that failed or was cut short resumes from its cursor.
+            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             runCatching { syncPreferences() }
         }
     }
@@ -1170,49 +1179,81 @@ class Engine(mnemonic: String, val storage: Storage) {
         }
     }
 
-    private enum class HistoryPhase { CONTACTS, MESSAGES }
-
-    /// What `getMsgsCounts` reports, mirrored from PeelCore's
-    /// `Engine.MessageCounts`.
-    private data class MessageCounts(
-        val total: Long,
-        val firstForEachKey: Long,
-        val totalHighestIndex: Long?,
-        val firstForEachKeyHighestIndex: Long?,
-    )
-
     /// Contacts first, then every message from the beginning — PeelCore's
-    /// `HistoryCursor.plan`, minus the live/catch-up/stall machinery
-    /// `HistoryCursor` otherwise carries: this is a single straight-through
-    /// restore, not a resumable general-purpose history cursor.
+    /// `HistoryCursor.plan` and resume, minus the live/stall machinery.
+    /// Resumable: the cursor (`RestoreCursor`) is kept in
+    /// `Setting.RESTORE_CURSOR` after every page, so a failure (a page that
+    /// never came, a dropped connection) or a restart picks up at the page
+    /// it stopped on instead of asking for everything again, and is removed
+    /// in the commit that marks the restore finished. A failure leaves
+    /// `NEEDS_RESTORE` set and is reported through [restoreProgress]; the
+    /// next `start()`/`resume()` runs it again from the cursor.
     private suspend fun runRestore() {
+        if (restoreRunning) return
+        restoreRunning = true
+        restoreProgressFlow.update { it.copy(outcome = null) }
         try {
-            val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
-                run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
-            }
-            val counts = parseCounts(countsAnswer?.msgsCounts)
-            if (counts != null && counts.firstForEachKey > 0) {
-                page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
-                    coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
-                }
-                // Once, with every contacts page's own state already
-                // folded in — not per page: `listContacts` decodes the
-                // core's *entire* contact list every time it's asked, and
-                // the final state after this phase already includes
-                // everything any one of its pages revealed.
-                storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
-            }
-            if (counts != null && counts.total > 0) {
-                page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
-                    coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
-                }
-            }
-            storage.apply(Storage.Commit(settings = mapOf(Setting.NEEDS_RESTORE to "0")))
+            var cursor = RestoreCursor.decode(storage.value(Setting.RESTORE_CURSOR)) ?: planRestore()
+            while (cursor != null) cursor = restoreRun(cursor)
+            storage.apply(
+                Storage.Commit(
+                    settings = mapOf(Setting.NEEDS_RESTORE to "0"),
+                    deleteSettings = listOf(Setting.RESTORE_CURSOR),
+                ),
+            )
             restoreProgressFlow.update { it.copy(restoring = false, outcome = RestoreOutcome.Finished) }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             restoreProgressFlow.update { it.copy(outcome = RestoreOutcome.Failed(e.message ?: "Restoring stopped.")) }
+        } finally {
+            restoreRunning = false
         }
     }
+
+    /// Asks the server what it holds and plans the restore from that; the
+    /// plan is kept at once so even the first page's failure resumes.
+    private suspend fun planRestore(): RestoreCursor? {
+        val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
+            run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
+        } ?: throw IllegalStateException("No answer from the server about what to restore.")
+        val plan = RestoreCursor.plan(parseCounts(countsAnswer.msgsCounts) ?: throw IllegalStateException("The server's counts could not be read."))
+        if (plan != null) keepCursor(plan)
+        return plan
+    }
+
+    private fun keepCursor(cursor: RestoreCursor) {
+        storage.apply(Storage.Commit(settings = mapOf(Setting.RESTORE_CURSOR to cursor.encode())))
+    }
+
+    /// One run of a restore from `cursor`; the run that follows it (kept
+    /// before it starts), or null when this was the last. A page that never
+    /// comes throws: a restore must never be marked finished with history
+    /// missing, which an earlier version of this did on a timeout.
+    private suspend fun restoreRun(cursor: RestoreCursor): RestoreCursor? {
+        val phase = if (cursor.phase == RestoreCursor.Phase.CONTACTS) HistoryPhase.CONTACTS else HistoryPhase.MESSAGES
+        var current = cursor
+        val complete = page(phase, cursor.end, cursor.next.toULong(), onPage = { next ->
+            current = current.advanced(next.toLong() - 1)
+            keepCursor(current)
+        }) { time, stateBytes, next ->
+            if (phase == HistoryPhase.CONTACTS) {
+                coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
+            } else {
+                coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
+            }
+        }
+        if (!complete) throw IllegalStateException("No answer from the server while restoring ${if (phase == HistoryPhase.CONTACTS) "contacts" else "messages"}.")
+        if (phase == HistoryPhase.CONTACTS) {
+            // Once, with every contacts page's own state already folded in
+            // — not per page: `listContacts` decodes the core's *entire*
+            // contact list every time it's asked.
+            storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
+        }
+        return cursor.following()?.also { keepCursor(it) }
+    }
+
+    private enum class HistoryPhase { CONTACTS, MESSAGES }
 
     /// Fetches every message from where this device's own history stands
     /// forward — PeelCore's own `syncMessages`, run on *every* connection
@@ -1231,37 +1272,42 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// without the reconnect/live-overlap machinery this port doesn't have.
     private suspend fun catchUpMessages() {
         val start = ((storage.maxServerIndex() ?: -1L) + 1L).toULong()
-        page(HistoryPhase.MESSAGES, end = null, start = start) { time, stateBytes, next ->
+        page(HistoryPhase.MESSAGES, end = null, start = start, onPage = {}) { time, stateBytes, next ->
             coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
         }
     }
 
     /// One phase's pages, back to back, each one committed (state, the
     /// messages it carried, the contacts they reveal) before the next is
-    /// asked for. Starts at [start] (0 for a restore's own phases; where
-    /// this device's history already stands, for a catch-up — see
-    /// `catchUpMessages`). Stops on no answer in [historyWaitMs] (PeelCore's
-    /// watchdog, simplified to "stop" rather than "resume later"), an
-    /// empty page (the server has nothing more for this phase), or once
-    /// `next` passes `end`.
-    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, call: (String, ByteArray, ULong) -> RunReturn) {
+    /// asked for. Starts at [start] (0 for a fresh restore's own phases;
+    /// where a saved cursor or this device's history stands otherwise).
+    /// [onPage] gets the next index to ask for after each stored page (the
+    /// restore's cursor). True when the phase ended: an empty page (the
+    /// server has nothing more) or `next` past `end`. False on no answer in
+    /// [historyWaitMs] (PeelCore's watchdog): the caller decides what that
+    /// means — a restore fails and resumes later, a catch-up just stops.
+    private suspend fun page(
+        phase: HistoryPhase,
+        end: Long?,
+        start: ULong,
+        onPage: (next: ULong) -> Unit,
+        call: (String, ByteArray, ULong) -> RunReturn,
+    ): Boolean {
         var next = start
+        if (end != null && next > end.toULong()) return true
         while (true) {
-            // Timed deliberately: the protocol gives a history page no
+            // Sequential on purpose: the protocol gives a history page no
             // request id (`HistoryCursor.advance`'s own comment on
-            // PeelCore's side), so a reply can only ever be matched to
-            // *some* outstanding ask, never to a specific one — pipelining
-            // several pages at once is not a missed optimization here,
-            // it is unsafe for either client. Logging each page's own
-            // round-trip cost is how to find out whether Android's restore
-            // actually is slower than the iPhone's for a reason that *can*
-            // be fixed (docs/phases/03-restoring.md, "Open").
+            // PeelCore's side), so several asks in flight could not be told
+            // apart. The listener logs where each page's time goes
+            // (`PeelHistory`: core `handle` vs. storage) beside this
+            // round-trip total, which is what a timed restore should read.
             val askedAt = SystemClock.elapsedRealtime()
             val result = askAndAwait(historyWaitMs, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
             }
             Log.d("PeelHistory", "$phase page at $next: ${if (result == null) "timed out" else "${result.msgs.size} msgs"} in ${SystemClock.elapsedRealtime() - askedAt}ms")
-            if (result == null) break
+            if (result == null) return false
             // Already stored: the same listener that delivered this result
             // to askAndAwait ran it through `storeMessages` first.
             val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
@@ -1269,9 +1315,10 @@ class Engine(mnemonic: String, val storage: Storage) {
             restoreProgressFlow.update {
                 if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
             }
-            if (reached == null) break
+            if (reached == null) return true
             next = reached + 1uL
-            if (end != null && next > end.toULong()) break
+            onPage(next)
+            if (end != null && next > end.toULong()) return true
         }
     }
 
