@@ -1065,7 +1065,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         scope.launch {
             backfillContactsIfNeeded()
             if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
+            // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
+            // an earlier answer cannot be used.
+            if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             refreshTribeNames()
             runCatching { syncBoostAmount() }
@@ -1110,7 +1112,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
+            // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
+            // an earlier answer cannot be used.
+            if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
             // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             runCatching { syncBoostAmount() }

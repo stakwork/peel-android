@@ -663,11 +663,11 @@ class Storage(context: Context, account: String = "default") {
     /// messages, by the look of them) — so one of those can be the first
     /// call seen for a chat, writing a member's name in as if it belonged
     /// to the chat itself, before a later call reveals it's a tribe.
-    /// Always nulling here (rather than only at the moment `isTribe`
-    /// turns true) fixes that regardless of call order, and also heals a
-    /// row a previous, buggier version of this method already got wrong
-    /// — confirmed on a real account (`docs/phases/04-dashboard.md`) — the
-    /// next time anything calls this for that pubkey.
+    /// A row that already was a tribe keeps its stored name/photo; they
+    /// are nulled only when a row is newly recognised as a tribe, which
+    /// fixes that regardless of call order, and also heals a row a
+    /// previous, buggier version of this method already got wrong
+    /// — confirmed on a real account (`docs/phases/04-dashboard.md`).
     fun upsertContact(pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean = false) =
         upsertContact(helper.writableDatabase, pubkey, alias, photoUrl, isTribe, ready)
 
