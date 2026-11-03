@@ -40,6 +40,13 @@ android {
 
     buildTypes {
         release {
+            // Release ships arm64-v8a only: x86_64 is only for emulators, and the
+            // JNA aar's other ABIs are dropped too. Debug stays unfiltered so debug
+            // builds still run on x86_64 emulators. (A library's abiFilters, e.g. in
+            // :sphinxrs, do not constrain the app, so the filter is set here.)
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
             isMinifyEnabled = false
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")

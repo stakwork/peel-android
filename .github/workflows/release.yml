@@ -16,6 +16,9 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
 
+      - name: Verify sphinxrs native library checksums
+        run: bash scripts/verify-sphinxrs-checksums.sh
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

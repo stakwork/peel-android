@@ -32,6 +32,10 @@ object Account {
 
     fun normalise(mnemonic: String): String = wordsIn(mnemonic).joinToString(" ")
 
+    /// The words stay in the caller's array (zero it after); only the
+    /// transient `String` the native call needs is created here.
+    fun seedOf(mnemonic: CharArray): String = mnemonicToSeed(normalise(String(mnemonic)))
+
     fun seedOf(mnemonic: String): String = mnemonicToSeed(normalise(mnemonic))
 
     /// The pubkey this account's seed derives, so a screen can show it
