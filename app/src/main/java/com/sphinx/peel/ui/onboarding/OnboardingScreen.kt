@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.onboarding
 
+import com.sphinx.peel.ui.components.SecureWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -85,6 +86,7 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
     var working by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    SecureWindow()
 
     fun back() {
         problem = null

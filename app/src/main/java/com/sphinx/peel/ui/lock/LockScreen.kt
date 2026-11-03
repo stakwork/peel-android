@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.lock
 
+import com.sphinx.peel.ui.components.SecureWindow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -35,6 +36,7 @@ fun LockScreen(secretStore: SecretStore, storage: Storage, onUnlocked: (engine: 
     var working by remember { mutableStateOf(false) }
     var waitMs by remember { mutableLongStateOf(secretStore.lockoutRemainingMs()) }
     val scope = rememberCoroutineScope()
+    SecureWindow()
 
     // Counts a wrong-PIN wait down, once a second, while there is one.
     LaunchedEffect(waitMs > 0) {
