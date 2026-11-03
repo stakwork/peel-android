@@ -1141,12 +1141,19 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// restore, not a resumable general-purpose history cursor.
     private suspend fun runRestore() {
         try {
+            // Shown at once, before the counts answer, so Contacts goes
+            // ACTIVE right after Connected (iOS shows 2% at this point).
+            restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, null)) }
             val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
                 run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
             }
             val counts = parseCounts(countsAnswer?.msgsCounts)
+            // The count (not the highest index) is the total; with nothing
+            // to fetch Contacts is complete at once.
+            val contactTotal = counts?.firstForEachKey ?: 0L
+            restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, contactTotal)) }
             if (counts != null && counts.firstForEachKey > 0) {
-                page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
+                page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex, total = contactTotal) { time, stateBytes, next ->
                     coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
                 }
                 // Once, with every contacts page's own state already
@@ -1155,6 +1162,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 // the final state after this phase already includes
                 // everything any one of its pages revealed.
                 storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
+                restoreProgressFlow.update { it.copy(contacts = RestoreCount(contactTotal, contactTotal)) }
             }
             if (counts != null && counts.total > 0) {
                 page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
@@ -1197,9 +1205,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `catchUpMessages`). Stops on no answer in [historyWaitMs] (PeelCore's
     /// watchdog, simplified to "stop" rather than "resume later"), an
     /// empty page (the server has nothing more for this phase), or once
-    /// `next` passes `end`.
-    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, call: (String, ByteArray, ULong) -> RunReturn) {
+    /// `next` passes `end`. Progress is [total] (a *count*; `end` is the
+    /// highest server index, far above it) and the cumulative number of
+    /// messages restored so far, capped at it; without a [total] (messages,
+    /// catch-up) it is the index reached, as before.
+    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, total: Long? = null, call: (String, ByteArray, ULong) -> RunReturn) {
         var next = start
+        var restored = 0L
         while (true) {
             // Timed deliberately: the protocol gives a history page no
             // request id (`HistoryCursor.advance`'s own comment on
@@ -1219,7 +1231,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // Already stored: the same listener that delivered this result
             // to askAndAwait ran it through `storeMessages` first.
             val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
-            val progress = RestoreCount((reached ?: next).toLong(), end)
+            restored += result.msgs.size
+            val progress = if (total != null) RestoreCount(minOf(restored, total), total)
+                else RestoreCount((reached ?: next).toLong(), end)
             restoreProgressFlow.update {
                 if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
             }

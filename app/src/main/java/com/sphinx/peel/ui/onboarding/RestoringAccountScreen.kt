@@ -68,10 +68,12 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
             title = "Contacts",
             detail = label(progress.contacts, finished, noun = "checked"),
             state = when {
-                finished || progress.messages != null -> LineState.DONE
+                finished || progress.messages != null ||
+                    progress.contacts?.let { it.end != null && it.reached >= it.end } == true -> LineState.DONE
                 progress.contacts != null -> LineState.ACTIVE
                 else -> LineState.WAITING
             },
+            fraction = progress.contacts?.fraction,
         ),
         Line(
             title = "Messages",
