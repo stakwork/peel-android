@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -1098,7 +1099,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             disconnect()
             if (!connectAndRegister()) return@launch
             fetchReadsAndMutes()
-            if (!restoreProgressFlow.value.restoring) catchUpMessages()
+            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             runCatching { syncBoostAmount() }
         }
     }
@@ -1112,15 +1113,24 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// config call failed) leaves every tribe showing by its pubkey, same
     /// as before this existed.
     private suspend fun refreshTribeNames() {
-        val host = storage.value(Setting.TRIBE_HOST) ?: return
+        val defaultHost = storage.value(Setting.TRIBE_HOST)
+        val failed = mutableListOf<Pair<String, String>>()
+        suspend fun attempt(chat: String, host: String): Boolean = try {
+            val info = TribeInfo.fetch(chat, host)
+            storage.updateTribeInfo(chat, info.name, info.img, info.pricePerMessageMsat, info.escrowMsat)
+            true
+        } catch (e: Exception) {
+            false
+        }
         for (tribe in storage.conversations()) {
             if (!tribe.isTribe || tribe.alias != null) continue
-            val info = try {
-                TribeInfo.fetch(tribe.chat, host)
-            } catch (e: Exception) {
-                continue
-            }
-            storage.updateTribeInfo(tribe.chat, info.name, info.img, info.pricePerMessageMsat, info.escrowMsat)
+            val host = (storage.tribeHost(tribe.chat) ?: defaultHost)?.let { cleanHost(it) }?.takeIf { it.isNotEmpty() } ?: continue
+            if (!attempt(tribe.chat, host)) failed.add(tribe.chat to host)
+        }
+        if (failed.isEmpty()) return
+        delay(2_000)
+        for ((chat, host) in failed) {
+            if (!attempt(chat, host)) Log.w("PeelTribes", "no tribe info for $chat from $host")
         }
     }
 
@@ -1140,15 +1150,19 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `HistoryCursor` otherwise carries: this is a single straight-through
     /// restore, not a resumable general-purpose history cursor.
     private suspend fun runRestore() {
+        if (restoreRunning) return
+        restoreRunning = true
         try {
             val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
                 run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
             }
             val counts = parseCounts(countsAnswer?.msgsCounts)
-            if (counts != null && counts.firstForEachKey > 0) {
-                page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
+                ?: throw IllegalStateException("The server did not report your message history. Will retry.")
+            if (counts.firstForEachKey > 0) {
+                val done = page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex) { time, stateBytes, next ->
                     coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
                 }
+                if (!done) throw IllegalStateException("Restoring contacts timed out. Will retry.")
                 // Once, with every contacts page's own state already
                 // folded in — not per page: `listContacts` decodes the
                 // core's *entire* contact list every time it's asked, and
@@ -1156,17 +1170,39 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 // everything any one of its pages revealed.
                 storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
             }
-            if (counts != null && counts.total > 0) {
-                page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
+            if (counts.total > 0) {
+                val done = page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
                     coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
                 }
+                if (!done) throw IllegalStateException("Restoring messages timed out. Will retry.")
             }
             storage.apply(Storage.Commit(settings = mapOf(Setting.NEEDS_RESTORE to "0")))
             restoreProgressFlow.update { it.copy(restoring = false, outcome = RestoreOutcome.Finished) }
+            runCatching { settleReadsAfterRestore() }.onFailure { Log.w("PeelHistory", "settling reads failed", it) }
+            runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
         } catch (e: Exception) {
             restoreProgressFlow.update { it.copy(outcome = RestoreOutcome.Failed(e.message ?: "Restoring stopped.")) }
+        } finally {
+            restoreRunning = false
         }
     }
+
+    @Volatile private var restoreRunning = false
+
+    /// iOS's post-restore read pass: ask `getReads` again now that history
+    /// is stored, then mark every chat whose newest message is ours as read
+    /// (`setLastMessagesOnChats`). Chats whose newest message is incoming
+    /// are left alone.
+    private suspend fun settleReadsAfterRestore() {
+        fetchReadsAndMutes()
+        for (conversation in storage.conversations()) {
+            if (storage.newestMessageFromMe(conversation.chat)) markRead(conversation.chat)
+        }
+    }
+
+    /// A host as `TribeInfo.fetch` wants it: no scheme, path or whitespace.
+    private fun cleanHost(raw: String): String =
+        raw.trim().substringAfter("://").substringBefore('/').trim()
 
     /// Fetches every message from where this device's own history stands
     /// forward — PeelCore's own `syncMessages`, run on *every* connection
@@ -1198,7 +1234,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// watchdog, simplified to "stop" rather than "resume later"), an
     /// empty page (the server has nothing more for this phase), or once
     /// `next` passes `end`.
-    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, call: (String, ByteArray, ULong) -> RunReturn) {
+    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, call: (String, ByteArray, ULong) -> RunReturn): Boolean {
         var next = start
         while (true) {
             // Timed deliberately: the protocol gives a history page no
@@ -1215,7 +1251,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
             }
             Log.d("PeelHistory", "$phase page at $next: ${if (result == null) "timed out" else "${result.msgs.size} msgs"} in ${SystemClock.elapsedRealtime() - askedAt}ms")
-            if (result == null) break
+            if (result == null) return false
             // Already stored: the same listener that delivered this result
             // to askAndAwait ran it through `storeMessages` first.
             val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
@@ -1227,6 +1263,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             next = reached + 1uL
             if (end != null && next > end.toULong()) break
         }
+        return true
     }
 
     /// One core `Msg` as a stored row, or null for one this device cannot
@@ -1303,6 +1340,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (host != null) {
             return ContactRow(pubkey = row.chat, alias = null, photoUrl = null, isTribe = true, ready = true)
         }
+        // iOS: a join/approve's sender pubkey is the tribe's, host or not.
+        if (row.type == GROUP_JOIN_MESSAGE_TYPE || row.type == MEMBER_APPROVE_MESSAGE_TYPE) {
+            return ContactRow(pubkey = row.chat, alias = null, photoUrl = null, isTribe = true, ready = true)
+        }
         val pubkey = sender.optString("pubkey").takeIf { it.isNotEmpty() }
         if (pubkey == row.chat) {
             return ContactRow(
@@ -1343,7 +1384,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         /// Bump whenever `backfillContactsIfNeeded`'s own logic changes in
         /// a way that fixes data an older version could have gotten
         /// wrong — this is the third such fix (see `Setting.CONTACTS_BACKFILLED`).
-        private const val BACKFILL_VERSION = "3"
+        private const val BACKFILL_VERSION = "4"
 
         private const val registerWaitMs = 10_000L
 

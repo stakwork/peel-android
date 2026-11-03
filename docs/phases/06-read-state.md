@@ -132,3 +132,12 @@ pending column), where this port's `Engine.markRead` and
   being built (the synced marker) versus along for the ride in the
   reference implementation (mentions, `isNew`, `isBehind`) — scoping
   that correctly up front beats discovering it mid-port.
+
+## Note — unread after a restore
+
+`Storage.conversations()` no longer counts incoming key-exchange (10, 11,
+33) or tribe join/approve (14, 20) messages as unread. At the end of a
+successful restore `Engine.settleReadsAfterRestore()` re-asks `getReads`
+(iOS does so after the restore) and then marks read every chat whose newest
+message is ours, mirroring iOS's `setLastMessagesOnChats`. Chats whose
+newest message is incoming are untouched.

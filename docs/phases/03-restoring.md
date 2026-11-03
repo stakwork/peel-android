@@ -437,3 +437,14 @@ restore to actually answer rather than more reading.
 - `targetSdk` 35+ makes edge-to-edge non-optional; a screen that draws
   content at the very top is the one that notices first, but every
   screen needs the same insets handling, so it belongs at the root, once.
+
+## Note — restore no longer finishes on a partial history
+
+A restore now only completes when `getMsgsCounts` answered and every
+Contacts/Messages page arrived; otherwise `NEEDS_RESTORE` stays 1 and the
+outcome is `Failed`, and `resume()` retries `runRestore()` (restarting from
+index 0 is safe: `insertMessages` is `INSERT OR IGNORE`). Tribes are also
+recognised from groupJoin (14)/memberApprove (20) messages even without
+`sender.host` (as on iOS), `BACKFILL_VERSION` is "4", and
+`refreshTribeNames()` uses each tribe's own stored `host` first, retries
+failures once and runs again at the end of a successful restore.

@@ -290,6 +290,34 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
+    /// Whether the newest stored message (by server index) of `chat` is
+    /// ours — iOS's `setLastMessagesOnChats` rule for settling a restored
+    /// chat as read. False when the chat has no indexed message.
+    fun newestMessageFromMe(chat: String): Boolean {
+        helper.readableDatabase.rawQuery(
+            "SELECT fromMe FROM message WHERE chat = ? AND serverIndex IS NOT NULL ORDER BY serverIndex DESC LIMIT 1",
+            arrayOf(chat),
+        ).use { cursor ->
+            return cursor.moveToFirst() && cursor.getInt(0) != 0
+        }
+    }
+
+    /// The tribes host named by any stored message of `chat` in its
+    /// `sender` JSON (`host`), or null. A tribe may live on a different
+    /// host than the account's default one.
+    fun tribeHost(chat: String): String? {
+        helper.readableDatabase.rawQuery(
+            "SELECT sender FROM message WHERE chat = ? AND sender LIKE '%\"host\"%'",
+            arrayOf(chat),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val host = runCatching { JSONObject(cursor.getString(0)).optString("host") }.getOrNull()
+                if (!host.isNullOrEmpty()) return host
+            }
+        }
+        return null
+    }
+
     /// Moves a chat's read marker to `index`, never back (PeelCore's
     /// `markRead` doc comment: "the server's may be past what is stored
     /// here"). `pending` says whether this device could actually tell the
@@ -700,6 +728,7 @@ class Storage(context: Context, account: String = "default") {
                 (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
                 (SELECT COUNT(*) FROM message m
                     WHERE m.chat = c.pubkey AND m.fromMe = 0
+                        AND m.type NOT IN (10, 11, 33, 14, 20)
                         AND m.serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)
                         AND (m.type != 29 OR EXISTS (
                             SELECT 1 FROM message t WHERE t.chat = c.pubkey AND t.uuid = m.replyUuid AND t.fromMe = 1

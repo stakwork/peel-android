@@ -448,4 +448,48 @@ class StorageTest {
         assertEquals(0L, storage.conversations().single().unread)
         assertEquals(mapOf<String, Long>(), storage.pendingReads())
     }
+
+    private fun msg(uuid: String, index: Long, type: Int, chat: String, fromMe: Boolean = false, sender: String? = null, replyUuid: String? = null) =
+        MessageRow(uuid = uuid, serverIndex = index, type = type, chat = chat, fromMe = fromMe, sender = sender, body = "b", msat = null, timestamp = index, tag = null, paymentHash = null)
+
+    @Test
+    fun `unread ignores key exchange and tribe join or approve but counts normal messages`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.insertMessages(
+            listOf(
+                msg("a", 1, 10, "alice"),
+                msg("b", 2, 11, "alice"),
+                msg("c", 3, 33, "alice"),
+                msg("d", 4, 14, "alice"),
+                msg("e", 5, 20, "alice"),
+                msg("f", 6, 0, "alice"),
+            ),
+        )
+
+        assertEquals(1L, storage.conversations().single().unread)
+    }
+
+    @Test
+    fun `tribeHost reads host from a stored sender`() {
+        val storage = newStorage()
+        storage.insertMessages(
+            listOf(
+                msg("a", 1, 0, "tribe", sender = """{"pubkey":"tribe","alias":"x"}"""),
+                msg("b", 2, 0, "tribe", sender = """{"pubkey":"tribe","host":"tribes.example.com"}"""),
+            ),
+        )
+
+        assertEquals("tribes.example.com", storage.tribeHost("tribe"))
+        assertNull(storage.tribeHost("other"))
+    }
+
+    @Test
+    fun `newestMessageFromMe follows the highest server index`() {
+        val storage = newStorage()
+        storage.insertMessages(listOf(msg("a", 1, 0, "alice"), msg("b", 2, 0, "alice", fromMe = true)))
+        assertTrue(storage.newestMessageFromMe("alice"))
+        storage.insertMessages(listOf(msg("c", 3, 0, "alice")))
+        assertFalse(storage.newestMessageFromMe("alice"))
+    }
 }
