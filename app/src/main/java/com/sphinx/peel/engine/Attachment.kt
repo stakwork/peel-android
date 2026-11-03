@@ -22,6 +22,13 @@ const val BOOST_MESSAGE_TYPE = 29
 /// bare-link fallback), so this alone is not the whole check.
 const val CALL_MESSAGE_TYPE = 32
 
+/// A member joined a tribe (`MessageType.groupJoin`). Its sender's `pubkey`
+/// is the tribe's, so it proves the chat is a tribe even without `host`.
+const val GROUP_JOIN_MESSAGE_TYPE = 14
+
+/// The owner approved a member (`MessageType.memberApprove`); same proof as a join.
+const val MEMBER_APPROVE_MESSAGE_TYPE = 20
+
 /// A message of this type deletes another, named by `replyUuid` the same
 /// way a reply or a boost names its own target — PeelCore's own
 /// `MessageType.delete`. `Engine.deleteMessage` and
