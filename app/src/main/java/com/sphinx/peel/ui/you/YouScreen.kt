@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.you
 
+import com.sphinx.peel.ui.components.SecureWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -436,6 +437,7 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
     var visible by remember { mutableStateOf(false) }
     var revealedAt by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
+    SecureWindow()
 
     fun hide() {
         words = emptyList()

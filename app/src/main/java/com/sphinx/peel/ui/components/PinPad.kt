@@ -209,6 +209,7 @@ fun PinPrompt(
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    SecureWindow()
     Column(
         modifier.background(Theme.colors.background),
         horizontalAlignment = Alignment.CenterHorizontally,

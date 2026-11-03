@@ -998,7 +998,7 @@ private fun MessageRowView(
     val timeContext = androidx.compose.ui.platform.LocalContext.current
     val time = row.timestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
     var menuOpen by remember { mutableStateOf(false) }
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val clipboardContext = androidx.compose.ui.platform.LocalContext.current
 
     Box {
         Row(
@@ -1089,13 +1089,13 @@ private fun MessageRowView(
             if (content.isNotBlank()) {
                 DropdownMenuItem(
                     text = { Text("Copy") },
-                    onClick = { menuOpen = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(content)) },
+                    onClick = { menuOpen = false; com.sphinx.peel.ClipboardUtil.copySensitive(clipboardContext, "message", content) },
                 )
             }
             if (linkToCopy != null) {
                 DropdownMenuItem(
                     text = { Text("Copy link") },
-                    onClick = { menuOpen = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(linkToCopy)) },
+                    onClick = { menuOpen = false; com.sphinx.peel.ClipboardUtil.copySensitive(clipboardContext, "link", linkToCopy) },
                 )
             }
             if (onDelete != null && canDelete(row, deleteReplyCount)) {
