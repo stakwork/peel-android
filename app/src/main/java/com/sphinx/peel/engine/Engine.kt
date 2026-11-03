@@ -56,8 +56,12 @@ import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 /// holds so far (`coreState`, `setting`, `contact`, `message`): no tribe
 /// membership, payments or reply/thread handling, so `run` and `connect`
 /// here commit a fraction of what the Mac/iPhone `commit` does.
-class Engine(mnemonic: String, val storage: Storage) {
-    val seed: String = Account.seedOf(mnemonic)
+class Engine(mnemonic: CharArray, val storage: Storage) {
+    /// The native core takes the seed as a `String`, so one lives as long as
+    /// the engine does; the words it came from are zeroed here, right away.
+    val seed: String = try { Account.seedOf(mnemonic) } finally { mnemonic.fill('\u0000') }
+    constructor(mnemonic: String, storage: Storage) : this(mnemonic.toCharArray(), storage)
+
     val network: String = storage.value(Setting.NETWORK) ?: "bitcoin"
 
     /// Guards `state` and `clock` the way Swift's `actor` isolates Engine:
