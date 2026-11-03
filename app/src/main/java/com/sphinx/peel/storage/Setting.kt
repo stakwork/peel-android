@@ -83,4 +83,16 @@ enum class Setting(val key: String) {
     /// the preferences file), in whole seconds; absent for a value never
     /// chosen, which is never uploaded (`peel.payment_confirmation_msat`).
     PAYMENT_CONFIRMATION_UPDATED_AT("paymentConfirmationUpdatedAt"),
+
+    /// The official `pin_timeout` as the preferences file holds it (whole
+    /// hours 0..25, 25 = never); Peel's scale is converted at the edge
+    /// (`PinTimeout`). Unset = at launch.
+    PIN_TIMEOUT("pinTimeout"),
+    PIN_TIMEOUT_UPDATED_AT("pinTimeoutUpdatedAt"),
+
+    /// The official `biometric_enabled` ("1"/"0" here): the person's wish,
+    /// synced; whether biometrics are actually enrolled is the Keystore's
+    /// (`SecretStore.biometricEnrolled`), never set by a sync.
+    BIOMETRIC_ENABLED("biometricEnabled"),
+    BIOMETRIC_ENABLED_UPDATED_AT("biometricEnabledUpdatedAt"),
 }

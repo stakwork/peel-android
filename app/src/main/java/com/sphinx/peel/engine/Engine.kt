@@ -3,6 +3,7 @@ package com.sphinx.peel.engine
 import android.os.SystemClock
 import android.util.Log
 import com.sphinx.peel.account.Account
+import com.sphinx.peel.account.PinTimeout
 import com.sphinx.peel.storage.ContactRow
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
@@ -683,23 +684,74 @@ class Engine(mnemonic: String, val storage: Storage) {
         runCatching { syncPreferences() }
     }
 
+    /// Where a synced preference lives here: its value and date settings, and
+    /// the stored string for a value in the spec's unit (the boost amount is
+    /// kept in msat, the rest as the spec holds them).
+    private class PrefSlot(
+        val value: Setting,
+        val date: Setting,
+        val toStored: (Long) -> String = { it.toString() },
+        val fromStored: (String) -> Long? = { it.toLongOrNull() },
+    )
+
+    private fun slot(spec: PreferencesMerge.Spec): PrefSlot = when (spec.key) {
+        PreferencesFile.TIP_AMOUNT_KEY -> PrefSlot(
+            Setting.BOOST_AMOUNT_MSAT, Setting.BOOST_AMOUNT_UPDATED_AT,
+            toStored = { (it * 1000).toString() }, fromStored = { it.toLongOrNull()?.div(1000) },
+        )
+        PreferencesFile.PIN_TIMEOUT_KEY -> PrefSlot(Setting.PIN_TIMEOUT, Setting.PIN_TIMEOUT_UPDATED_AT)
+        PreferencesFile.BIOMETRIC_KEY -> PrefSlot(Setting.BIOMETRIC_ENABLED, Setting.BIOMETRIC_ENABLED_UPDATED_AT)
+        else -> PrefSlot(Setting.PAYMENT_CONFIRMATION_MSAT, Setting.PAYMENT_CONFIRMATION_UPDATED_AT)
+    }
+
     /// This device's value and date for `spec`, in the spec's unit.
-    private fun localPreference(spec: PreferencesMerge.Spec): PreferencesMerge.Local? = when (spec.key) {
-        PreferencesFile.TIP_AMOUNT_KEY -> storage.value(Setting.BOOST_AMOUNT_MSAT)?.toLongOrNull()?.let {
-            PreferencesMerge.Local(it / 1000, storage.value(Setting.BOOST_AMOUNT_UPDATED_AT)?.toLongOrNull() ?: 0L)
-        }
-        else -> storage.value(Setting.PAYMENT_CONFIRMATION_MSAT)?.toLongOrNull()?.let {
-            PreferencesMerge.Local(it, storage.value(Setting.PAYMENT_CONFIRMATION_UPDATED_AT)?.toLongOrNull() ?: 0L)
+    private fun localPreference(spec: PreferencesMerge.Spec): PreferencesMerge.Local? {
+        val slot = slot(spec)
+        return storage.value(slot.value)?.let(slot.fromStored)?.let {
+            PreferencesMerge.Local(it, storage.value(slot.date)?.toLongOrNull() ?: 0L)
         }
     }
 
-    private fun takePreference(spec: PreferencesMerge.Spec, local: PreferencesMerge.Local): Pair<Setting, String> = when (spec.key) {
-        PreferencesFile.TIP_AMOUNT_KEY -> Setting.BOOST_AMOUNT_MSAT to (local.value * 1000).toString()
-        else -> Setting.PAYMENT_CONFIRMATION_MSAT to local.value.toString()
+    /// Whether the account's other devices' value for `spec` is to be synced here at all.
+    /// `biometric_enabled` only where this device has biometrics to offer
+    /// (`syncsBiometrics`, set by the app), as PeelCore's `PreferenceCapabilities`.
+    private fun syncs(spec: PreferencesMerge.Spec): Boolean =
+        spec.key != PreferencesFile.BIOMETRIC_KEY || syncsBiometrics
+
+    /// Set by the app once it knows this device can offer biometric unlock.
+    @Volatile var syncsBiometrics: Boolean = false
+
+    /// The official `pin_timeout` as stored (hours 0..25), if ever set or synced.
+    fun pinTimeoutOfficialHours(): Int? = storage.value(Setting.PIN_TIMEOUT)?.toIntOrNull()?.let(PinTimeout::clampOfficial)
+
+    /// "Ask for the PIN", on Peel's scale (`PinTimeout`); default is at launch (0).
+    fun pinTimeoutHours(): Int = pinTimeoutOfficialHours()?.let(PinTimeout::peelHours) ?: 0
+
+    fun setPinTimeout(peelHours: Int) = setPreference(PreferencesMerge.PIN_TIMEOUT, PinTimeout.officialHours(peelHours).toLong())
+
+    /// What the account's devices say about biometric unlock: a WISH, never
+    /// an enrolment (PeelCore decision 10) — null when never set or this
+    /// device has none to offer.
+    fun biometricWish(): Boolean? =
+        if (!syncsBiometrics) null else storage.value(Setting.BIOMETRIC_ENABLED)?.let { it == "1" }
+
+    fun setBiometricEnabled(on: Boolean) {
+        if (syncsBiometrics) setPreference(PreferencesMerge.BIOMETRIC, if (on) 1 else 0)
     }
 
-    private fun dateSetting(spec: PreferencesMerge.Spec): Setting =
-        if (spec.key == PreferencesFile.TIP_AMOUNT_KEY) Setting.BOOST_AMOUNT_UPDATED_AT else Setting.PAYMENT_CONFIRMATION_UPDATED_AT
+    /// Writes a choice made here: dated strictly after what it replaces, synced right away.
+    private fun setPreference(spec: PreferencesMerge.Spec, value: Long) {
+        val slot = slot(spec)
+        val oldDate = storage.value(slot.date)?.toLongOrNull() ?: 0L
+        val date = PreferencesMerge.nextDate(System.currentTimeMillis() / 1000, oldDate)
+        storage.apply(Storage.Commit(settings = mapOf(slot.value to slot.toStored(value), slot.date to date.toString())))
+        syncPreferencesInBackground()
+    }
+
+    private fun takePreference(spec: PreferencesMerge.Spec, local: PreferencesMerge.Local): Pair<Setting, String> =
+        slot(spec).let { it.value to it.toStored(local.value) }
+
+    private fun dateSetting(spec: PreferencesMerge.Spec): Setting = slot(spec).date
 
     /// Syncs in the background (a change made in Profile, which isn't suspending).
     fun syncPreferencesInBackground() {
@@ -735,7 +787,7 @@ class Engine(mnemonic: String, val storage: Storage) {
 
         val target = file ?: PreferencesFile.empty()
         var upload = false
-        for (spec in PreferencesMerge.SPECS) {
+        for (spec in PreferencesMerge.SPECS.filter(::syncs)) {
             val local = localPreference(spec)
             when (val outcome = PreferencesMerge.decide(spec, file, local, now)) {
                 is PreferencesMerge.Outcome.Upload -> {

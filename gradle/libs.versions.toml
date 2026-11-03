@@ -27,8 +27,11 @@ livekit = "2.29.2"
 # first, docs/VISION.md). CameraX only feeds it frames.
 zxing = "3.5.3"
 camerax = "1.4.2"
+# BiometricPrompt (biometric unlock, docs/phases/17-lock-hardening.md).
+biometric = "1.1.0"
 
 [libraries]
+androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }

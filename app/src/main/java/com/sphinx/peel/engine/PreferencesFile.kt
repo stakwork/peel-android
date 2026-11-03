@@ -34,6 +34,10 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         /// whole msat as a JSON string. The official apps keep and ignore it.
         const val PAYMENT_CONFIRMATION_KEY = "peel.payment_confirmation_msat"
 
+        /// The official apps' own keys (PeelCore `Preferences.pinTimeoutKey` / `biometricKey`).
+        const val PIN_TIMEOUT_KEY = "pin_timeout"
+        const val BIOMETRIC_KEY = "biometric_enabled"
+
         fun parse(text: String): PreferencesFile {
             val root = JSONObject(text)
             // PeelCore's `PreferencesFile.init(text:)`: a file the official
