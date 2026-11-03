@@ -455,3 +455,44 @@ Contacts progress (peel `HistoryCursor` fix): the total is the item count
 `firstForEachKey`, not the highest server index; progress is the number of
 messages fetched, capped at the total. The "Contacts & Tribes" line is
 active from Connected, with a progress bar, and done once messages begin.
+
+## Resumable restore, own profile, isPerson (PR #16)
+
+- **Resumable cursor** (ported from PR #5, `26635cf`, restore only):
+  `RestoreCursor` (+ test), `Setting.RESTORE_CURSOR`, `Commit.deleteSettings`,
+  `insertMessages(rows, contacts)` in one transaction, WAL, `@UNDISPATCHED`
+  waiter in `askAndAwait`, `resume()` re-runs `runRestore()` while restoring.
+  The cursor is saved after every page and removed in the commit that sets
+  `NEEDS_RESTORE=0`. Reconciled with this branch: a missing counts answer or a
+  timed-out page throws (never "finished" incomplete); the shared
+  `MessageCounts` is the top-level one in `RestoreCursor.kt`.
+- **Contacts progress across a resume.** The cursor (format `VERSION` "2";
+  older/unreadable text decodes to null and the restore re-plans) also holds
+  `contactsTotal` (the item count, `firstForEachKey`) and `fetched`
+  (`advanced()` adds a page's item count once; a stale page adds nothing).
+  `following()` carries both to the messages cursor. `restoreRun` sets the
+  Contacts line at the start of every run: messages phase => `RestoreCount(total,
+  total)` (unknown total => `(0,0)`, which the screen treats as complete — this
+  fixes a resumed messages phase showing Contacts "Waiting"); contacts phase =>
+  progress continues from `fetched`.
+- **Reads after a resumed restore.** The post-finish work (`recoverOwnProfile`,
+  `settleReadsAfterRestore`, `refreshTribeNames`, each in `runCatching`) runs
+  after any successful finish, fresh or resumed, so the second `getReads`
+  still comes after the contacts exist (the core drops markers for unknown
+  contacts).
+- **Own profile.** The server keeps no profile; the account's name and photo
+  come only on messages it sent. `Storage.newestOwnAlias()` /
+  `newestOwnPhotoUrl()` (newest 50 own, indexed messages in direct chats;
+  photo: https only, not types 5/29, empty on the newest message that has the
+  field = none, tribe chats as the fallback) feed `Engine.recoverOwnProfile()`,
+  which fills `ALIAS` when empty/absent and `PHOTO_URL` when absent (an empty
+  stored value wins). The You screen reads these settings from storage, so
+  there is no flow to update.
+- **isPerson (peel's `discoveredTribe`).** Done: `coreListContacts` is the
+  core's direct-contact registry (tribes are not in it), cached in
+  `Engine.personKeys` after the contacts phase and at the start of a resumed
+  restore. `contactHint` creates no new tribe flag (host, join/approve types)
+  for a chat in that set; existing rows are not demoted. Limit: during a fresh
+  restore's contacts run the set is still empty, so the check bites from the
+  messages phase on, and for live messages afterwards only once refreshed
+  (the cache is not refreshed on later contact additions).

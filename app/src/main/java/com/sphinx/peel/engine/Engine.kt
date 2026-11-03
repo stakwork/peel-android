@@ -8,7 +8,9 @@ import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -96,6 +98,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// same as PeelUI's `AppModel.attach` does with its own account tasks.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var started = false
+    /// A restore is paging right now: a second `start`/`resume` must not run another.
+    @Volatile private var restoreRunning = false
 
     private val connectionStateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = connectionStateFlow.asStateFlow()
@@ -356,11 +360,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     private fun storeMessages(result: RunReturn) {
         val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
         if (rows.isNotEmpty()) {
-            storage.insertMessages(rows)
-            for (row in rows) {
-                val hint = contactHint(row) ?: continue
-                storage.upsertContact(hint.pubkey, hint.alias, hint.photoUrl, hint.isTribe, hint.ready)
-            }
+            // Messages and the contacts they reveal in one transaction.
+            storage.insertMessages(rows, rows.mapNotNull { contactHint(it) })
         }
         // The mixer's one live word on a tag this device sent under —
         // PeelCore's `liveStatus`: FAILED as it comes, anything else
@@ -1013,7 +1014,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         ask: suspend () -> RunReturn,
     ): RunReturn? = withTimeoutOrNull(timeoutMs) {
         coroutineScope {
-            val waiter = async { inboundResults.first(expect) }
+            // Subscribed before the ask goes out: the flow has no replay, so an
+            // answer beating a lazily scheduled collector would be lost (30 s wait).
+            val waiter = async(start = CoroutineStart.UNDISPATCHED) { inboundResults.first(expect) }
             ask()
             waiter.await()
         }
@@ -1094,11 +1097,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// so this always reconnects first rather than guess from `transport`
     /// being non-null. A no-op before `start()` has ever run.
     fun resume() {
-        if (!started) return
+        if (!started || restoreRunning) return
         scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
             fetchReadsAndMutes()
+            // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
             runCatching { syncBoostAmount() }
         }
@@ -1138,64 +1142,146 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
     private enum class HistoryPhase { CONTACTS, MESSAGES }
 
-    /// What `getMsgsCounts` reports, mirrored from PeelCore's
-    /// `Engine.MessageCounts`.
-    private data class MessageCounts(
-        val total: Long,
-        val firstForEachKey: Long,
-        val totalHighestIndex: Long?,
-        val firstForEachKeyHighestIndex: Long?,
-    )
-
     /// Contacts first, then every message from the beginning — PeelCore's
-    /// `HistoryCursor.plan`, minus the live/catch-up/stall machinery
-    /// `HistoryCursor` otherwise carries: this is a single straight-through
-    /// restore, not a resumable general-purpose history cursor.
+    /// `HistoryCursor.plan` and resume, minus the live/stall machinery.
+    /// Resumable: the cursor (`RestoreCursor`) is kept in
+    /// `Setting.RESTORE_CURSOR` after every page, so a failure (a page that
+    /// never came, a dropped connection) or a restart picks up at the page
+    /// it stopped on instead of asking for everything again, and is removed
+    /// in the commit that marks the restore finished. A failure leaves
+    /// `NEEDS_RESTORE` set and is reported through [restoreProgress]; the
+    /// next `start()`/`resume()` runs it again from the cursor. Everything
+    /// after a successful finish is the same for a fresh and a resumed one.
     private suspend fun runRestore() {
         if (restoreRunning) return
         restoreRunning = true
+        restoreProgressFlow.update { it.copy(outcome = null) }
+        var finished = false
         try {
-            restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, null)) }
-            val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
-                run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
+            var cursor = RestoreCursor.decode(storage.value(Setting.RESTORE_CURSOR))
+            if (cursor != null) {
+                // Resumed: who the core knows as a person, for `contactHint`
+                // (a fresh restore learns it after its contacts run).
+                runCatching { refreshPersonKeys() }.onFailure { Log.w("PeelHistory", "listing contacts failed", it) }
+            } else {
+                cursor = planRestore()
             }
-            val counts = parseCounts(countsAnswer?.msgsCounts)
-                ?: throw IllegalStateException("The server did not report your message history. Will retry.")
-            // An item count, not the highest server index (that only says
-            // when to stop paging) — peel's `HistoryCursor` fix.
-            val contactTotal = counts.firstForEachKey
-            restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, contactTotal)) }
-            if (contactTotal > 0) {
-                val done = page(HistoryPhase.CONTACTS, counts.firstForEachKeyHighestIndex, total = contactTotal) { time, stateBytes, next ->
-                    coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
-                }
-                if (!done) throw IllegalStateException("Restoring contacts timed out. Will retry.")
-                // Once, with every contacts page's own state already
-                // folded in — not per page: `listContacts` decodes the
-                // core's *entire* contact list every time it's asked, and
-                // the final state after this phase already includes
-                // everything any one of its pages revealed.
-                storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
-                restoreProgressFlow.update { it.copy(contacts = RestoreCount(contactTotal, contactTotal)) }
-            }
-            if (counts.total > 0) {
-                val done = page(HistoryPhase.MESSAGES, counts.totalHighestIndex) { time, stateBytes, next ->
-                    coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
-                }
-                if (!done) throw IllegalStateException("Restoring messages timed out. Will retry.")
-            }
-            storage.apply(Storage.Commit(settings = mapOf(Setting.NEEDS_RESTORE to "0")))
+            while (cursor != null) cursor = restoreRun(cursor)
+            storage.apply(
+                Storage.Commit(
+                    settings = mapOf(Setting.NEEDS_RESTORE to "0"),
+                    deleteSettings = listOf(Setting.RESTORE_CURSOR),
+                ),
+            )
             restoreProgressFlow.update { it.copy(restoring = false, outcome = RestoreOutcome.Finished) }
-            runCatching { settleReadsAfterRestore() }.onFailure { Log.w("PeelHistory", "settling reads failed", it) }
-            runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
+            finished = true
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             restoreProgressFlow.update { it.copy(outcome = RestoreOutcome.Failed(e.message ?: "Restoring stopped.")) }
         } finally {
             restoreRunning = false
         }
+        if (finished) {
+            // History is stored: the account's own name/photo first (best
+            // effort), then the reads pass, which needs the rebuilt contacts.
+            runCatching { recoverOwnProfile() }.onFailure { Log.w("PeelHistory", "recovering own profile failed", it) }
+            runCatching { settleReadsAfterRestore() }.onFailure { Log.w("PeelHistory", "settling reads failed", it) }
+            runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
+        }
     }
 
-    @Volatile private var restoreRunning = false
+    /// Asks the server what it holds and plans the restore from that; the
+    /// plan is kept at once so even the first page's failure resumes.
+    private suspend fun planRestore(): RestoreCursor? {
+        restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, null)) }
+        val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
+            run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
+        } ?: throw IllegalStateException("The server did not report your message history. Will retry.")
+        val counts = parseCounts(countsAnswer.msgsCounts)
+            ?: throw IllegalStateException("The server's counts could not be read. Will retry.")
+        // An item count, not the highest server index (that only says when
+        // to stop paging) — peel's `HistoryCursor` fix.
+        restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, counts.firstForEachKey)) }
+        val plan = RestoreCursor.plan(counts)
+        if (plan != null) keepCursor(plan)
+        return plan
+    }
+
+    private fun keepCursor(cursor: RestoreCursor) {
+        storage.apply(Storage.Commit(settings = mapOf(Setting.RESTORE_CURSOR to cursor.encode())))
+    }
+
+    /// One run of a restore from `cursor`; the run that follows it (kept
+    /// before it starts), or null when this was the last. A page that never
+    /// comes throws: a restore must never be marked finished with history
+    /// missing.
+    private suspend fun restoreRun(cursor: RestoreCursor): RestoreCursor? {
+        val contactsRun = cursor.phase == RestoreCursor.Phase.CONTACTS
+        val phase = if (contactsRun) HistoryPhase.CONTACTS else HistoryPhase.MESSAGES
+        val total = cursor.contactsTotal
+        // The Contacts line is right however the run was reached, fresh or
+        // resumed: done once the messages run is in flight (unknown total:
+        // RestoreCount(0, 0), which the screen treats as complete), and
+        // continuing from what was already fetched in a contacts run.
+        restoreProgressFlow.update {
+            if (contactsRun) it.copy(contacts = RestoreCount(minOf(cursor.fetched, total ?: cursor.fetched), total))
+            else it.copy(contacts = RestoreCount(total ?: 0, total ?: 0))
+        }
+        var current = cursor
+        val complete = page(
+            phase, cursor.end, cursor.next.toULong(),
+            total = if (contactsRun) total else null,
+            restored = if (contactsRun) cursor.fetched else 0,
+            onPage = { next, items ->
+                current = current.advanced(next.toLong() - 1, items)
+                keepCursor(current)
+            },
+        ) { time, stateBytes, next ->
+            if (contactsRun) {
+                coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
+            } else {
+                coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
+            }
+        }
+        if (!complete) throw IllegalStateException("Restoring ${if (contactsRun) "contacts" else "messages"} timed out. Will retry.")
+        if (contactsRun) {
+            // Once, with every contacts page's own state already folded in
+            // — not per page: `listContacts` decodes the core's *entire*
+            // contact list every time it's asked.
+            val people = parseContactPubkeys(coreListContacts(StateCodec.encode(state)))
+            personKeys = people.toSet()
+            storage.markContactsReady(people)
+            val done = total ?: current.fetched
+            restoreProgressFlow.update { it.copy(contacts = RestoreCount(done, done)) }
+        }
+        return cursor.following()?.also { keepCursor(it) }
+    }
+
+    /// The core's direct contacts (persons; tribes are not in its registry),
+    /// cached for `contactHint`'s isPerson check.
+    private fun refreshPersonKeys() {
+        personKeys = parseContactPubkeys(coreListContacts(StateCodec.encode(state))).toSet()
+    }
+
+    @Volatile private var personKeys: Set<String> = emptySet()
+
+    /// The account's own name and photo, from the messages it sent (peel's
+    /// `recoverOwnProfile`): the server keeps no profile. Only what is not
+    /// stored yet: an alias that is empty/absent, a photo that is absent (an
+    /// empty stored value means "set or removed here" and wins).
+    private fun recoverOwnProfile() {
+        val settings = mutableMapOf<Setting, String>()
+        if (storage.value(Setting.ALIAS).isNullOrBlank()) {
+            storage.newestOwnAlias()?.let { settings[Setting.ALIAS] = it }
+        }
+        if (storage.value(Setting.PHOTO_URL) == null) {
+            storage.newestOwnPhotoUrl()?.let { settings[Setting.PHOTO_URL] = it }
+        }
+        // The profile screen reads these straight from storage (same
+        // `Commit(settings=...)` it writes), so there is no flow to update.
+        if (settings.isNotEmpty()) storage.apply(Storage.Commit(settings = settings))
+    }
 
     /// iOS's post-restore read pass (`historyEnded`): the first `getReads`
     /// came before the restore rebuilt the contacts, and the core drops
@@ -1242,9 +1328,18 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// watchdog, simplified to "stop" rather than "resume later"), an
     /// empty page (the server has nothing more for this phase), or once
     /// `next` passes `end`.
-    private suspend fun page(phase: HistoryPhase, end: Long?, start: ULong = 0uL, total: Long? = null, call: (String, ByteArray, ULong) -> RunReturn): Boolean {
+    private suspend fun page(
+        phase: HistoryPhase,
+        end: Long?,
+        start: ULong = 0uL,
+        total: Long? = null,
+        restored: Long = 0,
+        onPage: (next: ULong, items: Long) -> Unit = { _, _ -> },
+        call: (String, ByteArray, ULong) -> RunReturn,
+    ): Boolean {
         var next = start
-        var restored = 0L
+        var restored = restored
+        if (end != null && next > end.toULong()) return true
         while (true) {
             // Timed deliberately: the protocol gives a history page no
             // request id (`HistoryCursor.advance`'s own comment on
@@ -1271,6 +1366,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
             if (reached == null) break
             next = reached + 1uL
+            onPage(next, result.msgs.size.toLong())
             if (end != null && next > end.toULong()) break
         }
         return true
@@ -1347,11 +1443,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     private fun contactHint(row: MessageRow): ContactRow? {
         val sender = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
         val host = sender.optString("host").takeIf { it.isNotEmpty() }
-        if (host != null) {
+        // Peel's isPerson: a chat the core holds a contact key for is a
+        // person, never a tribe — no new tribe flag for it (existing rows
+        // are not demoted).
+        val person = row.chat in personKeys
+        if (host != null && !person) {
             return ContactRow(pubkey = row.chat, alias = null, photoUrl = null, isTribe = true, ready = true)
         }
         // iOS: a join/approve's sender pubkey is the tribe's, host or not.
-        if (row.type == GROUP_JOIN_MESSAGE_TYPE || row.type == MEMBER_APPROVE_MESSAGE_TYPE) {
+        if (!person && (row.type == GROUP_JOIN_MESSAGE_TYPE || row.type == MEMBER_APPROVE_MESSAGE_TYPE)) {
             return ContactRow(pubkey = row.chat, alias = null, photoUrl = null, isTribe = true, ready = true)
         }
         val pubkey = sender.optString("pubkey").takeIf { it.isNotEmpty() }
