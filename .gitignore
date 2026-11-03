@@ -11,3 +11,7 @@ captures/
 *.aab
 *.jks
 *.keystore
+
+# scripts/build-ffi.sh's own download cache (sphinx-rs release assets,
+# re-fetched on demand — never the source of truth, that's sphinxrs.lock).
+.build/
