@@ -420,12 +420,26 @@ fun ConversationScreen(
         }
 
         val listState = rememberLazyListState()
+        // Hidden until the first load is positioned at the bottom (no
+        // visible scroll); afterwards only follow a new message when the
+        // user is already at the bottom or sent it themselves.
+        var positioned by remember(chat) { mutableStateOf(false) }
+        var previousLast by remember(chat) { mutableStateOf(-1) }
         LaunchedEffect(displayedMessages.size) {
-            if (displayedMessages.isNotEmpty()) listState.animateScrollToItem(displayedMessages.size - 1)
+            val last = displayedMessages.size - 1
+            if (last < 0) return@LaunchedEffect
+            if (!positioned) {
+                listState.scrollToItem(last)
+                positioned = true
+            } else {
+                val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
+                if (last > previousLast && (atBottom || displayedMessages[last].fromMe)) listState.animateScrollToItem(last)
+            }
+            previousLast = last
         }
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         ) {
             itemsIndexed(displayedMessages, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
@@ -683,12 +697,23 @@ private fun ThreadScreen(
         }
 
         val listState = rememberLazyListState()
+        var positioned by remember(threadRootUuid) { mutableStateOf(false) }
+        var previousLast by remember(threadRootUuid) { mutableStateOf(-1) }
         LaunchedEffect(replies.size) {
-            if (replies.isNotEmpty()) listState.animateScrollToItem(replies.size)
+            val last = replies.size
+            if (replies.isEmpty()) return@LaunchedEffect
+            if (!positioned) {
+                listState.scrollToItem(last)
+                positioned = true
+            } else {
+                val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
+                if (last > previousLast && (atBottom || replies[last - 1].fromMe)) listState.animateScrollToItem(last)
+            }
+            previousLast = last
         }
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         ) {
             if (root != null) {
