@@ -73,6 +73,7 @@ private sealed class Step {
 /// screen; a new account instead continues on to show its words first.
 @Composable
 fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady: (engine: Engine) -> Unit) {
+    com.sphinx.peel.ui.SecureWindow()
     var path by remember { mutableStateOf(Path.NEW_ACCOUNT) }
     var step by remember { mutableStateOf<Step>(Step.Welcome) }
     var enteredWords by remember { mutableStateOf(List(12) { "" }) }

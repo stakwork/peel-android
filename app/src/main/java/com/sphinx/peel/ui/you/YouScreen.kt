@@ -46,7 +46,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.Account
+import com.sphinx.peel.account.LockoutPolicy
+import com.sphinx.peel.account.PinTimeout
 import com.sphinx.peel.account.SecretStore
+import com.sphinx.peel.ui.SecureWindow
+import com.sphinx.peel.ui.findActivity
+import com.sphinx.peel.ui.lock.BiometricUnlock
 import com.sphinx.peel.account.SecretStoreFailure
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
@@ -68,7 +73,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class YouRoute { WORDS, CHANGE_PIN }
+private enum class YouRoute { WORDS, CHANGE_PIN, BIOMETRIC_SETUP }
 
 /// "You" (docs/design/iphone.md, screen 6 — the real app's profile card,
 /// Agent and Stadeum rows, Account settings, Debug): this port's own
@@ -83,10 +88,12 @@ fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForg
     when (route) {
         YouRoute.WORDS -> TwelveWordsScreen(secretStore, onBack = { route = null })
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
+        YouRoute.BIOMETRIC_SETUP -> BiometricSetupScreen(engine, secretStore, onBack = { route = null })
         null -> YouMain(
             engine, storage, secretStore, onForgotten,
             onOpenWords = { route = YouRoute.WORDS },
             onOpenChangePin = { route = YouRoute.CHANGE_PIN },
+            onOpenBiometricSetup = { route = YouRoute.BIOMETRIC_SETUP },
         )
     }
 }
@@ -99,6 +106,7 @@ private fun YouMain(
     onForgotten: () -> Unit,
     onOpenWords: () -> Unit,
     onOpenChangePin: () -> Unit,
+    onOpenBiometricSetup: () -> Unit,
 ) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -106,6 +114,11 @@ private fun YouMain(
     var editingName by remember { mutableStateOf(false) }
     var editingBoostAmount by remember { mutableStateOf(false) }
     var editingConfirmation by remember { mutableStateOf(false) }
+    var editingPinTimeout by remember { mutableStateOf(false) }
+    var pinTimeoutHours by remember { mutableStateOf(engine.pinTimeoutHours()) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val biometricsAvailable = remember { BiometricUnlock.available(context) }
+    var biometricOn by remember { mutableStateOf(secretStore.biometricEnrolled) }
     var confirmationMsat by remember { mutableStateOf(engine.paymentConfirmationMsat()) }
     var alias by remember { mutableStateOf(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() }) }
     var boostAmountMsat by remember { mutableStateOf(engine.boostAmountMsat()) }
@@ -192,6 +205,23 @@ private fun YouMain(
                 AccountRow(label = "Twelve words", value = if (wordsConfirmed) "" else "Not checked yet", onClick = onOpenWords)
                 AccountDivider()
                 AccountRow(label = "Change PIN", value = "", onClick = onOpenChangePin)
+                AccountDivider()
+                AccountRow(label = "Ask for the PIN", value = PinTimeout.label(pinTimeoutHours), onClick = { editingPinTimeout = true })
+                if (biometricsAvailable || biometricOn) {
+                    AccountDivider()
+                    AccountRow(
+                        label = "Biometric unlock", value = if (biometricOn) "On" else "Off",
+                        onClick = {
+                            if (biometricOn) {
+                                secretStore.disableBiometric()
+                                engine.setBiometricEnabled(false)
+                                biometricOn = false
+                            } else {
+                                onOpenBiometricSetup()
+                            }
+                        },
+                    )
+                }
                 AccountDivider()
                 AccountRow(
                     label = "Boost amount", value = "${boostAmountMsat / 1000} sats",
@@ -302,6 +332,31 @@ private fun YouMain(
                 }) { Text("Save") }
             },
             dismissButton = { TextButton(onClick = { editingBoostAmount = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (editingPinTimeout) {
+        AlertDialog(
+            onDismissRequest = { editingPinTimeout = false },
+            title = { Text("Ask for the PIN") },
+            text = {
+                Column {
+                    Text(
+                        "Opening the app always needs your PIN or biometrics. This is how long it can sit in the " +
+                            "background before it asks again.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    (PinTimeout.OPTIONS + PinTimeout.NEVER).forEach { hours ->
+                        TextButton(onClick = {
+                            engine.setPinTimeout(hours)
+                            pinTimeoutHours = hours
+                            editingPinTimeout = false
+                        }) { Text(PinTimeout.label(hours) + if (hours == pinTimeoutHours) "  ✓" else "") }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { editingPinTimeout = false }) { Text("Cancel") } },
         )
     }
 
@@ -418,6 +473,7 @@ private enum class ChangePinStep { OLD, NEW, CONFIRM }
 
 @Composable
 private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
+    SecureWindow()
     var step by remember { mutableStateOf(ChangePinStep.OLD) }
     var old by remember { mutableStateOf("") }
     var new by remember { mutableStateOf("") }
@@ -458,6 +514,8 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
                         try {
                             withContext(Dispatchers.Default) { secretStore.changePin(old, new) }
                             onBack()
+                        } catch (e: SecretStoreFailure.LockedOut) {
+                            reset(ChangePinStep.OLD, "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}.")
                         } catch (e: SecretStoreFailure.WrongPin) {
                             reset(ChangePinStep.OLD, "Wrong PIN")
                         } catch (e: Exception) {
@@ -480,6 +538,8 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
 /// "not checked" branch iOS's own version still has to handle).
 @Composable
 private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
+    SecureWindow()
+    val host = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
     val shownForMs = 30_000L
     var asking by remember { mutableStateOf(true) }
     var pin by remember { mutableStateOf("") }
@@ -535,6 +595,9 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                             problem = null
                             asking = false
                             revealedAt = System.currentTimeMillis()
+                        } catch (e: SecretStoreFailure.LockedOut) {
+                            problem = "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}."
+                            pin = ""
                         } catch (e: SecretStoreFailure.WrongPin) {
                             problem = "Wrong PIN"
                             pin = ""
@@ -545,8 +608,25 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                         working = false
                     }
                 },
-                modifier = Modifier.fillMaxSize().padding(top = 60.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 60.dp),
             )
+            if (host != null && secretStore.biometricEnrolled) {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            val mnemonic = BiometricUnlock.unlockWords(host, secretStore, "Show your twelve words", null)
+                            if (mnemonic != null) {
+                                words = Account.wordsIn(mnemonic)
+                                visible = false
+                                problem = null
+                                asking = false
+                                revealedAt = System.currentTimeMillis()
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Use biometrics") }
+            }
         } else {
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp)) {
                 Text(
@@ -577,5 +657,58 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                 TextButton(onClick = { hide() }, modifier = Modifier.fillMaxWidth()) { Text("Hide") }
             }
         }
+    }
+}
+
+/// Turns biometric unlock on: the PIN first (it is what the Keystore-wrapped
+/// key is derived from — a synced "on" never enrols anything, PeelCore
+/// decision 10), then the system prompt on a freshly created biometric-gated
+/// key, which wraps the derived key. Records the choice (`biometric_enabled`).
+@Composable
+private fun BiometricSetupScreen(engine: Engine, secretStore: SecretStore, onBack: () -> Unit) {
+    SecureWindow()
+    val host = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
+    var pin by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
+    var working by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize()) {
+        RouteHeader("Biometric unlock", onBack)
+        PinPrompt(
+            title = "Enter your PIN", detail = problem ?: "To turn biometric unlock on.",
+            pin = pin, onPinChange = { pin = it }, working = working,
+            onComplete = {
+                working = true
+                scope.launch {
+                    try {
+                        val enrollment = withContext(Dispatchers.Default) { secretStore.beginBiometric(pin) }
+                        val authenticated = host?.let {
+                            BiometricUnlock.authenticate(it, enrollment.cipher, "Turn on biometric unlock", null)
+                        }
+                        if (authenticated == null) {
+                            secretStore.disableBiometric()
+                            problem = "Biometric unlock was not turned on."
+                            pin = ""
+                        } else {
+                            secretStore.finishBiometric(enrollment, authenticated)
+                            engine.setBiometricEnabled(true)
+                            onBack()
+                        }
+                    } catch (e: SecretStoreFailure.LockedOut) {
+                        problem = "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}."
+                        pin = ""
+                    } catch (e: SecretStoreFailure.WrongPin) {
+                        problem = "Wrong PIN"
+                        pin = ""
+                    } catch (e: Exception) {
+                        problem = e.message ?: "Could not turn biometric unlock on."
+                        pin = ""
+                    }
+                    working = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(top = 60.dp),
+        )
     }
 }

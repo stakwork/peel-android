@@ -38,7 +38,22 @@ object PreferencesMerge {
         takes = { incoming, current -> incoming <= (current ?: PaymentRules.DEFAULT_CONFIRMATION_MSAT) },
     )
 
-    val SPECS = listOf(TIP, CONFIRMATION)
+    /// The official `pin_timeout`: whole hours, 0 (every time) to 25 (never),
+    /// out-of-range values clamped, anything else refused (PeelCore `Preference.pinTimeout`).
+    /// Default apply policy: always the newest.
+    val PIN_TIMEOUT = Spec(PreferencesFile.PIN_TIMEOUT_KEY, parse = { text ->
+        text.toIntOrNull()?.let { com.sphinx.peel.account.PinTimeout.clampOfficial(it).toLong() }
+    })
+
+    /// The official `biometric_enabled`: "true"/"false" in any case (PeelCore's
+    /// `flag`); 1/0 here. Synced only by a device with biometrics, and only a wish.
+    val BIOMETRIC = Spec(
+        PreferencesFile.BIOMETRIC_KEY,
+        parse = { text -> when (text.lowercase()) { "true" -> 1L; "false" -> 0L; else -> null } },
+        format = { if (it != 0L) "true" else "false" },
+    )
+
+    val SPECS = listOf(TIP, CONFIRMATION, PIN_TIMEOUT, BIOMETRIC)
 
     /// This device's value (in the spec's unit) and its date in seconds;
     /// 0 for one never chosen on a device.
