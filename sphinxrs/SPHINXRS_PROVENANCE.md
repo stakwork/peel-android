@@ -2,22 +2,28 @@
 
 Source repo: https://github.com/stakwork/sphinx-rs
 
-Built from sphinx-rs commit: TODO_FILL_IN_FULL_40_CHAR_SHA
+Built from sphinx-rs commit: 08697b6be4f0d03dab7d1f943fd5569e22df4dae
 
-> **NOTE: the commit of the current binaries is NOT yet recorded.**
-> The owner is rebuilding the library from the latest sphinx-rs commit and will
-> push new binaries and fill in the commit above. Until then the checksums in
-> `jniLibs.sha256` only detect changes; they do not prove origin.
+That commit is the `v0.8.41` release tag — also what `sphinxrs/sphinxrs.lock`
+pins (`scripts/build-ffi.sh`, which is how these binaries actually got here:
+downloaded from that release's own GitHub assets, not built locally). The
+lock is the automation-friendly record (a tag plus checksums
+`build-ffi.sh` checks on every run); this file is the human-readable one —
+keep both in step when either changes.
 
 Binaries (`src/main/jniLibs/`): `arm64-v8a/libsphinxrs.so`, `x86_64/libsphinxrs.so`.
 Checksums: `jniLibs.sha256`.
 
 ## How to update
 
-1. Replace the `.so` files under `sphinxrs/src/main/jniLibs/`.
-2. Run `scripts/update-sphinxrs-checksums.sh`.
-3. Set `Built from sphinx-rs commit:` above to the full 40-char SHA.
-4. Commit the `.so` files, `jniLibs.sha256` and this file together.
+Run `scripts/build-ffi.sh --update <tag>` (downloads the release's own
+`sphinxrs.kt`/`.so` files and rewrites `sphinxrs/sphinxrs.lock`), then:
+
+1. Run `scripts/update-sphinxrs-checksums.sh`.
+2. Set `Built from sphinx-rs commit:` above to the new release tag's commit
+   (`gh api repos/stakwork/sphinx-rs/tags --jq '.[] | select(.name=="<tag>") | .commit.sha'`).
+3. Commit the `.so` files, `sphinxrs.kt`, `sphinxrs.lock`, `jniLibs.sha256`
+   and this file together.
 
 ## How to verify
 
