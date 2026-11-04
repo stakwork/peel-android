@@ -28,6 +28,14 @@ data class PeelPalette(
     val confirmed: Color,
     /// Needs a look: not connected, a retry pending.
     val attention: Color,
+    /// Message text (Theme.swift's `link`, `mention*`, `codeFill`).
+    val link: Color,
+    val mentionFill: Color,
+    val mentionText: Color,
+    /// A mention of you, or @all.
+    val mentionYouFill: Color,
+    val mentionYouText: Color,
+    val codeFill: Color,
 )
 
 private val LightPeelPalette = PeelPalette(
@@ -43,6 +51,12 @@ private val LightPeelPalette = PeelPalette(
     destructive = Color(0xFFED7474),
     confirmed = Color(0xFF49C998),
     attention = Color(0xFFA86400),
+    link = Color(0xFF3F68E0),
+    mentionFill = Color(0xFFDDE6FF),
+    mentionText = Color(0xFF1E3D99),
+    mentionYouFill = Color(0xFFFBE7A6),
+    mentionYouText = Color(0xFF5C4300),
+    codeFill = Color(0x12000000),
 )
 
 private val DarkPeelPalette = PeelPalette(
@@ -58,6 +72,12 @@ private val DarkPeelPalette = PeelPalette(
     destructive = Color(0xFFED7474),
     confirmed = Color(0xFF49C998),
     attention = Color(0xFFFFBC58),
+    link = Color(0xFF8FB0FF),
+    mentionFill = Color(0xFF2A3A5E),
+    mentionText = Color(0xFFB4C8FF),
+    mentionYouFill = Color(0x38F2C744),
+    mentionYouText = Color(0xFFFFE08A),
+    codeFill = Color(0x12FFFFFF),
 )
 
 val LocalPeelPalette = compositionLocalOf { LightPeelPalette }
