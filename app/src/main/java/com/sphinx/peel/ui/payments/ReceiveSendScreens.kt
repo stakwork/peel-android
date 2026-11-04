@@ -38,6 +38,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.sphinx.peel.account.AndroidClipboardAccess
+import com.sphinx.peel.account.SensitiveClipboard
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.Invoice
 import com.sphinx.peel.engine.InvoiceRecord
@@ -143,7 +145,7 @@ fun ReceiveScreen(engine: Engine, storage: Storage, onBack: () -> Unit) {
             }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(current.bolt11)) }, modifier = Modifier.weight(1f)) { Text("Copy") }
+                OutlinedButton(onClick = { AndroidClipboardAccess.sensitive(context).copy(current.bolt11, SensitiveClipboard.DEFAULT_CLEAR_MS * 2) }, modifier = Modifier.weight(1f)) { Text("Copy") }
                 OutlinedButton(
                     onClick = {
                         val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, current.bolt11)

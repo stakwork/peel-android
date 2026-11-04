@@ -74,7 +74,17 @@ fun Engine.paymentConfirmationMsat(): Long =
 
 fun Engine.setPaymentConfirmation(msat: Long) {
     require(msat >= 0) { "the amount can't be negative" }
-    storage.apply(Storage.Commit(settings = mapOf(Setting.PAYMENT_CONFIRMATION_MSAT to msat.toString())))
+    val oldDate = storage.value(Setting.PAYMENT_CONFIRMATION_UPDATED_AT)?.toLongOrNull() ?: 0L
+    val date = PreferencesMerge.nextDate(System.currentTimeMillis() / 1000, oldDate)
+    storage.apply(
+        Storage.Commit(
+            settings = mapOf(
+                Setting.PAYMENT_CONFIRMATION_MSAT to msat.toString(),
+                Setting.PAYMENT_CONFIRMATION_UPDATED_AT to date.toString(),
+            ),
+        ),
+    )
+    syncPreferencesInBackground()
 }
 
 /// Refuses an amount over the last balance the server reported (less

@@ -9,20 +9,50 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-/// Where an account's twelve words live, locked with the account's PIN.
-/// Ported from PeelCore's SecretStore.swift.
+/// Where an account's twelve words live, locked with the account's PIN
+/// (and, on Android, a hardware-backed Keystore key under that; see
+/// `docs/phases/17-lock-hardening.md`). Ported from PeelCore's SecretStore.swift,
+/// plus the Android-only lockout and biometric parts.
 interface SecretStore {
     val hasMnemonic: Boolean
+
+    /// Opens the words. Counts as a PIN attempt (throttled, see `LockoutPolicy`):
+    /// throws `LockedOut` while a wait is due and `WrongPin` for a wrong PIN.
     fun loadMnemonic(pin: String): String
     fun save(mnemonic: String, pin: String)
     fun changePin(oldPin: String, newPin: String)
     fun deleteMnemonic()
+
+    /// Milliseconds until another PIN try is allowed; 0 when one is.
+    fun lockoutRemainingMs(): Long = 0
+
+    /// Whether biometric unlock is set up (a wrapped derived key is stored).
+    val biometricEnrolled: Boolean get() = false
+
+    /// Checks the PIN (a counted attempt), derives the key and returns the
+    /// cipher to hand BiometricPrompt as a CryptoObject; `finishBiometric`
+    /// completes it with the cipher BiometricPrompt returned.
+    fun beginBiometric(pin: String): BiometricEnrollment = throw SecretStoreFailure.BiometricUnavailable
+    fun finishBiometric(enrollment: BiometricEnrollment, authenticated: Cipher) {}
+
+    /// The cipher to hand BiometricPrompt to unlock; throws `BiometricUnavailable`
+    /// (and forgets the biometric key) if it was invalidated by a new enrollment.
+    fun biometricUnlockCipher(): Cipher = throw SecretStoreFailure.BiometricUnavailable
+    fun loadMnemonicBiometric(authenticated: Cipher): String = throw SecretStoreFailure.BiometricUnavailable
+    fun disableBiometric() {}
 }
+
+/// A PIN-checked, not yet biometric-authorised enrolment (`SecretStore.beginBiometric`).
+class BiometricEnrollment(val cipher: Cipher, internal val derivedKey: ByteArray)
 
 sealed class SecretStoreFailure(message: String) : Exception(message) {
     object NoAccount : SecretStoreFailure("no account stored")
     object AccountExists : SecretStoreFailure("an account is already stored here")
     object WrongPin : SecretStoreFailure("wrong PIN")
+    class LockedOut(val remainingMs: Long) : SecretStoreFailure("too many wrong PINs; try again in ${LockoutPolicy.describe(remainingMs)}")
+    object KeystoreUnavailable : SecretStoreFailure("this device's secure key store could not be used")
+    /// Biometric unlock can't be used now (invalidated, stale after a PIN change, cancelled setup): ask for the PIN.
+    object BiometricUnavailable : SecretStoreFailure("biometric unlock is not available; use your PIN")
 }
 
 /// The words sealed under a key derived from the PIN, byte for byte the
@@ -42,9 +72,9 @@ internal object PinBox {
 
     private val random = SecureRandom()
 
-    fun seal(mnemonic: String, pin: String): ByteArray {
+    fun seal(mnemonic: String, pin: String, iterations: Int = ITERATIONS): ByteArray {
         val salt = ByteArray(SALT_LENGTH).also { random.nextBytes(it) }
-        val key = derive(pin, salt)
+        val key = derive(pin, salt, iterations)
         val nonce = ByteArray(NONCE_LENGTH).also { random.nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, nonce))
@@ -53,31 +83,43 @@ internal object PinBox {
         val out = ByteBuffer.allocate(HEADER_LENGTH + combined.size)
         out.put(VERSION)
         out.put(salt)
-        out.putInt(ITERATIONS)
+        out.putInt(iterations)
         out.put(combined)
         return out.array()
     }
 
-    fun open(sealed: ByteArray, pin: String): String {
+    fun open(sealed: ByteArray, pin: String, iterations: Int = ITERATIONS): String =
+        openWithKey(sealed, deriveKey(sealed, pin, iterations), iterations)
+
+    /// The AES key a PIN derives for this blob (the slow step).
+    fun deriveKey(sealed: ByteArray, pin: String, iterations: Int = ITERATIONS): SecretKeySpec {
+        val salt = parse(sealed, iterations).salt
+        return derive(pin, salt, iterations)
+    }
+
+    private class Parsed(val salt: ByteArray, val nonce: ByteArray, val ciphertext: ByteArray)
+
+    private fun parse(sealed: ByteArray, iterations: Int): Parsed {
         if (sealed.size <= HEADER_LENGTH || sealed[0] != VERSION) {
             throw IllegalStateException("the stored account has an unknown format")
         }
         val buffer = ByteBuffer.wrap(sealed)
         buffer.get() // version, already checked
         val salt = ByteArray(SALT_LENGTH).also { buffer.get(it) }
-        val iterations = buffer.int
-        if (iterations != ITERATIONS) {
-            throw IllegalStateException("the stored account has an unknown format")
-        }
+        if (buffer.int != iterations) throw IllegalStateException("the stored account has an unknown format")
         val combined = ByteArray(sealed.size - HEADER_LENGTH).also { buffer.get(it) }
-        val nonce = combined.copyOfRange(0, NONCE_LENGTH)
-        val ciphertext = combined.copyOfRange(NONCE_LENGTH, combined.size)
+        if (combined.size <= NONCE_LENGTH) throw IllegalStateException("the stored account has an unknown format")
+        return Parsed(salt, combined.copyOfRange(0, NONCE_LENGTH), combined.copyOfRange(NONCE_LENGTH, combined.size))
+    }
 
-        val key = derive(pin, salt)
+    /// Opens with an already-derived key (the PIN's, or the one biometric
+    /// unlock releases); a wrong key fails authentication as a wrong PIN.
+    fun openWithKey(sealed: ByteArray, key: SecretKeySpec, iterations: Int = ITERATIONS): String {
+        val parsed = parse(sealed, iterations)
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, nonce))
-            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, parsed.nonce))
+            String(cipher.doFinal(parsed.ciphertext), Charsets.UTF_8)
         } catch (e: Exception) {
             // A wrong PIN derives a wrong key, which fails authentication.
             throw SecretStoreFailure.WrongPin
@@ -96,7 +138,7 @@ internal object PinBox {
     /// ASCII digits, so the password-to-bytes step has no encoding
     /// ambiguity to worry about (UTF-8, Latin-1 and a straight char cast
     /// all agree on the digits '0'–'9').
-    internal fun derive(pin: String, salt: ByteArray): SecretKeySpec {
+    internal fun derive(pin: String, salt: ByteArray, iterations: Int = ITERATIONS): SecretKeySpec {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(pin.toByteArray(Charsets.UTF_8), "HmacSHA256"))
         val hashLength = mac.macLength
@@ -105,7 +147,7 @@ internal object PinBox {
         block[block.size - 1] = 1 // one 256-bit block is enough for a 256-bit key
         var u = mac.doFinal(block)
         val result = u.copyOf()
-        for (iteration in 1 until ITERATIONS) {
+        for (iteration in 1 until iterations) {
             u = mac.doFinal(u)
             for (i in 0 until hashLength) result[i] = (result[i].toInt() xor u[i].toInt()).toByte()
         }
@@ -113,56 +155,248 @@ internal object PinBox {
     }
 }
 
-/// The words sealed under the PIN, in this app's private storage: on
-/// Android that directory is already sandboxed to this app (not readable by
-/// another app without root), the rough equivalent of the Mac's
-/// access-group-scoped data-protection Keychain. The PIN is the real wall:
-/// see `PinBox`.
-class FileSecretStore(context: Context, account: String = "default") : SecretStore {
-    private val file = File(context.filesDir, "secret.$account.v1")
+/// The words sealed under the PIN, in this app's private storage, with a
+/// hardware-backed Keystore layer around the PIN blob and a throttle on
+/// wrong PINs. Layout (all in `filesDir`, owner-only):
+///
+///  * `secret.<account>.v2` — `0x02 | AES-GCM(Keystore wall key, aad) of the v1 PinBox blob`.
+///  * `secret.<account>.v1` — the legacy bare PinBox blob; migrated to v2 on
+///    first use (crash-safe: v2 is written atomically before v1 is deleted, and
+///    whichever exists is trusted in that order; see `migrate`).
+///  * `lockout.<account>.v1` — the throttle counter, HMAC'd by a Keystore key.
+///  * `bio.<account>.v1` — the PIN-derived key wrapped by the biometric-gated
+///    Keystore key (only when biometric unlock is on).
+///
+/// The Keystore wall is the Android equivalent of iOS's Keychain "real
+/// wall": the PIN blob copied off the device (backup, forensic copy of
+/// /data without the secure element) cannot even be brute-forced offline,
+/// because it is ciphertext under a key that never leaves the TEE/StrongBox.
+/// The PIN's PBKDF2 still guards the words against anyone who can USE the
+/// Keystore (root on a live device).
+class FileSecretStore internal constructor(
+    private val dir: File,
+    private val account: String,
+    private val wall: KeyWall,
+    private val lockoutStore: LockoutStore,
+    private val biometricVault: BiometricKeyVault?,
+    private val clock: LockoutClock,
+    private val iterations: Int = PinBox.ITERATIONS,
+) : SecretStore {
+    constructor(context: Context, account: String = "default") : this(
+        context.filesDir, account,
+        AndroidKeyWall("peel.wall.$account"),
+        FileLockoutStore(File(context.filesDir, "lockout.$account.v1"), AndroidStateSigner("peel.lockout.$account")),
+        AndroidBiometricKeyVault("peel.bio.$account"),
+        AndroidLockoutClock(context.applicationContext),
+    )
 
-    override val hasMnemonic: Boolean get() = file.exists()
+    private val legacyFile = File(dir, "secret.$account.v1")
+    private val file = File(dir, "secret.$account.v2")
+    private val bioFile = File(dir, "bio.$account.v1")
+    private val aad = "peel.secret.$account".toByteArray()
+    private val lock = Any()
+
+    init {
+        // Best effort at start; `readInner` retries if the Keystore wasn't ready.
+        runCatching { migrate() }
+    }
+
+    override val hasMnemonic: Boolean get() = file.exists() || legacyFile.exists()
+
+    // --- throttle -------------------------------------------------------
+
+    private fun state(now: LockoutPolicy.Clock): LockoutPolicy.State = try {
+        lockoutStore.load() ?: if (hasMnemonic) LockoutPolicy.tampered(now) else LockoutPolicy.State.CLEAN
+    } catch (e: LockoutStore.Tampered) {
+        LockoutPolicy.tampered(now)
+    }
+
+    override fun lockoutRemainingMs(): Long = synchronized(lock) {
+        val now = clock.now()
+        LockoutPolicy.remainingMs(state(now), now)
+    }
+
+    /// The attempt's gate: refuses while a wait is due, else records the
+    /// attempt as a failure BEFORE anything is checked, so killing the app
+    /// mid-check never refunds it. `succeeded` clears it.
+    private fun beginAttempt() = synchronized(lock) {
+        val now = clock.now()
+        val current = state(now)
+        val remaining = LockoutPolicy.remainingMs(current, now)
+        if (remaining > 0) throw SecretStoreFailure.LockedOut(remaining)
+        lockoutStore.save(LockoutPolicy.registerAttempt(current, now))
+    }
+
+    private fun succeeded() = synchronized(lock) { lockoutStore.save(LockoutPolicy.State.CLEAN) }
+
+    // --- reading and writing the blob ------------------------------------
+
+    /// The inner v1 PinBox blob, through the Keystore wall.
+    private fun readInner(): ByteArray {
+        if (!file.exists() && legacyFile.exists()) runCatching { migrate() }
+        if (file.exists()) {
+            val bytes = file.readBytes()
+            if (bytes.isEmpty() || bytes[0] != WRAPPED_VERSION) throw IllegalStateException("the stored account has an unknown format")
+            return try {
+                wall.unwrap(bytes.copyOfRange(1, bytes.size), aad)
+            } catch (e: Exception) {
+                throw SecretStoreFailure.KeystoreUnavailable
+            }
+        }
+        // Migration could not run (Keystore unavailable): the legacy blob is
+        // still the account; open it rather than lock the person out.
+        if (legacyFile.exists()) return legacyFile.readBytes()
+        throw SecretStoreFailure.NoAccount
+    }
+
+    private fun writeInner(inner: ByteArray) {
+        val wrapped = try {
+            byteArrayOf(WRAPPED_VERSION) + wall.wrap(inner, aad)
+        } catch (e: Exception) {
+            throw SecretStoreFailure.KeystoreUnavailable
+        }
+        writeOwnerOnly(file, wrapped)
+    }
+
+    /// Legacy (v1, bare PinBox) to v2 (Keystore-wrapped), idempotent and
+    /// safe against a crash at any point:
+    ///  1. v2 is written atomically (temp file + rename), so it is never partial.
+    ///  2. Only after v2 verifiably unwraps to exactly the v1 bytes is v1 deleted.
+    /// A crash after 1 leaves both: the next run finds v2 good and deletes v1.
+    /// A v2 that does not unwrap while v1 exists (key lost) is discarded and redone.
+    @Synchronized
+    internal fun migrate() {
+        if (!legacyFile.exists()) return
+        val legacy = legacyFile.readBytes()
+        if (file.exists()) {
+            val good = runCatching { wall.unwrap(file.readBytes().copyOfRange(1, file.length().toInt()), aad).contentEquals(legacy) }.getOrDefault(false)
+            if (good) {
+                legacyFile.delete()
+                return
+            }
+            file.delete()
+        }
+        // The throttle's state starts here for an account that predates it (no
+        // file yet is otherwise "tampered"); never reset an existing one.
+        if (runCatching { lockoutStore.load() }.getOrNull() == null) lockoutStore.save(LockoutPolicy.State.CLEAN)
+        writeInner(legacy)
+        if (wall.unwrap(file.readBytes().copyOfRange(1, file.length().toInt()), aad).contentEquals(legacy)) legacyFile.delete()
+    }
 
     override fun loadMnemonic(pin: String): String {
-        if (!file.exists()) throw SecretStoreFailure.NoAccount
-        return PinBox.open(file.readBytes(), pin)
+        if (!hasMnemonic) throw SecretStoreFailure.NoAccount
+        beginAttempt()
+        val inner = readInner()
+        val words = PinBox.open(inner, pin, iterations)
+        succeeded()
+        return words
     }
 
     override fun save(mnemonic: String, pin: String) {
         require(Pin.isValid(pin)) { "the PIN must be ${Pin.LENGTH} digits" }
-        if (file.exists()) throw SecretStoreFailure.AccountExists
-        writeOwnerOnly(PinBox.seal(mnemonic, pin))
+        if (hasMnemonic) throw SecretStoreFailure.AccountExists
+        synchronized(lock) { lockoutStore.save(LockoutPolicy.State.CLEAN) }
+        writeInner(PinBox.seal(mnemonic, pin, iterations))
     }
 
     override fun changePin(oldPin: String, newPin: String) {
         require(Pin.isValid(newPin)) { "the PIN must be ${Pin.LENGTH} digits" }
         val mnemonic = loadMnemonic(oldPin)
-        writeOwnerOnly(PinBox.seal(mnemonic, newPin))
+        writeInner(PinBox.seal(mnemonic, newPin, iterations))
+        // The wrapped derived key belongs to the old PIN's salt: no longer opens anything.
+        disableBiometric()
+        // A v1 leftover (migration unavailable) must not keep the old PIN alive.
+        legacyFile.delete()
     }
 
     override fun deleteMnemonic() {
         file.delete()
+        legacyFile.delete()
+        disableBiometric()
+        runCatching { lockoutStore.clear() }
+        runCatching { wall.delete() }
     }
 
-    /// Writes the sealed mnemonic so it is never, even briefly,
-    /// world-readable — unlike writing the bytes first and chmod-ing
-    /// after, which leaves a window with default (not owner-only)
-    /// permissions if the process dies in between. A fresh temp file is
-    /// created with owner-only permissions as part of its own creation
-    /// (`PosixFilePermissions.asFileAttribute`, applied atomically by the
-    /// OS at `createTempFile`, not after), written to, then moved onto
-    /// `file` in one filesystem op — the Android equivalent of iOS's own
-    /// `open()` with `O_CREAT` and mode `0600` in one call
-    /// (`SecretStore.swift`'s `FileSecretStore.write`).
-    private fun writeOwnerOnly(bytes: ByteArray) {
-        val ownerOnly = java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
-            java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"),
-        )
-        val tmp = java.nio.file.Files.createTempFile(file.parentFile!!.toPath(), file.name, ".tmp", ownerOnly)
-        java.nio.file.Files.write(tmp, bytes)
-        java.nio.file.Files.move(
-            tmp, file.toPath(),
-            java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-        )
+    // --- biometrics ---------------------------------------------------------
+
+    override val biometricEnrolled: Boolean get() = bioFile.exists() && biometricVault != null
+
+    override fun beginBiometric(pin: String): BiometricEnrollment {
+        val vault = biometricVault ?: throw SecretStoreFailure.BiometricUnavailable
+        beginAttempt()
+        val inner = readInner()
+        val key = PinBox.deriveKey(inner, pin, iterations)
+        PinBox.openWithKey(inner, key, iterations) // WrongPin if it is not the PIN
+        succeeded()
+        val cipher = try { vault.newEncryptCipher() } catch (e: Exception) { throw SecretStoreFailure.BiometricUnavailable }
+        return BiometricEnrollment(cipher, key.encoded)
+    }
+
+    override fun finishBiometric(enrollment: BiometricEnrollment, authenticated: Cipher) {
+        val wrapped = try { authenticated.doFinal(enrollment.derivedKey) } catch (e: Exception) {
+            disableBiometric(); throw SecretStoreFailure.BiometricUnavailable
+        }
+        val iv = authenticated.iv
+        writeOwnerOnly(bioFile, byteArrayOf(1, iv.size.toByte()) + iv + wrapped)
+        enrollment.derivedKey.fill(0)
+    }
+
+    override fun biometricUnlockCipher(): Cipher {
+        val vault = biometricVault ?: throw SecretStoreFailure.BiometricUnavailable
+        try {
+            val bytes = bioFile.readBytes()
+            if (bytes.size < 3 || bytes[0] != 1.toByte()) throw SecretStoreFailure.BiometricUnavailable
+            val iv = bytes.copyOfRange(2, 2 + bytes[1].toInt())
+            return vault.decryptCipher(iv)
+        } catch (e: Exception) {
+            // Invalidated by a new fingerprint/face, deleted, or unreadable: gone for good.
+            disableBiometric()
+            throw SecretStoreFailure.BiometricUnavailable
+        }
+    }
+
+    override fun loadMnemonicBiometric(authenticated: Cipher): String {
+        try {
+            val bytes = bioFile.readBytes()
+            val ct = bytes.copyOfRange(2 + bytes[1].toInt(), bytes.size)
+            val key = authenticated.doFinal(ct)
+            val words = PinBox.openWithKey(readInner(), SecretKeySpec(key, "AES"), iterations)
+            key.fill(0)
+            return words
+        } catch (e: SecretStoreFailure.KeystoreUnavailable) {
+            throw e
+        } catch (e: Exception) {
+            // Stale (PIN changed elsewhere) or corrupt: fall back to the PIN and forget it.
+            disableBiometric()
+            throw SecretStoreFailure.BiometricUnavailable
+        }
+    }
+
+    override fun disableBiometric() {
+        bioFile.delete()
+        runCatching { biometricVault?.delete() }
+    }
+
+    /// Writes so the file is never, even briefly, world-readable — a fresh
+    /// temp file is created with owner-only permissions as part of its own
+    /// creation, written, then moved onto `target` in one filesystem op: the
+    /// Android equivalent of iOS's own `open()` with `O_CREAT` and mode
+    /// `0600` in one call (`SecretStore.swift`'s `FileSecretStore.write`).
+    private fun writeOwnerOnly(target: File, bytes: ByteArray) = Companion.writeOwnerOnly(target, bytes)
+
+    internal companion object {
+        const val WRAPPED_VERSION: Byte = 2
+
+        fun writeOwnerOnly(target: File, bytes: ByteArray) {
+            val ownerOnly = java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"),
+            )
+            val tmp = java.nio.file.Files.createTempFile(target.parentFile!!.toPath(), target.name, ".tmp", ownerOnly)
+            java.nio.file.Files.write(tmp, bytes)
+            java.nio.file.Files.move(
+                tmp, target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+        }
     }
 }

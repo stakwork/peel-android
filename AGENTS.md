@@ -24,11 +24,20 @@ sections for code that isn't written yet.
     `peel`'s `Storage.swift`/`Storage+Migrations.swift`/`Storage+Writes.swift`.
     Plain `SQLiteOpenHelper`, not Room: see `docs/phases/01-foundation.md`
     for why.
+  - `account/` also holds the lock hardening (`docs/phases/17-lock-hardening.md`):
+    `KeystoreKeys.kt` (Keystore seams: `KeyWall`, `StateSigner`, `BiometricKeyVault`
+    + Android impls), `Lockout.kt` (pure wrong-PIN throttle), `PinTimeout.kt`,
+    `SensitiveClipboard.kt`. `FileSecretStore` wraps the PIN blob in the Keystore
+    (`secret.<a>.v2`) and migrates legacy `.v1`. `ui/SecureWindow.kt` = FLAG_SECURE;
+    `ui/lock/BiometricUnlock.kt` = BiometricPrompt. Keep new Keystore use behind
+    those interfaces so it stays JVM-testable.
   - `engine/` — `Engine` (the core contract: `run` calls a core function,
     commits what it returns), `StateCodec` (the core's MessagePack
     state-map format), `UniqueClock`, `ServerAddress`, `Transport` (MQTT,
     HiveMQ client, built but not connected to anything). Ported from
     `peel`'s `Engine.swift`, `StateCodec.swift`, `Transport.swift`.
+  - `engine/RestoreCursor.kt` — a restore's resumable position
+    (`Setting.RESTORE_CURSOR`); see `docs/phases/03-restoring.md`.
   - `engine/Payments.kt`, `Invoice.kt`, `Sats.kt` — money: balance checks,
     invoices, payment history, pay/request/send (ported from `Engine+Payments.swift`,
     `Invoice.swift`, `Sats.swift`); see `docs/money-parity.md`.

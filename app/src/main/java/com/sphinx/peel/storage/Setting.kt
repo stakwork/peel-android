@@ -17,6 +17,12 @@ enum class Setting(val key: String) {
     /// "1" while an account brought back from its words still needs its history.
     NEEDS_RESTORE("needsRestore"),
 
+    /// Where an interrupted restore stands (`RestoreCursor.encode`): which
+    /// phase, the next server index to ask for, where it ends. Written after
+    /// every page, removed in the commit that finishes the restore. Not
+    /// secret: indices only.
+    RESTORE_CURSOR("restoreCursor"),
+
     /// "1" once the twelve words were checked: three of them typed back, or
     /// all twelve to restore. Never the words themselves. An account with
     /// no record has not been checked.
@@ -75,6 +81,24 @@ enum class Setting(val key: String) {
 
     /// Payments and invoices over this many msat need the person's
     /// confirmation first — PeelCore's `paymentConfirmationMsat`
-    /// (default 100 sats, 0 asks every time). Local to this device, as there.
+    /// (default 100 sats, 0 asks every time). Synced as Peel's
+    /// `peel.payment_confirmation_msat`, taken from another device only when stricter.
     PAYMENT_CONFIRMATION_MSAT("paymentConfirmationMsat"),
+
+    /// When `PAYMENT_CONFIRMATION_MSAT` was last chosen here (or taken from
+    /// the preferences file), in whole seconds; absent for a value never
+    /// chosen, which is never uploaded (`peel.payment_confirmation_msat`).
+    PAYMENT_CONFIRMATION_UPDATED_AT("paymentConfirmationUpdatedAt"),
+
+    /// The official `pin_timeout` as the preferences file holds it (whole
+    /// hours 0..25, 25 = never); Peel's scale is converted at the edge
+    /// (`PinTimeout`). Unset = at launch.
+    PIN_TIMEOUT("pinTimeout"),
+    PIN_TIMEOUT_UPDATED_AT("pinTimeoutUpdatedAt"),
+
+    /// The official `biometric_enabled` ("1"/"0" here): the person's wish,
+    /// synced; whether biometrics are actually enrolled is the Keystore's
+    /// (`SecretStore.biometricEnrolled`), never set by a sync.
+    BIOMETRIC_ENABLED("biometricEnabled"),
+    BIOMETRIC_ENABLED_UPDATED_AT("biometricEnabledUpdatedAt"),
 }

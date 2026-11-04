@@ -32,6 +32,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.account.Account
+import com.sphinx.peel.account.AndroidClipboardAccess
+import com.sphinx.peel.account.SensitiveClipboard
 import com.sphinx.peel.ui.theme.Theme
 
 /// Twelve (or three) places in a two-column grid, each showing its own
@@ -108,6 +110,7 @@ private fun WordField(
 @Composable
 fun WordEntry(words: List<String>, onWordsChange: (List<String>) -> Unit, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val focusRequesters = remember { List(words.size) { FocusRequester() } }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -115,6 +118,8 @@ fun WordEntry(words: List<String>, onWordsChange: (List<String>) -> Unit, modifi
             val text = clipboard.getText()?.text ?: return@Button
             val parts = Account.wordsIn(text)
             if (parts.isEmpty()) return@Button
+            // The words are in the boxes now; they should not stay on the clipboard.
+            if (SensitiveClipboard.shouldClearAfterPaste(parts.size)) AndroidClipboardAccess(context).clearIfText(context, text)
             val next = words.toMutableList()
             parts.take(next.size).forEachIndexed { i, word -> next[i] = word }
             onWordsChange(next)

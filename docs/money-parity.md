@@ -43,7 +43,7 @@ at `70997cb`.
 | 16 | Pay a request from the chat (type 2 → type 3 to the payee) | `Engine.payRequest` (Mac `PaymentChatRows.swift`; the iPhone defers it) | **Built.** `RequestMessage` Pay button → `Engine.payRequest`; type-3 messages are hidden as rows and flip the request to Paid |
 | 17 | Request state: open, paying, paid, underpaid, expired, wrong payee | `RequestRowView.status` | **Built** (same words) |
 | 18 | Boost: one tap, tip amount + tribe price, once per message | `Engine.quickBoost`, `MessageMenu.swift` | **Already built** (`Engine.sendBoost`, phase 09). Now also checks the balance first |
-| 19 | Tip amount setting, synced as `tip_amount` | `Preferences.swift`, `PreferencesFile.swift`, `YouTab.swift` `BoostAmountScreen` | **Already built** (`Engine.setBoostAmount`/`syncBoostAmount`). Added: presets (10/50/100/500/1000) and the second-tap confirmation over the threshold. Default stays 10 sats (a deliberate choice in `Attachment.kt`; iOS's is 100) |
+| 19 | Tip amount setting, synced as `tip_amount` | `Preferences.swift`, `PreferencesFile.swift`, `YouTab.swift` `BoostAmountScreen` | **Built, syncs both ways** (`Engine.setBoostAmount` → `Engine.syncPreferences`; merge in `PreferencesMerge`). Presets (10/50/100/500/1000) and the second-tap confirmation over the threshold. Default is now 100 sats, as on iOS (`Attachment.kt`). Incoming `tip_amount` from another device is applied on start, on resume and after every local change when its date is newer (ties go to the file) |
 | 20 | Boost chips under a message | `MessageRows.swift` | **Already built** (`BoostChip`) |
 | 21 | History reconcile: settle invoices from history rows, fail pending sends by their rows | `Storage.reconcile`, `reconcileInBackground` | **Partial.** `Engine.storeMoney` settles invoices we made and our pending payments from each history page and type-3 messages. Not ported: reaching back 30 days for stale pending sends (`fetchBackToOpenSends`), the "not arrived" verdict (`markNotArrived`), unsettled status |
 | 22 | Payment templates (picture on a payment) | `PaymentTemplate.swift`, `Engine+Attachments.swift` | **Not built.** Needs the memes `/templates` list and media tokens for payments; the token call exists (`coreMakeMediaToken`), the UI does not. Incoming templates show their note only |
@@ -90,3 +90,30 @@ and `lspHost`.
   needs a server with a node). No fiat/rate endpoint.
 - Storage: schema v9 adds `invoice` and `payment` tables (migration is
   additive); new setting `paymentConfirmationMsat`.
+
+## Preferences sync (tip amount and Confirm payments)
+
+What syncs, through the memes-server preferences file (same file, same
+encryption and the same merge rules as iOS `PreferencesFile.merged`):
+
+| Key | Value | Apply rule |
+|---|---|---|
+| `tip_amount` | whole sats as a string (> 0) | newest date wins, ties go to the file |
+| `peel.payment_confirmation_msat` | whole msat as a string (>= 0) | like any key, but taken from the file only when it is *stricter* (`incoming <= local`, local default 100 sats); a looser one is refused and only its date is taken so a later local change wins |
+
+Both are pushed after a local change (`setBoostAmount`,
+`setPaymentConfirmation`) and merged on `start()` / `resume()`. A
+confirmation chosen here is dated (`paymentConfirmationUpdatedAt`); a
+value never chosen on this device (no date) is never uploaded.
+
+Not synced, and why: `pin_timeout`, `biometric_enabled`,
+`ai_agent_config`, `timezone`, `peel.time_zone`, `chat_color` (Android has
+no such feature yet, so there is nothing to read or write); `device.*`
+keys are local on iOS too. Unknown items and top-level fields in the file
+go back untouched.
+
+Caveats: Android's JVM unit tests cover the merge (`PreferencesMergeTest`)
+but not `Engine.syncPreferences` itself (needs the native library and the
+memes server). The Profile screen reads the values when opened, so a value
+taken from the file while it is open shows on next open. Sync is
+best-effort and silent on failure.

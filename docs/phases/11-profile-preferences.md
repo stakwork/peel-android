@@ -1,5 +1,19 @@
 # Phase 11 — Profile and preferences sync
 
+## Status (2026-11-02): sync widened
+
+Syncs now (both directions, `PreferencesMerge` + `Engine.syncPreferences`,
+same rules as iOS): `tip_amount` and `peel.payment_confirmation_msat`
+(Confirm payments; only taken from the file when stricter, like iOS).
+The default boost is 100 sats again (iOS's `defaultBoostAmountMsat`);
+the earlier "10 sats, the user's choice" note below is superseded.
+`PreferencesFile` parsing now refuses a file the official apps could not
+read, and dates are read like iOS (`Double` seconds, capped a day ahead).
+Left: `pin_timeout`, `biometric_enabled`, `ai_agent_config`, `timezone`,
+`peel.time_zone`, `chat_color` — Android has no matching feature. Not
+unit-tested: the engine glue (needs native lib/server). See
+`docs/money-parity.md` for the key table.
+
 ## Status (2026-10-29)
 
 **Built:** the "You" tab stopped being a dev placeholder (pubkey,
@@ -206,10 +220,8 @@ in the one commit.
 - The boost menu says just "Boost", not "Boost N sats" — the user's
   own explicit call, unlike PeelCore's own menu
   (`quickBoostLabel`), which does name the amount.
-- The boost default changed from 100 sats (PeelCore's own
-  `defaultBoostAmountMsat`) to 10 — also the user's own explicit
-  choice for this port, not a porting mistake; see
-  `BOOST_AMOUNT_MSAT`'s own doc comment in `Attachment.kt`.
+- (Superseded 2026-11-02: the boost default is back to 100 sats, as on
+  iOS; it had been 10 by an earlier explicit choice.)
 
 ## Journal
 
