@@ -99,6 +99,8 @@ import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AudioPlayer
 import com.sphinx.peel.ui.components.VideoAttachment
+import com.sphinx.peel.ui.components.mediaBubble
+import com.sphinx.peel.ui.components.readImageSize
 import com.sphinx.peel.ui.components.ZoomableImageDialog
 import com.sphinx.peel.ui.components.readMediaDurationMs
 import com.sphinx.peel.ui.components.AvatarShape
@@ -1418,13 +1420,13 @@ private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: Aud
     if (attachment.kind == AttachmentKind.IMAGE) {
         var zoomed by remember(attachment.file) { mutableStateOf(false) }
         if (zoomed) ZoomableImageDialog(attachment.file) { zoomed = false }
+        val size by produceState<Pair<Int, Int>?>(null, attachment.file) { value = readImageSize(attachment.file) }
         AsyncImage(
             model = attachment.file,
             contentDescription = attachment.fileName ?: "Image",
-            contentScale = ContentScale.Fit,
+            contentScale = ContentScale.Crop,
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 240.dp)
+                .mediaBubble(size?.first ?: 0, size?.let { it.first.toFloat() / it.second } ?: (4f / 3f))
                 .clip(RoundedCornerShape(10.dp))
                 .background(Theme.colors.fieldFill)
                 .clickable { zoomed = true },

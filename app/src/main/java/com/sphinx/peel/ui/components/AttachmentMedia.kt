@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.components
 
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.widget.MediaController
 import android.widget.VideoView
@@ -10,7 +11,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.aspectRatio
@@ -38,7 +40,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,7 +56,7 @@ import kotlinx.coroutines.withContext
 /// A video's first frame and length, read once off the main thread.
 /// Null fields when the file can't be read (the row then shows a plain
 /// dark box, still playable).
-class VideoInfo(val frame: ImageBitmap?, val durationMs: Int, val aspect: Float)
+class VideoInfo(val frame: ImageBitmap?, val durationMs: Int, val aspect: Float, val width: Int = 0)
 
 private fun readVideoInfo(file: File): VideoInfo {
     val retriever = MediaMetadataRetriever()
@@ -61,12 +65,30 @@ private fun readVideoInfo(file: File): VideoInfo {
         val bitmap = retriever.getFrameAtTime(0)
         val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toIntOrNull() ?: 0
         val aspect = bitmap?.let { it.width.toFloat() / it.height }?.takeIf { it > 0f } ?: (16f / 9f)
-        VideoInfo(bitmap?.asImageBitmap(), duration, aspect)
+        VideoInfo(bitmap?.asImageBitmap(), duration, aspect, bitmap?.width ?: 0)
     } catch (_: Exception) {
         VideoInfo(null, 0, 16f / 9f)
     } finally {
         runCatching { retriever.release() }
     }
+}
+
+/// An image's pixel size from its header only (no decode); null if unreadable.
+suspend fun readImageSize(file: File): Pair<Int, Int>? = withContext(Dispatchers.IO) {
+    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    runCatching { BitmapFactory.decodeFile(file.absolutePath, opts) }
+    if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
+}
+
+/// Sizes a media bubble to wrap its asset: the asset's own width (px as dp
+/// at this density) bounded by the row, height from the aspect ratio and
+/// bounded by the screen height. An unknown size gets a default width.
+@Composable
+fun Modifier.mediaBubble(widthPx: Int, aspect: Float): Modifier {
+    val density = LocalDensity.current
+    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.75f).dp
+    val width = if (widthPx > 0) with(density) { widthPx.toDp() } else 220.dp
+    return this.width(width).heightIn(max = maxHeight).aspectRatio(aspect)
 }
 
 /// A voice message's length, so the row can say "0:00 / 0:06" before play.
@@ -84,8 +106,7 @@ fun VideoAttachment(file: File) {
 
     Box(
         Modifier
-            .fillMaxWidth()
-            .aspectRatio(aspect.coerceIn(0.6f, 2f))
+            .mediaBubble(info?.width ?: 0, aspect)
             .clip(RoundedCornerShape(10.dp))
             .background(Color.Black),
     ) {
@@ -93,7 +114,7 @@ fun VideoAttachment(file: File) {
             InlineVideo(file, Modifier.fillMaxSize(), controls = false, onEnd = { playing = false })
         } else {
             info?.frame?.let {
-                Image(it, contentDescription = "Video", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                Image(it, contentDescription = "Video", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
             Box(
                 Modifier
