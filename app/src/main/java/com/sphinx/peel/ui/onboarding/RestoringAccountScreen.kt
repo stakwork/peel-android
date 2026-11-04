@@ -60,6 +60,7 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
                 ConnectionState.Idle -> "Waiting"
                 ConnectionState.Connecting -> "Connecting…"
                 ConnectionState.Connected -> "Connected"
+                is ConnectionState.Offline -> "Offline, retrying in ${(connection as ConnectionState.Offline).retryInSeconds}s…"
                 is ConnectionState.Failed -> (connection as ConnectionState.Failed).message
             },
             state = if (connection == ConnectionState.Connected) LineState.DONE else LineState.ACTIVE,

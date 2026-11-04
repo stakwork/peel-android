@@ -3,6 +3,7 @@ package com.sphinx.peel.engine
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.MqttGlobalPublishFilter
 import com.hivemq.client.mqtt.datatypes.MqttQos
+import com.hivemq.client.mqtt.lifecycle.MqttDisconnectSource
 import com.hivemq.client.mqtt.mqtt3.Mqtt3AsyncClient
 import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.channels.awaitClose
@@ -21,18 +22,31 @@ data class Inbound(val topic: String, val payload: ByteArray)
 /// client (Eclipse Paho's Android client needs a bound Service; this is a
 /// plain library call like MQTTNIO's on the Mac/iPhone side).
 ///
-/// Nothing calls this yet: Engine makes no server calls, so there is
-/// nothing to subscribe or publish for. Not exercised against a broker
-/// yet either (ServerAddressTest covers the one pure piece, URL parsing);
-/// a real test needs something to connect to, which is its own decision
-/// (a local Mosquitto via Testcontainers, needs Docker running; or the
-/// account's own server once one is configured).
+/// HiveMQ's own `automaticReconnect()` is deliberately not used: it
+/// reconnects the socket but does not redo our own topic subscriptions
+/// (the broker forgets them on a clean-session reconnect), so a silent
+/// auto-reconnect would leave the app "connected" but deaf. Instead
+/// [onUnexpectedDisconnect] fires once, [Engine]'s own reconnect loop
+/// (`connect`) builds a fresh `Transport` and redoes the whole handshake —
+/// PeelCore's own `connectionClosed`/`reconnectLoop`, just driven by this
+/// callback as the drop signal instead of PeelCore's own close-listener
+/// plus application-level ping.
 class Transport(
     private val server: ServerAddress,
     private val clientID: String,
     private val username: String,
     private val password: String,
+    private val onUnexpectedDisconnect: () -> Unit = {},
 ) {
+    /// Whether the client can take a publish or subscribe right now —
+    /// checked before every send so a dead connection raises a clear,
+    /// catchable [IllegalStateException] with a real stack trace, never
+    /// HiveMQ's own `MqttClientStateException` (a reused "hot path"
+    /// exception with none, from deep inside the library, on whatever
+    /// coroutine happened to call send() — unreadable in a crash report,
+    /// and if nothing downstream happens to catch it, fatal).
+    val isConnected: Boolean get() = client.state.isConnected
+
     private val client: Mqtt3AsyncClient = run {
         // Release builds refuse plaintext MQTT; surfaced as an ordinary
         // exception: Engine.connect() -> connectAndRegister() catches it and
@@ -45,6 +59,16 @@ class Transport(
             .identifier(clientID)
             .serverHost(server.host)
             .serverPort(server.port)
+            .addDisconnectedListener { context ->
+                // USER is this Transport's own close() (client.disconnect()) —
+                // the one drop that is never "unexpected". Automatic
+                // reconnect defaults to off (HiveMQ's own
+                // MqttClientAutoReconnectImpl.DEFAULT_RECONNECT is false
+                // unless automaticReconnect() is called, which this builder
+                // never does), so the socket stays down either way; this
+                // only decides whether Engine hears about it.
+                if (context.source != MqttDisconnectSource.USER) onUnexpectedDisconnect()
+            }
         if (server.tls) {
             // Default SSL config: system trust store. Hostname verification
             // is on by default — checked in hivemq-mqtt-client 1.4.1's
@@ -81,6 +105,7 @@ class Transport(
     }
 
     suspend fun subscribe(topics: List<String>) {
+        check(isConnected) { "MQTT client is not connected." }
         for (topic in topics) {
             client.subscribeWith()
                 .topicFilter(topic)
@@ -91,6 +116,7 @@ class Transport(
     }
 
     suspend fun publish(topic: String, payload: ByteArray) {
+        check(isConnected) { "MQTT client is not connected." }
         client.publishWith()
             .topic(topic)
             .payload(payload)
