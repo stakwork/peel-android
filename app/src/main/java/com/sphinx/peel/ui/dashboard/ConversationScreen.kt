@@ -343,6 +343,13 @@ fun ConversationScreen(
         }
     }
 
+    val listState = rememberLazyListState()
+    // Hidden until the first load is positioned at the bottom (no
+    // visible scroll); afterwards only follow a new message when the
+    // user is already at the bottom or sent it themselves.
+    var positioned by remember(chat) { mutableStateOf(false) }
+    var previousLast by remember(chat) { mutableStateOf(-1) }
+
     val openRoot = openThreadRoot
     if (openRoot != null) {
         ThreadScreen(
@@ -432,12 +439,6 @@ fun ConversationScreen(
             }
         }
 
-        val listState = rememberLazyListState()
-        // Hidden until the first load is positioned at the bottom (no
-        // visible scroll); afterwards only follow a new message when the
-        // user is already at the bottom or sent it themselves.
-        var positioned by remember(chat) { mutableStateOf(false) }
-        var previousLast by remember(chat) { mutableStateOf(-1) }
         LaunchedEffect(displayedMessages.size) {
             val last = displayedMessages.size - 1
             if (last < 0) return@LaunchedEffect
