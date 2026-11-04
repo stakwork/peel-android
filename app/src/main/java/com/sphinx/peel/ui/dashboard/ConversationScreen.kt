@@ -2,6 +2,7 @@ package com.sphinx.peel.ui.dashboard
 
 import android.content.Intent
 import android.webkit.MimeTypeMap
+import com.sphinx.peel.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -58,6 +59,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -446,10 +448,7 @@ fun ConversationScreen(
         // Only our own first crossing into "new" gets the line - PeelCore's
         // own `rows(...)` clears `newAfter` the moment one row claims it.
         val newMessageIndex = remember(displayedMessages, newAfterIndex) {
-            newAfterIndex?.let { after ->
-                displayedMessages.indexOfFirst { !it.fromMe && it.type != BOOST_MESSAGE_TYPE && (it.serverIndex ?: -1L) > after }
-                    .takeIf { it >= 0 }
-            }
+            newMessagesIndex(displayedMessages, newAfterIndex, BOOST_MESSAGE_TYPE)
         }
 
         LaunchedEffect(displayedMessages.size) {
@@ -543,6 +542,8 @@ fun ConversationScreen(
                 draft = ""
                 replyTo = null
                 error = null
+                // Sending reads the chat: "New messages" has done its job.
+                newAfterIndex = null
                 scope.launch {
                     try {
                         engine.sendMessage(chat, toSend, isTribe, replyUuid, inThread)
@@ -1356,13 +1357,12 @@ private fun NewMessagesDivider() {
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
         Text(
-            "New messages",
+            stringResource(R.string.new_messages),
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Bold,
             color = Theme.colors.accent,
-            modifier = Modifier.padding(horizontal = 8.dp),
+            modifier = Modifier.padding(start = 10.dp),
         )
-        HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
     }
 }
 
