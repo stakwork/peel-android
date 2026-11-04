@@ -452,6 +452,7 @@ fun ConversationScreen(
             }
             previousLast = last
         }
+        KeepAtBottomOnKeyboard(listState, displayedMessages.size - 1)
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
@@ -742,6 +743,7 @@ private fun ThreadScreen(
             }
             previousLast = last
         }
+        KeepAtBottomOnKeyboard(listState, replies.size)
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
