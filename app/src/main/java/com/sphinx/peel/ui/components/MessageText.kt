@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,7 +49,7 @@ import com.sphinx.peel.ui.theme.Theme
 /// emphasis marked, list items with a hanging indent, headings larger, quotes
 /// behind a bar, ``` blocks as code. Drawn like peel's `Apps/Shared/MessageText.swift`.
 /// `myAliases` are what a mention of you looks like (`Mentions.ownAliases`);
-/// empty in the agent chat. Only https links open, with ACTION_VIEW; a long
+/// empty in the agent chat. `maxLines` caps each paragraph (a list row's preview). Only https links open, with ACTION_VIEW; a long
 /// press anywhere else falls through to the row (the message menu).
 @Composable
 fun MessageText(
@@ -57,6 +58,7 @@ fun MessageText(
     myAliases: Set<String> = emptySet(),
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = Theme.colors.text,
+    maxLines: Int = Int.MAX_VALUE,
 ) {
     val blocks = remember(text) { MessageMarkup.blocks(text) }
     val palette = Theme.colors
@@ -80,6 +82,8 @@ fun MessageText(
         Text(
             annotated,
             style = body.copy(fontSize = size, fontWeight = weight, lineHeight = (size.value * 1.4f).sp),
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
             modifier = modifier,
         )
     }
