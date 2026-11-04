@@ -79,20 +79,26 @@ enum class Setting(val key: String) {
     /// way PeelCore's `configuredHost` does.
     CALL_SERVER("callServer"),
 
-    /// "Ask for the PIN" (PeelCore's `pin_timeout` preference, `PINTimeout`):
-    /// hours away before the lock screen asks again, "0" = whenever Peel
-    /// opens, or "never". Unset reads as "never" (iOS default). Persisted
-    /// by Profile only — nothing re-locks on it yet, see
-    /// `docs/phases/11-profile-preferences.md`.
-    PIN_TIMEOUT_HOURS("pinTimeoutHours"),
-
-    /// "Confirm payments" (PeelCore's `paymentConfirmationMsat`): ask
-    /// before sending more than this many msat; "0" = always. Unset reads
-    /// as 100 sats (iOS default). Persisted by Profile only — Android has
-    /// no payment-sending flow that checks it yet.
+    /// Payments and invoices over this many msat need the person's
+    /// confirmation first — PeelCore's `paymentConfirmationMsat`
+    /// (default 100 sats, 0 asks every time). Synced as Peel's
+    /// `peel.payment_confirmation_msat`, taken from another device only when stricter.
     PAYMENT_CONFIRMATION_MSAT("paymentConfirmationMsat"),
 
-    // TODO(auto-download): enable together with the "Auto download media"
-    // row in YouScreen once Android auto-downloads attachments (iOS default
-    // on): AUTO_DOWNLOAD_MEDIA("autoDownloadMedia"),
+    /// When `PAYMENT_CONFIRMATION_MSAT` was last chosen here (or taken from
+    /// the preferences file), in whole seconds; absent for a value never
+    /// chosen, which is never uploaded (`peel.payment_confirmation_msat`).
+    PAYMENT_CONFIRMATION_UPDATED_AT("paymentConfirmationUpdatedAt"),
+
+    /// The official `pin_timeout` as the preferences file holds it (whole
+    /// hours 0..25, 25 = never); Peel's scale is converted at the edge
+    /// (`PinTimeout`). Unset = at launch.
+    PIN_TIMEOUT("pinTimeout"),
+    PIN_TIMEOUT_UPDATED_AT("pinTimeoutUpdatedAt"),
+
+    /// The official `biometric_enabled` ("1"/"0" here): the person's wish,
+    /// synced; whether biometrics are actually enrolled is the Keystore's
+    /// (`SecretStore.biometricEnrolled`), never set by a sync.
+    BIOMETRIC_ENABLED("biometricEnabled"),
+    BIOMETRIC_ENABLED_UPDATED_AT("biometricEnabledUpdatedAt"),
 }

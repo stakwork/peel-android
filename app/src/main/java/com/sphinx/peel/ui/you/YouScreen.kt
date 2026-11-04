@@ -1,6 +1,5 @@
 package com.sphinx.peel.ui.you
 
-import com.sphinx.peel.ui.components.SecureWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -64,56 +63,59 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.LockoutPolicy
+import com.sphinx.peel.account.PinTimeout
 import com.sphinx.peel.account.SecretStoreFailure
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.PaymentRules
+import com.sphinx.peel.engine.Sats
+import com.sphinx.peel.engine.paymentConfirmationMsat
+import com.sphinx.peel.engine.setPaymentConfirmation
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
+import com.sphinx.peel.ui.SecureWindow
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.AgentTag
 import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.components.PinPrompt
+import com.sphinx.peel.ui.findActivity
+import com.sphinx.peel.ui.lock.BiometricUnlock
 import com.sphinx.peel.ui.theme.Theme
-import com.sphinx.peel.ui.you.YouOptions.Choice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class YouRoute { WORDS, CHANGE_PIN, BOOST }
+private enum class YouRoute { WORDS, CHANGE_PIN, BIOMETRIC_SETUP }
 
 /// "You" (docs/design/iphone.md, screen 6), reworked to match the iOS app's
 /// own Profile: a centred "You" title, the avatar/name/balance header, an
-/// Agent card, one Account card (Twelve words, Change PIN, Fingerprint,
-/// Ask for the PIN, Boost amount, Confirm payments, Server), a Debug card
-/// and "Forget this account" in its own card. Twelve words, Change PIN and
-/// Boost amount open their own full screens (round back button, big title).
+/// Agent card, one Account card (Twelve words, Change PIN, Ask for the PIN,
+/// Biometric unlock, Boost amount, Confirm payments, Server), a Debug card
+/// and "Forget this account" in its own card. Twelve words and Change PIN
+/// open their own full screens (round back button, big title); Ask for the
+/// PIN, Boost amount and Confirm payments are dialogs, since each is one
+/// choice from a short list rather than its own flow. Biometric unlock's
+/// own screen is the PIN check `beginBiometric` needs before enrolling it.
 ///
 /// Not ported (see `docs/phases/11-profile-preferences.md`):
 ///  - Stadeum section (stakwork @hive, Disconnect): left for later.
 ///  - "Auto download media": Android has no auto-download yet; the row is
 ///    in the code, commented out, with a TODO.
-///  - Fingerprint: `androidx.biometric` is not a dependency, so the row
-///    shows a disabled switch; no biometric unlock of `SecretStore`.
-///  - "Ask for the PIN" and "Confirm payments" are persisted
-///    (`Setting.PIN_TIMEOUT_HOURS`, `Setting.PAYMENT_CONFIRMATION_MSAT`)
-///    but nothing enforces them yet: no re-lock-after-timeout concept and
-///    no payment-sending flow that asks for confirmation.
-///  - Neither new preference syncs between devices (only `tip_amount` does).
 @Composable
 fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
     var route by remember { mutableStateOf<YouRoute?>(null) }
     when (route) {
         YouRoute.WORDS -> TwelveWordsScreen(secretStore, onBack = { route = null })
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
-        YouRoute.BOOST -> BoostAmountScreen(engine, onBack = { route = null })
+        YouRoute.BIOMETRIC_SETUP -> BiometricSetupScreen(engine, secretStore, onBack = { route = null })
         null -> YouMain(
             engine, storage, secretStore, onForgotten,
             onOpenWords = { route = YouRoute.WORDS },
             onOpenChangePin = { route = YouRoute.CHANGE_PIN },
-            onOpenBoost = { route = YouRoute.BOOST },
+            onOpenBiometricSetup = { route = YouRoute.BIOMETRIC_SETUP },
         )
     }
 }
@@ -128,18 +130,22 @@ private fun YouMain(
     onForgotten: () -> Unit,
     onOpenWords: () -> Unit,
     onOpenChangePin: () -> Unit,
-    onOpenBoost: () -> Unit,
+    onOpenBiometricSetup: () -> Unit,
 ) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
     var confirmingForget by remember { mutableStateOf(false) }
     var editingName by remember { mutableStateOf(false) }
+    var editingBoostAmount by remember { mutableStateOf(false) }
+    var editingConfirmation by remember { mutableStateOf(false) }
+    var editingPinTimeout by remember { mutableStateOf(false) }
+    var pinTimeoutHours by remember { mutableStateOf(engine.pinTimeoutHours()) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val biometricsAvailable = remember { BiometricUnlock.available(context) }
+    var biometricOn by remember { mutableStateOf(secretStore.biometricEnrolled) }
+    var confirmationMsat by remember { mutableStateOf(engine.paymentConfirmationMsat()) }
     var alias by remember { mutableStateOf(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() }) }
-    val boostAmountMsat = remember { engine.boostAmountMsat() }
-    var pinTimeout by remember { mutableStateOf(YouOptions.pinTimeoutOf(storage.value(Setting.PIN_TIMEOUT_HOURS))) }
-    var paymentConfirmation by remember {
-        mutableStateOf(YouOptions.paymentConfirmationOf(storage.value(Setting.PAYMENT_CONFIRMATION_MSAT)))
-    }
+    var boostAmountMsat by remember { mutableStateOf(engine.boostAmountMsat()) }
     // `balanceMsat` only ever moves as a side effect of some other call's
     // `RunReturn` (`Engine.commitLocked`) — nothing here asks for it on
     // its own, so re-reading it whenever the connection state changes
@@ -179,8 +185,8 @@ private fun YouMain(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    balanceMsat?.let { "${YouOptions.groupedSats(it / 1000)} sats" } ?: "–",
-                    color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyLarge,
+                    balanceMsat?.let { Sats.format(it) } ?: "–",
+                    color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
                 )
             }
         }
@@ -220,50 +226,32 @@ private fun YouMain(
                 AccountDivider()
                 AccountRow(label = "Change PIN", onClick = onOpenChangePin, chevron = true)
                 AccountDivider()
-                // TODO(biometrics): `androidx.biometric` is not a dependency
-                // and `SecretStore` has no biometric-bound key, so this can
-                // not really be turned on. Rendered disabled (and off) so the
-                // row matches iOS; wire a real switch + "Turn on" action
-                // once a BiometricPrompt-sealed copy of the PIN key exists,
-                // without weakening the PIN scheme.
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Fingerprint", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
-                        Text(
-                            "Biometrics are not set up on this device",
-                            style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
-                        )
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Switch(checked = false, onCheckedChange = null, enabled = false)
+                AccountRow(label = "Ask for the PIN", value = PinTimeout.label(pinTimeoutHours), onClick = { editingPinTimeout = true })
+                if (biometricsAvailable || biometricOn) {
+                    AccountDivider()
+                    AccountRow(
+                        label = "Biometric unlock", value = if (biometricOn) "On" else "Off",
+                        onClick = {
+                            if (biometricOn) {
+                                secretStore.disableBiometric()
+                                engine.setBiometricEnabled(false)
+                                biometricOn = false
+                            } else {
+                                onOpenBiometricSetup()
+                            }
+                        },
+                    )
                 }
                 AccountDivider()
-                PickerRow(
-                    label = "Ask for the PIN",
-                    options = YouOptions.pinTimeouts,
-                    selected = pinTimeout,
-                    onSelect = {
-                        pinTimeout = it
-                        storage.apply(Storage.Commit(settings = mapOf(Setting.PIN_TIMEOUT_HOURS to it)))
-                    },
+                AccountRow(
+                    label = "Boost amount", value = "${boostAmountMsat / 1000} sats",
+                    onClick = { editingBoostAmount = true },
                 )
                 AccountDivider()
                 AccountRow(
-                    label = "Boost amount", value = "${YouOptions.groupedSats(boostAmountMsat / 1000)} sats",
-                    onClick = onOpenBoost, chevron = true,
-                )
-                AccountDivider()
-                PickerRow(
                     label = "Confirm payments",
-                    options = YouOptions.paymentConfirmations,
-                    selected = paymentConfirmation,
-                    onSelect = {
-                        paymentConfirmation = it
-                        storage.apply(Storage.Commit(settings = mapOf(Setting.PAYMENT_CONFIRMATION_MSAT to it.toString())))
-                    },
+                    value = if (confirmationMsat == 0L) "Always" else "Over ${Sats.format(confirmationMsat)}",
+                    onClick = { editingConfirmation = true },
                 )
                 AccountDivider()
                 // TODO(auto-download): Android has no attachment
@@ -367,6 +355,115 @@ private fun YouMain(
         )
     }
 
+    if (editingBoostAmount) {
+        var draft by remember { mutableStateOf((boostAmountMsat / 1000).toString()) }
+        var error by remember { mutableStateOf<String?>(null) }
+        // The amount typed that the person has already been told is over the
+        // confirmation limit: saving it again is the confirmation (a payment
+        // over the threshold takes a second tap, PeelCore's `setBoostAmount`).
+        var askedFor by remember { mutableStateOf<Long?>(null) }
+        AlertDialog(
+            onDismissRequest = { editingBoostAmount = false },
+            title = { Text("Boost amount") },
+            text = {
+                Column {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (preset in listOf(10L, 50L, 100L, 500L, 1_000L)) {
+                            TextButton(onClick = { draft = preset.toString(); askedFor = null; error = null }) { Text("$preset") }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        BasicTextField(
+                            value = draft,
+                            onValueChange = { draft = it.filter(Char::isDigit) },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(" sats", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+                    }
+                    error?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.destructive)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val sats = draft.toLongOrNull()
+                    if (sats == null || sats <= 0) {
+                        error = "Enter a whole number of sats, more than zero."
+                    } else if (PaymentRules.needsConfirmation(sats * 1000, askedFor, confirmationMsat)) {
+                        askedFor = sats * 1000
+                        error = "Every boost sends ${Sats.format(sats * 1000)}, more than your confirmation limit. Save again to confirm."
+                    } else {
+                        boostAmountMsat = sats * 1000
+                        editingBoostAmount = false
+                        scope.launch {
+                            withContext(Dispatchers.Default) { engine.setBoostAmount(sats) }
+                        }
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editingBoostAmount = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (editingPinTimeout) {
+        AlertDialog(
+            onDismissRequest = { editingPinTimeout = false },
+            title = { Text("Ask for the PIN") },
+            text = {
+                Column {
+                    Text(
+                        "Opening the app always needs your PIN or biometrics. This is how long it can sit in the " +
+                            "background before it asks again.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    (PinTimeout.OPTIONS + PinTimeout.NEVER).forEach { hours ->
+                        TextButton(onClick = {
+                            engine.setPinTimeout(hours)
+                            pinTimeoutHours = hours
+                            editingPinTimeout = false
+                        }) { Text(PinTimeout.label(hours) + if (hours == pinTimeoutHours) "  ✓" else "") }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { editingPinTimeout = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (editingConfirmation) {
+        val choices = listOf(0L, 100L, 1_000L, 10_000L).map { it * 1000 }.let { if (confirmationMsat in it) it else it + confirmationMsat }
+        AlertDialog(
+            onDismissRequest = { editingConfirmation = false },
+            title = { Text("Confirm payments") },
+            text = {
+                Column {
+                    Text(
+                        "Payments and boosts over this amount ask you to confirm first.",
+                        style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+                    )
+                    for (msat in choices) {
+                        TextButton(onClick = {
+                            engine.setPaymentConfirmation(msat)
+                            confirmationMsat = msat
+                            editingConfirmation = false
+                        }) {
+                            Text(
+                                (if (msat == 0L) "Always" else "Over ${Sats.format(msat)}") + if (msat == confirmationMsat) "  ✓" else "",
+                                color = Theme.colors.text,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { editingConfirmation = false }) { Text("Cancel") } },
+        )
+    }
+
     if (confirmingForget) {
         AlertDialog(
             onDismissRequest = { confirmingForget = false },
@@ -446,39 +543,6 @@ private fun AccountRow(label: String, value: String = "", onClick: (() -> Unit)?
     }
 }
 
-/// A row whose current value sits on the right with an up/down icon, and
-/// opens a dropdown of `options` with a check on the selected one.
-@Composable
-private fun <T> PickerRow(label: String, options: List<Choice<T>>, selected: T, onSelect: (T) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        AccountRow(
-            label = label,
-            value = options.firstOrNull { it.value == selected }?.label ?: "",
-            onClick = { open = true },
-            upDown = true,
-        )
-        DropdownMenu(
-            expanded = open, onDismissRequest = { open = false },
-            shape = RoundedCornerShape(16.dp), containerColor = Theme.colors.background,
-        ) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label, color = Theme.colors.text) },
-                    leadingIcon = {
-                        if (option.value == selected) {
-                            Icon(Icons.Filled.Check, contentDescription = "Selected", tint = Theme.colors.accent)
-                        } else {
-                            Spacer(Modifier.size(24.dp))
-                        }
-                    },
-                    onClick = { open = false; onSelect(option.value) },
-                )
-            }
-        }
-    }
-}
-
 @Composable
 private fun AccountDivider() {
     // Inset, not full-bleed, like iOS's own list separators.
@@ -544,87 +608,6 @@ private fun PillButton(
     }
 }
 
-/// Boost amount, as its own screen (replaces the old dialog): presets, a
-/// custom amount, `Engine.setBoostAmount` for both. Validation is the
-/// dialog's own: a whole number of sats, more than zero (digits only).
-@Composable
-private fun BoostAmountScreen(engine: Engine, onBack: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    var currentSats by remember { mutableStateOf(engine.boostAmountMsat() / 1000) }
-    var draft by remember { mutableStateOf("") }
-
-    fun save(sats: Long) {
-        currentSats = sats
-        scope.launch { withContext(Dispatchers.Default) { engine.setBoostAmount(sats) } }
-    }
-
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
-        Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.align(Alignment.CenterStart)) { BackButton(onBack) }
-            Text("Boost amount", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
-        }
-        Spacer(Modifier.height(24.dp))
-        Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
-            YouOptions.boostPresets.forEachIndexed { index, sats ->
-                if (index > 0) AccountDivider()
-                Row(
-                    Modifier.fillMaxWidth().clickable { save(sats) }.heightIn(min = 56.dp).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "${YouOptions.groupedSats(sats)} sats", style = MaterialTheme.typography.bodyLarge,
-                        color = Theme.colors.text, modifier = Modifier.weight(1f),
-                    )
-                    if (sats == currentSats) {
-                        Icon(Icons.Filled.Check, contentDescription = "Selected", tint = Theme.colors.accent)
-                    }
-                }
-            }
-        }
-        Text(
-            "Boost tips a message this much in one tap.",
-            style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
-            modifier = Modifier.padding(start = 8.dp, top = 8.dp, bottom = 24.dp),
-        )
-        SectionHeader("Another amount")
-        val parsed = YouOptions.parseBoostSats(draft)
-        Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).padding(16.dp)) {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                    .border(1.dp, Theme.colors.inputBorder, RoundedCornerShape(16.dp))
-                    .heightIn(min = 52.dp).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                BasicTextField(
-                    value = draft,
-                    onValueChange = { draft = it.filter(Char::isDigit) },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
-                    cursorBrush = SolidColor(Theme.colors.accent),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f),
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.CenterStart) {
-                            if (draft.isEmpty()) {
-                                Text("0", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
-                            }
-                            inner()
-                        }
-                    },
-                )
-                Text("sats", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
-            }
-            Spacer(Modifier.height(12.dp))
-            PillButton(
-                "Save", onClick = { parsed?.let { save(it); draft = "" } },
-                container = Theme.colors.accent, content = Theme.colors.buttonText,
-                enabled = parsed != null,
-            )
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
 /// Old PIN, new PIN, the new one again, on the keypad — PeelCore's own
 /// `ChangePIN`: a wrong *old* PIN is only ever discovered at the very end
 /// (`SecretStore.changePin` tries to open the sealed words with it first),
@@ -633,6 +616,7 @@ private enum class ChangePinStep { OLD, NEW, CONFIRM }
 
 @Composable
 private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
+    SecureWindow()
     var step by remember { mutableStateOf(ChangePinStep.OLD) }
     var old by remember { mutableStateOf("") }
     var new by remember { mutableStateOf("") }
@@ -702,6 +686,7 @@ private enum class WordsStage { INTRO, PIN, WORDS }
 /// has to handle).
 @Composable
 private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
+    val host = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
     val shownForSeconds = 30
     var stage by remember { mutableStateOf(WordsStage.INTRO) }
     var pin by remember { mutableStateOf("") }
@@ -797,6 +782,23 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 40.dp),
                 )
+                if (host != null && secretStore.biometricEnrolled) {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                val mnemonic = BiometricUnlock.unlockWords(host, secretStore, "Show your twelve words", null)
+                                if (mnemonic != null) {
+                                    words = Account.wordsIn(mnemonic)
+                                    visible = false
+                                    problem = null
+                                    stage = WordsStage.WORDS
+                                    revealedAt = System.currentTimeMillis()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Use biometrics") }
+                }
             }
             WordsStage.WORDS -> {
                 RouteHeader(
@@ -847,5 +849,58 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                 Spacer(Modifier.height(24.dp))
             }
         }
+    }
+}
+
+/// Turns biometric unlock on: the PIN first (it is what the Keystore-wrapped
+/// key is derived from — a synced "on" never enrols anything, PeelCore
+/// decision 10), then the system prompt on a freshly created biometric-gated
+/// key, which wraps the derived key. Records the choice (`biometric_enabled`).
+@Composable
+private fun BiometricSetupScreen(engine: Engine, secretStore: SecretStore, onBack: () -> Unit) {
+    SecureWindow()
+    val host = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
+    var pin by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
+    var working by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize()) {
+        RouteHeader("Biometric unlock", null, onBack)
+        PinPrompt(
+            title = "Enter your PIN", detail = problem ?: "To turn biometric unlock on.",
+            pin = pin, onPinChange = { pin = it }, working = working,
+            onComplete = {
+                working = true
+                scope.launch {
+                    try {
+                        val enrollment = withContext(Dispatchers.Default) { secretStore.beginBiometric(pin) }
+                        val authenticated = host?.let {
+                            BiometricUnlock.authenticate(it, enrollment.cipher, "Turn on biometric unlock", null)
+                        }
+                        if (authenticated == null) {
+                            secretStore.disableBiometric()
+                            problem = "Biometric unlock was not turned on."
+                            pin = ""
+                        } else {
+                            secretStore.finishBiometric(enrollment, authenticated)
+                            engine.setBiometricEnabled(true)
+                            onBack()
+                        }
+                    } catch (e: SecretStoreFailure.LockedOut) {
+                        problem = "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}."
+                        pin = ""
+                    } catch (e: SecretStoreFailure.WrongPin) {
+                        problem = "Wrong PIN"
+                        pin = ""
+                    } catch (e: Exception) {
+                        problem = e.message ?: "Could not turn biometric unlock on."
+                        pin = ""
+                    }
+                    working = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(top = 60.dp),
+        )
     }
 }

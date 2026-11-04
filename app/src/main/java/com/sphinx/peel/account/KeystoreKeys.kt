@@ -5,6 +5,7 @@ import android.os.Build
 import android.provider.Settings
 import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import java.io.File
 import java.security.KeyStore
@@ -17,7 +18,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /// The Keystore-facing seams of the lock. Everything that needs a real
-/// Android Keystore sits behind these interfaces, so the logic around
+/// Android Keystore sits behind these three interfaces, so the logic around
 /// them (`FileSecretStore`, `LockoutPolicy`) is unit-tested on the JVM with
 /// fakes (`LockFakes` in the tests); the `Android*` classes below are the
 /// real thing and are only exercised on a device.
@@ -36,6 +37,17 @@ interface KeyWall {
 interface StateSigner {
     fun sign(data: ByteArray): ByteArray
     fun verify(data: ByteArray, mac: ByteArray): Boolean
+    fun delete()
+}
+
+/// A SEPARATE key that can only be used right after a biometric
+/// authentication (per-use, via BiometricPrompt's CryptoObject) and is
+/// destroyed by the OS when the set of enrolled biometrics changes.
+interface BiometricKeyVault {
+    /// Creates a fresh key (replacing any old) and returns an encrypt cipher on it.
+    fun newEncryptCipher(): Cipher
+    /// A decrypt cipher for `iv`; throws if the key is gone or invalidated.
+    fun decryptCipher(iv: ByteArray): Cipher
     fun delete()
 }
 
@@ -112,6 +124,37 @@ class AndroidStateSigner(private val alias: String) : StateSigner {
         Mac.getInstance("HmacSHA256").apply { init(key()) }.doFinal(data)
 
     override fun verify(data: ByteArray, mac: ByteArray): Boolean = MessageDigest.isEqual(sign(data), mac)
+
+    override fun delete() = Keystore.delete(alias)
+}
+
+class AndroidBiometricKeyVault(private val alias: String) : BiometricKeyVault {
+    override fun newEncryptCipher(): Cipher {
+        Keystore.delete(alias)
+        val key = Keystore.withStrongBoxFallback { strongBox ->
+            val builder = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .setUserAuthenticationRequired(true)
+                .setInvalidatedByBiometricEnrollment(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Timeout 0: every single use needs a fresh authentication (CryptoObject), strong biometrics only.
+                builder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+            } else {
+                @Suppress("DEPRECATION")
+                builder.setUserAuthenticationValidityDurationSeconds(-1)
+            }
+            if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) builder.setIsStrongBoxBacked(true)
+            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, Keystore.PROVIDER).apply { init(builder.build()) }.generateKey()
+        }
+        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
+    }
+
+    override fun decryptCipher(iv: ByteArray): Cipher {
+        val key = Keystore.store().getKey(alias, null) as? SecretKey ?: throw KeyPermanentlyInvalidatedException("no biometric key")
+        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) }
+    }
 
     override fun delete() = Keystore.delete(alias)
 }

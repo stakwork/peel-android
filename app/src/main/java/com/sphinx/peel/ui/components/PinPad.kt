@@ -15,10 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,7 +28,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,13 +46,7 @@ fun PinDots(count: Int, modifier: Modifier = Modifier) {
                 Modifier
                     .size(14.dp)
                     .clip(CircleShape)
-                    .then(
-                        if (filled) {
-                            Modifier.background(Theme.colors.text)
-                        } else {
-                            Modifier.border(1.5.dp, Theme.colors.secondaryText, CircleShape)
-                        },
-                    ),
+                    .background(if (filled) Theme.colors.text else Theme.colors.fieldFill),
             )
         }
     }
@@ -96,7 +86,7 @@ fun PinPad(
             Row(horizontalArrangement = Arrangement.spacedBy(26.dp)) {
                 Box(Modifier.size(keySize))
                 PinKey("0", keySize, enabled) { press("0") }
-                PinSymbolKey(keySize, enabled = enabled && pin.isNotEmpty()) {
+                PinSymbolKey("⌫", keySize, enabled = enabled && pin.isNotEmpty()) {
                     if (pin.isNotEmpty()) onPinChange(pin.dropLast(1))
                 }
             }
@@ -119,7 +109,7 @@ private fun PinKey(digit: String, size: androidx.compose.ui.unit.Dp, enabled: Bo
 }
 
 @Composable
-private fun PinSymbolKey(size: androidx.compose.ui.unit.Dp, enabled: Boolean, onClick: () -> Unit) {
+private fun PinSymbolKey(symbol: String, size: androidx.compose.ui.unit.Dp, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .size(size)
@@ -127,10 +117,7 @@ private fun PinSymbolKey(size: androidx.compose.ui.unit.Dp, enabled: Boolean, on
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            Icons.AutoMirrored.Filled.Backspace, contentDescription = "Delete",
-            tint = Theme.colors.text.copy(alpha = if (enabled) 1f else 0.35f),
-        )
+        Text(symbol, fontSize = 26.sp, color = Theme.colors.text.copy(alpha = if (enabled) 1f else 0.35f))
     }
 }
 
@@ -222,14 +209,13 @@ fun PinPrompt(
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    SecureWindow()
     Column(
         modifier.background(Theme.colors.background),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(28.dp),
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+            Text(title, style = MaterialTheme.typography.titleLarge, color = Theme.colors.text)
             Text(detail ?: " ", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
         }
         PinPad(pin = pin, onPinChange = onPinChange, onComplete = onComplete, enabled = !working && enabled)
