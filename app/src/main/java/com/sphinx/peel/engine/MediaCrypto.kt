@@ -44,13 +44,15 @@ object MediaCrypto {
         }
     }
 
-    /// 32 random letters and digits — PeelCore's own `newKey`
-    /// (`Nonce(length: 32).hexString`, despite that function's name: the
-    /// alphabet it actually draws from is alphanumeric, not hex).
+    /// PeelCore's `newKey`: 32 random letters and digits, then the
+    /// lowercase hex of those 32 ASCII bytes (64 hex chars) — the Rust
+    /// core hex-decodes `mediaKey`/`mediaKeyForSelf`, so it must be hex.
+    /// The hex string itself is the password for `encrypt`/`decrypt`.
     fun newKey(): String {
         val alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         val random = java.security.SecureRandom()
-        return (1..32).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
+        val chars = (1..32).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
+        return chars.toByteArray(Charsets.US_ASCII).joinToString("") { "%02x".format(it) }
     }
 
     /// The inverse of `decrypt`: a fresh encryption salt, MAC salt and
