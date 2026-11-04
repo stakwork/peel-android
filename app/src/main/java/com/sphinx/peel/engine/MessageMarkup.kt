@@ -149,9 +149,9 @@ object MessageMarkup {
     }
 
     /// "## Notes": one to six "#", a space, then text.
-    private val headingPattern = Pattern.compile("""^(#{1,6}) +(\S.*)$""", Pattern.UNICODE_CHARACTER_CLASS)
+    private val headingPattern = Pattern.compile("""^(#{1,6}) +(\S.*)$""")
     /// "12. Ship it" or "12) Ship it".
-    private val numberedPattern = Pattern.compile("""^([0-9]{1,9})[.)] +(\S.*)$""", Pattern.UNICODE_CHARACTER_CLASS)
+    private val numberedPattern = Pattern.compile("""^([0-9]{1,9})[.)] +(\S.*)$""")
 
     /// The number a line's marker holds (a heading's "#" counted) and the text
     /// after it, when `pattern` matches the whole line.
@@ -232,13 +232,13 @@ object MessageMarkup {
     // MARK: Spans
 
     /// The Mac app's mention pattern: `@` at the start of a word, up to the next space.
-    private val mentionPattern = Pattern.compile("""\B@[^\s]+""", Pattern.UNICODE_CHARACTER_CLASS)
+    private val mentionPattern = Pattern.compile("""\B@[^\s]+""")
     /// A run of backticks, text on one line with none in it, then the same
     /// run again: `code`, ``code``, ```code``` inside a line.
     private val codePattern = Pattern.compile("""(?<!`)(`+)([^`\n]+)\1(?!`)""")
     /// `[text](address)`: text on one line with no brackets, an address with
     /// no space or parentheses.
-    private val namedLinkPattern = Pattern.compile("""\[([^\[\]\n]++)\]\(([^\s()]++)\)""", Pattern.UNICODE_CHARACTER_CLASS)
+    private val namedLinkPattern = Pattern.compile("""\[([^\[\]\n]++)\]\(([^\s()]++)\)""")
     /// What marks emphasis: **bold**, __bold__, *italic*, _italic_, ~~struck~~.
     private val emphasisMarks = setOf('*', '_', '~')
 

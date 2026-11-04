@@ -114,6 +114,7 @@ import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AudioPlayer
 import com.sphinx.peel.ui.components.VideoAttachment
+import com.sphinx.peel.ui.components.MediaAspectCache
 import com.sphinx.peel.ui.components.mediaBubble
 import com.sphinx.peel.ui.components.readImageSize
 import com.sphinx.peel.ui.components.ZoomableImageDialog
@@ -480,7 +481,13 @@ fun ConversationScreen(
             newMessagesIndex(displayedMessages, newAfterIndex, BOOST_MESSAGE_TYPE)
         }
 
-        LaunchedEffect(displayedMessages.size) {
+        // Re-keyed on MediaAspectCache.version too: a handful of
+        // attachments at the bottom, freshly opened, each resolve their
+        // real height a little after the first scroll lands (the file
+        // read is async) - without re-settling, every one of those
+        // resizes left the list that much further short of the true
+        // bottom, never caught up on its own.
+        LaunchedEffect(displayedMessages.size, MediaAspectCache.version) {
             val last = displayedMessages.size - 1
             if (last < 0) return@LaunchedEffect
             if (!positioned) {
@@ -491,7 +498,14 @@ fun ConversationScreen(
                 }
             } else {
                 val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
-                if (last > previousLast && (atBottom || displayedMessages[last].fromMe)) listState.animateScrollToItem(last)
+                if (last > previousLast && (atBottom || displayedMessages[last].fromMe)) {
+                    listState.animateScrollToItem(last)
+                } else if (last == previousLast && atBottom) {
+                    // Not a new message, already at the bottom: an
+                    // attachment's height just settled, re-snap rather
+                    // than animate.
+                    listState.scrollToItem(last)
+                }
             }
             previousLast = last
         }
@@ -804,7 +818,7 @@ private fun ThreadScreen(
         val listState = rememberLazyListState()
         var positioned by remember(threadRootUuid) { mutableStateOf(false) }
         var previousLast by remember(threadRootUuid) { mutableStateOf(-1) }
-        LaunchedEffect(replies.size) {
+        LaunchedEffect(replies.size, MediaAspectCache.version) {
             val last = replies.size
             if (replies.isEmpty()) return@LaunchedEffect
             if (!positioned) {
@@ -815,7 +829,11 @@ private fun ThreadScreen(
                 }
             } else {
                 val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
-                if (last > previousLast && (atBottom || replies[last - 1].fromMe)) listState.animateScrollToItem(last)
+                if (last > previousLast && (atBottom || replies[last - 1].fromMe)) {
+                    listState.animateScrollToItem(last)
+                } else if (last == previousLast && atBottom) {
+                    listState.scrollToItem(last)
+                }
             }
             previousLast = last
         }
@@ -1541,13 +1559,24 @@ private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: Aud
     if (attachment.kind == AttachmentKind.IMAGE) {
         var zoomed by remember(attachment.file) { mutableStateOf(false) }
         if (zoomed) ZoomableImageDialog(attachment.file) { zoomed = false }
-        val size by produceState<Pair<Int, Int>?>(null, attachment.file) { value = readImageSize(attachment.file) }
+        // Cached aspect first (a row scrolled past before, this session):
+        // no placeholder-then-resize at all. Otherwise 4:3 until the real
+        // one is read, same as before, but only once per file ever.
+        val path = attachment.file.path
+        var aspect by remember(path) { mutableStateOf(MediaAspectCache.get(path) ?: (4f / 3f)) }
+        LaunchedEffect(path) {
+            if (MediaAspectCache.get(path) != null) return@LaunchedEffect
+            val size = readImageSize(attachment.file) ?: return@LaunchedEffect
+            val a = size.first.toFloat() / size.second
+            MediaAspectCache.put(path, a)
+            aspect = a
+        }
         AsyncImage(
             model = attachment.file,
             contentDescription = attachment.fileName ?: "Image",
             contentScale = ContentScale.Crop,
             modifier = Modifier
-                .mediaBubble(size?.first ?: 0, size?.let { it.first.toFloat() / it.second } ?: (4f / 3f))
+                .mediaBubble(aspect)
                 .clip(RoundedCornerShape(10.dp))
                 .background(Theme.colors.fieldFill)
                 .clickable { zoomed = true },

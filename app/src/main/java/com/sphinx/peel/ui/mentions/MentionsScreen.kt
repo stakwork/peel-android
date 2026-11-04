@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -70,19 +71,24 @@ fun MentionsScreen(
     var rows by remember { mutableStateOf(emptyList<MessageRow>()) }
     var tribeNames by remember { mutableStateOf(emptyMap<String, String>()) }
     var error by remember { mutableStateOf<String?>(null) }
+    // The first poll hasn't answered yet: "No mentions yet" would be a lie
+    // this early, so the loading state holds until it has, same as `rows`
+    // being empty after that really does mean none.
+    var loaded by remember { mutableStateOf(false) }
     val myAlias = storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
 
     // No reactive query layer, so a plain poll, as the chat list does.
     LaunchedEffect(Unit) {
         while (true) {
             try {
-                val loaded = withContext(Dispatchers.Default) { storage.mentions(myAlias) }
+                val loadedRows = withContext(Dispatchers.Default) { storage.mentions(myAlias) }
                 tribeNames = withContext(Dispatchers.Default) { storage.conversations().associate { it.chat to it.name } }
-                rows = loaded
+                rows = loadedRows
                 error = null
             } catch (e: Exception) {
                 error = e.message ?: "Something went wrong."
             }
+            loaded = true
             delay(3_000)
         }
     }
@@ -96,7 +102,11 @@ fun MentionsScreen(
             Text("Mentions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
         }
         val loadError = error
-        if (rows.isEmpty()) {
+        if (!loaded) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Theme.colors.accent)
+            }
+        } else if (rows.isEmpty()) {
             if (loadError != null) {
                 EmptyState("Mentions did not load", loadError, icon = false)
             } else {
