@@ -1406,6 +1406,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         } else {
             claimed ?: return null
         }
+        // A tribe echoes our own boost back with no `msat`; the amount is
+        // only in the body's `amount` (iOS does the same, also for another
+        // member's tribe boost, recognised by the sender's `host`).
+        val inTribe = !sender?.optString("host").isNullOrEmpty()
+        val msat = msg.msat?.toLong()
+            ?: if (type.toInt() == BOOST_MESSAGE_TYPE && (fromMe || inTribe)) declaredAmountMsat(msg.message) else null
         return MessageRow(
             uuid = msg.uuid,
             serverIndex = msg.index?.toLongOrNull(),
@@ -1414,7 +1420,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             fromMe = fromMe,
             sender = msg.sender,
             body = msg.message,
-            msat = msg.msat?.toLong(),
+            msat = msat,
             timestamp = msg.timestamp?.toLong(),
             tag = msg.tag,
             paymentHash = msg.paymentHash,

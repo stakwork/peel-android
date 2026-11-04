@@ -79,6 +79,7 @@ import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
 import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
+import com.sphinx.peel.engine.declaredAmountMsat
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.CallLink
 import com.sphinx.peel.engine.CallPresence
@@ -878,7 +879,7 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
         byTarget.getOrPut(target) { mutableListOf() }.add(row)
     }
     return byTarget.mapValues { (_, boosts) ->
-        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: 0L }, boostedByMe = boosts.any { it.fromMe })
+        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe })
     }
 }
 
@@ -1056,6 +1057,15 @@ private fun MessageRowView(
                     if (time != null) {
                         Spacer(Modifier.width(6.dp))
                         Text(time, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                        if (row.fromMe && row.status == "DELIVERED") {
+                            Spacer(Modifier.width(3.dp))
+                            Icon(
+                                Icons.Filled.Bolt,
+                                contentDescription = "Delivered",
+                                tint = Theme.colors.confirmed,
+                                modifier = Modifier.size(10.dp),
+                            )
+                        }
                     }
                 }
             }

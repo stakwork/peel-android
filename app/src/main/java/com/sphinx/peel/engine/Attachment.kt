@@ -146,3 +146,24 @@ fun classifyOutgoingFile(fileName: String, declaredMediaType: String?): Pair<Str
 }
 
 private val VIDEO_EXTENSIONS = setOf("mov", "mp4", "m4v", "3gp")
+
+/// The sats a message's own JSON body declares in its top-level numeric
+/// `amount`, in msat — PeelCore's `DeclaredAmount.decode`. A tribe echoes
+/// our own boost back with no `msat`, so this is the only record of what it
+/// paid. Null when the body is not JSON, or `amount` is absent, not a whole
+/// number, or negative.
+fun declaredAmountMsat(body: String?): Long? {
+    if (body == null) return null
+    val amount = runCatching { JSONObject(body).opt("amount") }.getOrNull()
+    if (amount !is Number) return null
+    val value = when (amount) {
+        is Int, is Long -> amount.toLong()
+        is Double, is Float -> {
+            val d = amount.toDouble()
+            if (d != Math.floor(d) || d.isInfinite() || d.isNaN()) return null
+            if (d >= 9.223372036854775807E18) Long.MAX_VALUE else d.toLong()
+        }
+        else -> return null
+    }
+    return value.takeIf { it >= 0 }
+}
