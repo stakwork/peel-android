@@ -159,7 +159,7 @@ data class WorkspaceApp(
                 val request = Request.Builder().url(url).header("Authorization", "Bearer ${peer.token}").build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) throw java.io.IOException("${peer.name} did not list its apps (HTTP ${response.code}).")
-                    val body = response.body?.source()?.let { it.request(MAX_BODY + 1); it.buffer.snapshot().utf8() } ?: ""
+                    val body = response.body?.source()?.let { it.request(MAX_BODY + 1L); it.buffer.snapshot().utf8() } ?: ""
                     if (body.length > MAX_BODY) throw java.io.IOException("${peer.name}'s app list is too large.")
                     listing(body, peer.id)
                 }
