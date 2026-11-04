@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
@@ -52,6 +53,8 @@ import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.theme.Theme
+import com.sphinx.peel.ui.toast.LocalToast
+import com.sphinx.peel.ui.toast.ToastType
 import io.livekit.android.renderer.SurfaceViewRenderer
 import io.livekit.android.room.track.VideoTrack
 import kotlinx.coroutines.delay
@@ -261,7 +264,14 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
                 )
             }
         }
-        session.deviceNotice?.let { CallNote(it) }
+        val toast = LocalToast.current
+        val notice = session.deviceNotice
+        LaunchedEffect(notice) {
+            if (notice != null) {
+                toast.show(notice, ToastType.Warning)
+                session.clearDeviceNotice()
+            }
+        }
         if (session.state == CallConnectionState.LOST) {
             val text = if (session.connectedAtMs == null) "Could not connect to the call" else "Lost the connection to the call"
             CallNote(text, action = "Rejoin", onAction = onRejoin)

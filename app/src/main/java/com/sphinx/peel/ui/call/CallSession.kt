@@ -104,6 +104,11 @@ class CallSession(
     var deviceNotice by mutableStateOf<String?>(null)
         private set
 
+    /// The screen calls this once it has shown the notice as a toast.
+    fun clearDeviceNotice() {
+        deviceNotice = null
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var leaving = false
     private var switchingMic = false
