@@ -335,7 +335,7 @@ fun ConversationScreen(
     if (openRoot != null) {
         ThreadScreen(
             engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, audioPlayer = audioPlayer,
-            threadRootUuid = openRoot, messages = messages,
+            chatName = title, threadRootUuid = openRoot, messages = messages,
             onBack = { openThreadRoot = null },
             onSent = { scope.launch { reload() } },
             onJoinCall = { link -> onJoinCall(chat, title, link, false) },
@@ -538,6 +538,7 @@ private fun ThreadScreen(
     isAgent: Boolean,
     myAlias: String,
     audioPlayer: AudioPlayer,
+    chatName: String,
     threadRootUuid: String,
     messages: List<MessageRow>,
     onBack: () -> Unit,
@@ -691,6 +692,7 @@ private fun ThreadScreen(
         ) {
             Column(Modifier.weight(1f)) {
                 Text("Thread", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+                Text("#$chatName", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText, maxLines = 1)
             }
             IconButton(onClick = onBack) {
                 Icon(Icons.Filled.Close, contentDescription = "Close", tint = Theme.colors.secondaryText)
@@ -936,7 +938,14 @@ private fun threadRoot(row: MessageRow): String = row.threadUuid ?: row.replyUui
 /// participant avatars.
 private data class ThreadParticipant(val name: String, val photoUrl: String?, val hueKey: String)
 
-private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Long?, val participants: List<ThreadParticipant>)
+private data class ThreadLastReply(val senderName: String, val hueKey: String, val text: String)
+
+private data class ThreadSummaryData(
+    val replyCount: Int,
+    val lastTimestamp: Long?,
+    val participants: List<ThreadParticipant>,
+    val lastReply: ThreadLastReply? = null,
+)
 
 /// Every REAL thread among `messages` (2+ messages), by its root's uuid
 /// — PeelCore's own `ThreadSummary`, trimmed: no unread count (Phase
@@ -969,7 +978,14 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
                 if (participants.size == 3) break
             }
         }
+        val last = replies.maxByOrNull { it.timestamp ?: 0L }
+        val lastReply = last?.let {
+            val (name, _, hueKey) = senderDisplay(it, myAlias, isTribe = true)
+            val text = previewContent(it).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
+            ThreadLastReply(name, hueKey, text)
+        }
         ThreadSummaryData(
+            lastReply = lastReply,
             replyCount = replies.size,
             lastTimestamp = replies.mapNotNull { it.timestamp }.maxOrNull(),
             participants = participants,
@@ -1192,10 +1208,10 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
 /// `ThreadSummaryButton`.
 @Composable
 private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
-    Row(
-        Modifier.clickable(onClick = onClick).padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val timeContext = androidx.compose.ui.platform.LocalContext.current
+    val time = summary.lastTimestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
+    Column(Modifier.clickable(onClick = onClick).padding(vertical = 2.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         if (summary.participants.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) {
                 summary.participants.forEach { participant ->
@@ -1213,6 +1229,25 @@ private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.accent,
         )
+        if (time != null) {
+            Spacer(Modifier.width(6.dp))
+            Text(time, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+        }
+    }
+    summary.lastReply?.takeIf { it.text.isNotEmpty() }?.let { last ->
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = PersonHue.of(last.hueKey).fill, fontWeight = FontWeight.Bold))
+                append("${last.senderName}: ")
+                pop()
+                append(last.text)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = Theme.colors.secondaryText,
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+    }
     }
 }
 
