@@ -62,6 +62,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -69,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,6 +90,9 @@ import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AudioPlayer
+import com.sphinx.peel.ui.components.VideoAttachment
+import com.sphinx.peel.ui.components.ZoomableImageDialog
+import com.sphinx.peel.ui.components.readMediaDurationMs
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.call.CallScreen
@@ -1310,6 +1315,8 @@ private fun AttachmentPlaceholder(isError: Boolean = false, content: @Composable
 @Composable
 private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: AudioPlayer) {
     if (attachment.kind == AttachmentKind.IMAGE) {
+        var zoomed by remember(attachment.file) { mutableStateOf(false) }
+        if (zoomed) ZoomableImageDialog(attachment.file) { zoomed = false }
         AsyncImage(
             model = attachment.file,
             contentDescription = attachment.fileName ?: "Image",
@@ -1318,8 +1325,13 @@ private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: Aud
                 .fillMaxWidth()
                 .heightIn(max = 240.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Theme.colors.fieldFill),
+                .background(Theme.colors.fieldFill)
+                .clickable { zoomed = true },
         )
+        return
+    }
+    if (attachment.kind == AttachmentKind.VIDEO) {
+        VideoAttachment(attachment.file)
         return
     }
     if (attachment.kind == AttachmentKind.AUDIO) {
@@ -1360,50 +1372,62 @@ private fun AudioAttachmentRow(attachment: DownloadedAttachment, audioPlayer: Au
     val isThis = audioPlayer.playingFile == attachment.file
     val playing = isThis && audioPlayer.isPlaying
     val position = if (isThis) audioPlayer.positionMs else 0
-    val duration = if (isThis && audioPlayer.durationMs > 0) audioPlayer.durationMs else 0
+    val fileDuration by produceState(0, attachment.file) { value = readMediaDurationMs(attachment.file) }
+    val duration = if (isThis && audioPlayer.durationMs > 0) audioPlayer.durationMs else fileDuration
     // Dragging sets this so the thumb follows the finger instead of
     // snapping back to the player's own (slower-to-update) position
     // until the drag lands.
     var dragPosition by remember(attachment.file) { mutableStateOf<Float?>(null) }
+    val shown = dragPosition?.let { (it * duration).toInt() } ?: position
 
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(Theme.colors.fieldFill)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { scope.launch { audioPlayer.toggle(attachment.file) } }, modifier = Modifier.size(36.dp)) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Theme.colors.accent)
+                .clickable { scope.launch { audioPlayer.toggle(attachment.file) } },
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
                 if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                 contentDescription = if (playing) "Pause" else "Play",
-                tint = Theme.colors.accent,
+                tint = Color.White,
             )
         }
-        Spacer(Modifier.width(4.dp))
-        Slider(
-            value = dragPosition ?: (if (duration > 0) position.toFloat() / duration else 0f),
-            onValueChange = { dragPosition = it },
-            onValueChangeFinished = {
-                val target = dragPosition
-                if (target != null && duration > 0) audioPlayer.seekTo((target * duration).toInt())
-                dragPosition = null
-            },
-            modifier = Modifier.weight(1f).height(24.dp),
-            colors = SliderDefaults.colors(
-                thumbColor = Theme.colors.accent,
-                activeTrackColor = Theme.colors.accent,
-                inactiveTrackColor = Theme.colors.inputBorder,
-            ),
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            formatDuration(if (duration > 0) (dragPosition?.let { (it * duration).toInt() } ?: position) else 0),
-            style = MaterialTheme.typography.labelSmall,
-            color = Theme.colors.secondaryText,
-            modifier = Modifier.width(36.dp),
-        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Slider(
+                value = dragPosition ?: (if (duration > 0) position.toFloat() / duration else 0f),
+                onValueChange = { dragPosition = it },
+                onValueChangeFinished = {
+                    val target = dragPosition
+                    if (target != null && duration > 0) {
+                        if (!isThis) scope.launch { audioPlayer.toggle(attachment.file); audioPlayer.seekTo((target * duration).toInt()) }
+                        else audioPlayer.seekTo((target * duration).toInt())
+                    }
+                    dragPosition = null
+                },
+                modifier = Modifier.fillMaxWidth().height(24.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = Theme.colors.accent,
+                    activeTrackColor = Theme.colors.accent,
+                    inactiveTrackColor = Theme.colors.inputBorder,
+                ),
+            )
+            Text(
+                "${formatDuration(shown)} / ${formatDuration(duration)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Theme.colors.secondaryText,
+            )
+        }
     }
 }
 
