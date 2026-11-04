@@ -177,7 +177,7 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
                 Box(Modifier.weight(1f)) {
                     when (tab) {
                         MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
-                        MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize())
+                        MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
                         MainTab.YOU -> YouScreen(engine, storage, secretStore, onForgotten)
                         MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                     }
