@@ -140,7 +140,7 @@ private fun QuotedCard(label: String, message: MessageRow, myAlias: String) = Ca
         Row {
             Text(sender, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = Theme.colors.accent)
             message.timestamp?.let {
-                Text(" · ${SimpleDateFormat("EEE HH:mm", Locale.getDefault()).format(Date(it))}", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                Text(" · ${quotedTime(it)}", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
             }
         }
         Text(text, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, maxLines = 8)
@@ -185,6 +185,9 @@ private fun FactBlock(label: String, value: @Composable () -> Unit) {
         value()
     }
 }
+
+internal fun quotedTime(ts: Long, locale: Locale = Locale.getDefault()): String =
+    SimpleDateFormat("EEE HH:mm", locale).format(Date(ts))
 
 /// iOS `Formatting.moment(seconds: true)`: "Wednesday, 4 November 2026 at 11:22:50".
 internal fun moment(ts: Long, locale: Locale = Locale.getDefault(), zone: java.util.TimeZone = java.util.TimeZone.getDefault()): String {
