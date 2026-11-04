@@ -40,6 +40,7 @@ import uniffi.sphinxrs.fetchMsgsBatch as coreFetchMsgsBatch
 import uniffi.sphinxrs.getMsgsCounts as coreGetMsgsCounts
 import uniffi.sphinxrs.getMutes as coreGetMutes
 import uniffi.sphinxrs.getReads as coreGetReads
+import uniffi.sphinxrs.getTags as coreGetTags
 import uniffi.sphinxrs.getTribeManagementTopic as coreGetTribeManagementTopic
 import uniffi.sphinxrs.handle as coreHandle
 import uniffi.sphinxrs.initialSetup as coreInitialSetup
@@ -415,10 +416,29 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val sentStatus = result.sentStatus?.let { runCatching { JSONObject(it) }.getOrNull() }
         val tag = sentStatus?.optString("tag")?.takeIf { it.isNotEmpty() }
         if (tag != null) {
-            val delivered = sentStatus.optString("status") != "FAILED"
-            storage.markSendStatus(tag, delivered = delivered)
-            // Paying an invoice is tracked by its tag the same way.
-            storage.markInvoiceSendStatus(tag, delivered, sentStatus.optString("error").takeIf { it.isNotEmpty() })
+            SendStatus.live(sentStatus.optString("status"))?.let { live ->
+                storage.markSendStatus(tag, live)
+                // Paying an invoice is tracked by its tag the same way.
+                if (live != SendStatus.UNSETTLED) {
+                    storage.markInvoiceSendStatus(tag, live == SendStatus.DELIVERED, SendStatus.reason(sentStatus))
+                }
+            }
+        }
+        // The mixer's records for the tags `getTags` asked about
+        // (`checkOwnMessageStatus`, `checkPendingSends`): COMPLETE or
+        // FAILED only, through the same forward-only rule.
+        val records = SendStatus.recorded(result.tags)
+        for (record in records) {
+            storage.markSendStatus(record.tag, record.status)
+            storage.markInvoiceSendStatus(record.tag, record.status == SendStatus.DELIVERED, record.error)
+        }
+        if (result.tags != null) {
+            val answered = runCatching { JSONArray(result.tags) }.getOrNull()
+            if (answered != null) {
+                for (i in 0 until answered.length()) {
+                    answered.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotEmpty() }?.let { ownStatusHeard.add(it) }
+                }
+            }
         }
         storeMoney(result, rows)
         // Read markers and mutes, same "whatever `RunReturn` carries it"
@@ -1082,6 +1102,61 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
     }
 
+    /// The chat open on screen, if any (set by the conversation screen):
+    /// history pages and a foreground check its own sends' statuses.
+    @Volatile var openChat: String? = null
+
+    private var cameOnlineHere = false
+    private val ownStatusCheckedAt = mutableMapOf<String, Long>()
+    private val ownStatusAsked = mutableSetOf<String>()
+    private val ownStatusHeard: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+    private val unknownTags = mutableSetOf<String>()
+
+    /// Asks the server what became of this chat's own messages it has not
+    /// confirmed (no status, or pending), [OWN_STATUS_CHUNK] tags at a time:
+    /// the answers land as statuses (`storeMessages`) and the chat's bolts
+    /// follow. PeelCore's `checkOwnMessageStatus(in:)`, called when the chat
+    /// is opened, the app comes to the front and history pages arrive; at
+    /// most once per [OWN_STATUS_WAIT_MS] for a chat, and not for a tag the
+    /// server had no record of at the last ask. Best effort: a failure is
+    /// left to the next ask or connect ([checkPendingSends]).
+    suspend fun checkOwnMessageStatus(chat: String) {
+        if (transport == null || !cameOnlineHere) return
+        val now = SystemClock.elapsedRealtime()
+        synchronized(ownStatusCheckedAt) {
+            val asked = ownStatusCheckedAt[chat]
+            if (asked != null && now - asked < OWN_STATUS_WAIT_MS) return
+        }
+        // A reply to an earlier ask has come by now.
+        val tags = synchronized(unknownTags) {
+            unknownTags += ownStatusAsked - ownStatusHeard
+            ownStatusAsked.clear()
+            ownStatusHeard.clear()
+            val unconfirmed = runCatching { storage.unconfirmedTags(chat) }.getOrNull() ?: return
+            unconfirmed.filter { it !in unknownTags }
+        }
+        if (tags.isEmpty()) return
+        synchronized(ownStatusCheckedAt) { ownStatusCheckedAt[chat] = now }
+        synchronized(unknownTags) { ownStatusAsked += tags }
+        for (chunk in tags.chunked(OWN_STATUS_CHUNK)) {
+            val ok = runCatching { run { time, stateBytes -> coreGetTags(seed, time, stateBytes, chunk, null) } }.isSuccess
+            if (!ok) return
+        }
+    }
+
+    /// Asks the server what became of sends still pending here, on every
+    /// connect and after a restore — PeelCore's `checkPendingSends`: a
+    /// status published while this device was offline is not missed, and a
+    /// restored send (no status at all) learns how it went. Not ported: the
+    /// 30-minute "never recorded" failing of payments and the reconnect's
+    /// automatic resend gate (no resend machinery here yet).
+    private suspend fun checkPendingSends() {
+        val tags = storage.pendingSendTags(System.currentTimeMillis() - CONFIRMATION_TIMEOUT_MS)
+        for (chunk in tags.chunked(OWN_STATUS_CHUNK)) {
+            run { time, stateBytes -> coreGetTags(seed, time, stateBytes, chunk, null) }
+        }
+    }
+
     /// Read markers and mutes live on the server, shared by every device
     /// — PeelCore's `fetchReadsAndMutes`, called once per connection
     /// (`start`/`resume`), same as a restore's catch-up. `getReads`'s and
@@ -1285,13 +1360,21 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// drop is [onConnectionDropped]'s own job to retry, not a reason to
     /// kill the coroutine that called this.
     private suspend fun afterConnect() {
+        cameOnlineHere = false
         runCatching {
             // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
             // an earlier answer cannot be used.
             if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
+            // Best effort, before history (PeelCore's `cameOnline`): catching up
+            // must not wait on it.
+            runCatching { checkPendingSends() }.onFailure { Log.w("PeelEngine", "checking pending sends failed", it) }
             // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
         }.onFailure { Log.w("PeelEngine", "catch-up after connect failed", it) }
+        cameOnlineHere = true
+        // The open chat's own sends, now that this connection can answer
+        // (a foreground or a reconnect with a chat on screen).
+        openChat?.let { runCatching { checkOwnMessageStatus(it) } }
     }
 
     /// Each known tribe's real name and photo, from its own registry —
@@ -1373,6 +1456,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // effort), then the reads pass, which needs the rebuilt contacts.
             runCatching { recoverOwnProfile() }.onFailure { Log.w("PeelHistory", "recovering own profile failed", it) }
             runCatching { settleReadsAfterRestore() }.onFailure { Log.w("PeelHistory", "settling reads failed", it) }
+            // Our restored sends carry no status: the server's record of
+            // each, by its tag, says how it went (PeelCore's `historyEnded`).
+            runCatching { checkPendingSends() }.onFailure { Log.w("PeelHistory", "checking restored sends failed", it) }
             runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
         }
     }
@@ -1550,6 +1636,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             restoreProgressFlow.update {
                 if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
             }
+            // A page of history may carry the open chat's echoes: ask about
+            // the rest (PeelCore's `.history` event -> `checkOwnMessageStatus`).
+            openChat?.let { runCatching { checkOwnMessageStatus(it) } }
             if (reached == null) break
             next = reached + 1uL
             onPage(next, result.msgs.size.toLong())
@@ -1679,6 +1768,16 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     }
 
     companion object {
+        /// How long a chat's own messages are left before they are asked
+        /// about again (PeelCore's `ownStatusWait`), and how many tags one
+        /// `getTags` carries (`ownStatusChunk`).
+        private const val OWN_STATUS_WAIT_MS = 60_000L
+        private const val OWN_STATUS_CHUNK = 50
+
+        /// How long a pending text may wait before `checkPendingSends` asks
+        /// about it (PeelCore's `Message.confirmationTimeout`).
+        private const val CONFIRMATION_TIMEOUT_MS = 30_000L
+
         /// The official apps' own call server, same host as the main API —
         /// PeelCore's own `Engine.defaultCallServer`.
         private const val DEFAULT_CALL_SERVER = "chat.sphinx.chat"

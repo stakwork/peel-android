@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Peel</string>
+    <string name="new_messages">New messages</string>
 </resources>
