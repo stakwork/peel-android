@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -77,9 +78,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
@@ -202,6 +211,10 @@ fun ConversationScreen(
     val title = if (isAgent) "Peel" else (conversation?.name ?: chat.take(12))
     val myAlias = storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
     val myPhotoUrl = storage.value(com.sphinx.peel.storage.Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() }
+    val mentionMembers = remember(messages, conversation, isTribe, isAgent, myPhotoUrl) {
+        val peer = conversation?.takeIf { !isTribe && !isAgent }?.let { MentionMember(it.alias ?: title, it.photoUrl, it.chat) }
+        chatMentionMembers(messages, myAlias, myPhotoUrl, isTribe, peer)
+    }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     var sendingLabel by remember(chat) { mutableStateOf<String?>(null) }
@@ -514,6 +527,7 @@ fun ConversationScreen(
         Composer(
             text = draft,
             onTextChange = { draft = it },
+            members = mentionMembers,
             placeholder = if (isAgent) "Ask Peel" else "Message $title",
             replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to MessageMarkup.plainText(previewContent(target)) },
             onCancelReply = { replyTo = null },
@@ -596,6 +610,7 @@ private fun ThreadScreen(
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    val mentionMembers = remember(messages, myAlias, myPhotoUrl, isTribe) { chatMentionMembers(messages, myAlias, myPhotoUrl, isTribe, null) }
     val root = messages.firstOrNull { it.uuid == threadRootUuid }
     val replies = remember(messages, threadRootUuid) {
         messages.filter { it.threadUuid == threadRootUuid }.sortedBy { it.timestamp ?: 0L }
@@ -822,6 +837,7 @@ private fun ThreadScreen(
         Composer(
             text = draft,
             onTextChange = { draft = it },
+            members = mentionMembers,
             placeholder = "Reply",
             replyTarget = null,
             onCancelReply = {},
@@ -966,6 +982,28 @@ private fun canDelete(row: MessageRow, replyCount: Int): Boolean {
     if (row.deleted || row.uuid == null || (row.type != 0 && row.type != ATTACHMENT_MESSAGE_TYPE)) return false
     if (row.status == "PENDING" || row.status == "FAILED") return false
     return replyCount < 2
+}
+
+/// The people in this chat who can be `@mentioned`: everyone whose message
+/// carries a sender here (this port keeps no tribe member table), plus the
+/// DM `peer` when known. Never the account itself.
+private fun chatMentionMembers(
+    messages: List<MessageRow>,
+    myAlias: String,
+    myPhotoUrl: String?,
+    isTribe: Boolean,
+    peer: MentionMember?,
+): List<MentionMember> {
+    val byName = linkedMapOf<String, MentionMember>()
+    peer?.let { byName[it.name] = it }
+    for (row in messages) {
+        if (row.fromMe || senderJson(row) == null) continue
+        val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe)
+        if (name == "Someone" || name == myAlias) continue
+        val existing = byName[name]
+        if (existing == null || (existing.photoUrl == null && photoUrl != null)) byName[name] = MentionMember(name, photoUrl, hueKey)
+    }
+    return byName.values.toList()
 }
 
 /// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
@@ -1663,8 +1701,61 @@ private fun AgentTag() {
     )
 }
 
+/// The card of `@mention` matches floating above the composer's capsule —
+/// rounded, scrollable, capped at about four and a half rows.
+@Composable
+private fun MentionPopup(suggestions: List<MentionMember>, onPick: (MentionMember) -> Unit) {
+    val gapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx() }
+    val above = remember(gapPx) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize,
+            ) = IntOffset(anchorBounds.left, (anchorBounds.top - popupContentSize.height - gapPx).coerceAtLeast(0))
+        }
+    }
+    Popup(popupPositionProvider = above) {
+        LazyColumn(
+            Modifier
+                .width(280.dp)
+                .heightIn(max = 216.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Theme.colors.fieldFill),
+        ) {
+            items(suggestions, key = { it.name }) { member ->
+                Row(
+                    Modifier.fillMaxWidth().height(48.dp).clickable { onPick(member) }.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(name = member.name, url = member.photoUrl, size = 28.dp, hue = PersonHue.of(member.hueKey), shape = AvatarShape.CIRCLE)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        member.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Theme.colors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        mentionHandle(member.name),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Theme.colors.secondaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /// The capsule text field, attach menu, mic and send button —
-/// PeelCore's `PhoneComposer`, trimmed: no `@` mentions, no sats bolt.
+/// PeelCore's `PhoneComposer`, trimmed: no sats bolt.
+/// Typing `@` shows `members` matching what's typed in a card above the
+/// capsule; tapping one swaps the `@query` for `@Handle ` (PeelCore's
+/// `MentionQuery`).
 /// `replyTarget` (name, preview) shows PeelCore's `ReplyingTo` above the
 /// capsule, with its own dismiss; long-pressing a row sets it. Shared by
 /// the main screen and `ThreadScreen` alike, each supplying its own
@@ -1675,6 +1766,7 @@ private fun Composer(
     text: String,
     onTextChange: (String) -> Unit,
     placeholder: String,
+    members: List<MentionMember> = emptyList(),
     replyTarget: Pair<String, String>?,
     onCancelReply: () -> Unit,
     onPickPhoto: () -> Unit,
@@ -1728,6 +1820,11 @@ private fun Composer(
         }
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             var attachMenuOpen by remember { mutableStateOf(false) }
+            // The field's selection lives here (the cursor decides which
+            // `@word` is being typed); `text` stays the source of truth, so
+            // an outside reset (cleared after send) replaces this too.
+            var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+            if (field.text != text) field = TextFieldValue(text, TextRange(text.length))
             Box {
                 IconButton(onClick = { attachMenuOpen = true }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Add, contentDescription = "Attach", tint = Theme.colors.secondaryText)
@@ -1774,9 +1871,21 @@ private fun Composer(
                     if (text.isEmpty()) {
                         Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
                     }
+                    val word = if (field.selection.collapsed) mentionWord(field.text, field.selection.end) else null
+                    val suggestions = if (word != null) mentionSuggestions(members, word.query) else emptyList()
+                    if (word != null && suggestions.isNotEmpty()) {
+                        MentionPopup(suggestions) { member ->
+                            val (newText, cursor) = insertMention(field.text, word, member)
+                            field = TextFieldValue(newText, TextRange(cursor))
+                            onTextChange(newText)
+                        }
+                    }
                     BasicTextField(
-                        value = text,
-                        onValueChange = onTextChange,
+                        value = field,
+                        onValueChange = {
+                            field = it
+                            if (it.text != text) onTextChange(it.text)
+                        },
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
                         modifier = Modifier.fillMaxWidth(),
