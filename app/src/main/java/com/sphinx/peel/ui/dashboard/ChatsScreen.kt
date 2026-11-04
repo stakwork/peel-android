@@ -24,7 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -43,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -60,11 +64,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+/// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
+/// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
+enum class DashboardRoute { APPS, THREADS, MENTIONS }
+
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
 /// the large title with the connection bolt, then `ChatListBody` for
 /// everything else.
 @Composable
-fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
+fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenRoute: (DashboardRoute) -> Unit = {}, onOpenChat: (String) -> Unit = {}) {
     val connection by engine.connectionState.collectAsState()
 
     Column(modifier.fillMaxSize()) {
@@ -81,7 +89,7 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
             )
             ConnectionBolt(connected = connection == ConnectionState.Connected)
         }
-        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenChat = onOpenChat)
+        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenRoute = onOpenRoute, onOpenChat = onOpenChat)
     }
 }
 
@@ -96,6 +104,7 @@ private fun ChatListBody(
     storage: Storage,
     query: String,
     modifier: Modifier = Modifier,
+    onOpenRoute: (DashboardRoute) -> Unit = {},
     onOpenChat: (String) -> Unit = {},
 ) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
@@ -145,6 +154,16 @@ private fun ChatListBody(
             NoSearchResults(query)
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
+                // Not while searching. No thread/mention counts are tracked
+                // yet, so the badges stay 0; Apps always shows (iOS only
+                // when Stadeum is connected).
+                if (!searching) {
+                    item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
+                    item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", 0) { onOpenRoute(DashboardRoute.THREADS) } }
+                    item { NavRow(Icons.Filled.AlternateEmail, "Mentions", 0) { onOpenRoute(DashboardRoute.MENTIONS) } }
+                    item { Spacer(Modifier.height(16.dp)) }
+                }
+
                 if (sections.unread.isNotEmpty()) {
                     item { SectionHeader("Unread", expanded = true, onToggle = null) }
                     items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
@@ -471,5 +490,26 @@ private fun ActionRow(title: String, onClick: () -> Unit) {
         Icon(Icons.Filled.Add, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(12.dp))
         Text(title, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+    }
+}
+
+/// "Apps", "Threads", "Mentions" — PeelCore's `NavRow`. A count above zero
+/// shows a badge and turns the title semibold, primary colour.
+@Composable
+private fun NavRow(icon: ImageVector, title: String, count: Long, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = if (count > 0) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (count > 0) Theme.colors.text else Theme.colors.secondaryText,
+            modifier = Modifier.weight(1f),
+        )
+        if (count > 0) UnreadBadge(count)
     }
 }

@@ -51,6 +51,9 @@ import com.sphinx.peel.ui.call.camera
 import com.sphinx.peel.ui.call.chat
 import com.sphinx.peel.ui.call.link
 import com.sphinx.peel.ui.call.title
+import com.sphinx.peel.ui.apps.AppsScreen
+import com.sphinx.peel.ui.mentions.MentionsScreen
+import com.sphinx.peel.ui.threads.ThreadsScreen
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.payments.PaymentsScreen
 import com.sphinx.peel.ui.you.YouScreen
@@ -77,6 +80,9 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
     // `ConversationScreen` hides the tab bar the same way; Back returns to
     // whichever tab was open, not necessarily Chats.
     var openChat by remember { mutableStateOf<String?>(null) }
+    // The Apps/Threads/Mentions placeholder pages, opened from the rows at
+    // the top of Chats; replaces the tab area the same way an open chat does.
+    var openRoute by remember { mutableStateOf<DashboardRoute?>(null) }
 
     var callPhase by remember { mutableStateOf<CallPhase?>(null) }
     // The full call screen is in front, rather than just the banner (or
@@ -168,7 +174,15 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
         } else {
             if (phase != null) CallBanner(phase, onTap = { callScreenShown = true }, onLeave = ::leaveCall)
             val chat = openChat
-            if (chat != null) {
+            val route = openRoute
+            if (route != null && chat == null) {
+                val back = { openRoute = null }
+                when (route) {
+                    DashboardRoute.APPS -> AppsScreen(onBack = back)
+                    DashboardRoute.THREADS -> ThreadsScreen(onBack = back)
+                    DashboardRoute.MENTIONS -> MentionsScreen(onBack = back)
+                }
+            } else if (chat != null) {
                 ConversationScreen(
                     engine, storage, chat, onBack = { openChat = null },
                     onJoinCall = { joinChat, joinTitle, link, camera -> connect(joinChat, joinTitle, link, camera) },
@@ -176,7 +190,7 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
             } else {
                 Box(Modifier.weight(1f)) {
                     when (tab) {
-                        MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
+                        MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }) { openChat = it }
                         MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
                         MainTab.YOU -> YouScreen(engine, storage, secretStore, onForgotten)
                         MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
