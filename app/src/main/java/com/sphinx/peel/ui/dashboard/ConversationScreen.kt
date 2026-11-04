@@ -178,6 +178,14 @@ fun ConversationScreen(
         engine.markRead(chat)
     }
     LaunchedEffect(chat, restoreProgress) { reload() }
+    // Entering a chat: ask the server what became of its unconfirmed sends,
+    // so their bolts settle (PeelCore's `AppModel.selectedChat` didSet). The
+    // engine also asks on foreground, reconnect and history pages via `openChat`.
+    DisposableEffect(chat) {
+        engine.openChat = chat
+        onDispose { if (engine.openChat == chat) engine.openChat = null }
+    }
+    LaunchedEffect(chat) { engine.checkOwnMessageStatus(chat) }
     LaunchedEffect(chat) {
         while (true) {
             delay(3_000)
