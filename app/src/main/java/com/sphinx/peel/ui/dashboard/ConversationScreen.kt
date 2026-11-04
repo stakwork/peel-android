@@ -84,6 +84,7 @@ import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.declaredAmountMsat
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.DELETE_MESSAGE_TYPE
 import com.sphinx.peel.engine.DIRECT_PAYMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
 import com.sphinx.peel.ui.payments.ChatMoneyAction
@@ -419,7 +420,7 @@ fun ConversationScreen(
         // active chat bumping to the bottom.
         val threads = remember(messages, isTribe, myAlias) { if (isTribe) threadSummaries(messages, myAlias) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
-            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type != DELETE_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
 
