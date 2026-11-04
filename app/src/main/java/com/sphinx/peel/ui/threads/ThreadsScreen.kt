@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -78,6 +79,10 @@ fun ThreadsScreen(
 ) {
     BackHandler(onBack = onBack)
     var threads by remember { mutableStateOf(emptyList<ThreadListItem>()) }
+    // The first reload hasn't answered yet: "No threads yet" would be a lie
+    // this early, so the loading state holds until it has, same as
+    // `threads` being empty after that really does mean none.
+    var loaded by remember { mutableStateOf(false) }
     val restoreProgress by engine.restoreProgress.collectAsState()
     val scope = rememberCoroutineScope()
     val myAlias = remember { storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You" }
@@ -86,6 +91,7 @@ fun ThreadsScreen(
     // Refreshes the way the chats list does: on every restore step, plus a poll.
     suspend fun reload() {
         threads = withContext(Dispatchers.Default) { storage.threads() }
+        loaded = true
     }
     LaunchedEffect(restoreProgress) { reload() }
     LaunchedEffect(Unit) {
@@ -118,7 +124,11 @@ fun ThreadsScreen(
                 TextButton(onClick = { markRead(unreadChats) }) { Text("Mark all read", color = Theme.colors.accent) }
             }
         }
-        if (threads.isEmpty()) {
+        if (!loaded) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Theme.colors.accent)
+            }
+        } else if (threads.isEmpty()) {
             EmptyThreads()
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
