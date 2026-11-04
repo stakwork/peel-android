@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.storage.ConversationRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
@@ -163,9 +164,11 @@ private fun ChatListBody(
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
                 // Not while searching. Threads counts threads with new
                 // replies, Mentions the unread mentions; Apps stays 0 and
-                // always shows (iOS only when Stadeum is connected).
+                // shows only with a live Stadeum workspace or a development
+                // talk home, as on iOS (Android has no Stadeum pairing yet,
+                // so for now never).
                 if (!searching) {
-                    item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
+                    if (Stadeum.showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
                     item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }

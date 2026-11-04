@@ -27,3 +27,7 @@ Not matched / open:
   or aliases a tribe echoed back. No @-mention chips for search matches (no
   search highlight in message text), no agent-message links, no text selection.
 - Long press on a link opens the link-less row menu only outside the link.
+
+## Apps section (Dashboard "Apps" row)
+
+Status: built `engine/WorkspaceApps.kt` (WorkspaceApp parser/sort/filter/shareLink, `GET {strut}/apps` with bearer token, `AppPage.opening`) and `ui/apps/AppsScreen.kt` (search, source filter, Refresh, long-press Share link, in-app WebView with the token in an Authorization header). Open: Android has no Stadeum pairing, so `Stadeum.live` is empty and the Apps row is hidden (iOS gate); no pull-to-refresh; Talk to Jamie rows show a "coming soon" toast — needs Hive's call endpoint (iOS `Hive.swift` ~393, `docs/talk.md`) then `MainTabs.connect` with a `CallLink` carrying `hiveToken`. Not compiled/tested in the pod (no Android SDK/JDK).
