@@ -78,4 +78,21 @@ enum class Setting(val key: String) {
     /// falls back to the official apps' own `chat.sphinx.chat` the same
     /// way PeelCore's `configuredHost` does.
     CALL_SERVER("callServer"),
+
+    /// "Ask for the PIN" (PeelCore's `pin_timeout` preference, `PINTimeout`):
+    /// hours away before the lock screen asks again, "0" = whenever Peel
+    /// opens, or "never". Unset reads as "never" (iOS default). Persisted
+    /// by Profile only — nothing re-locks on it yet, see
+    /// `docs/phases/11-profile-preferences.md`.
+    PIN_TIMEOUT_HOURS("pinTimeoutHours"),
+
+    /// "Confirm payments" (PeelCore's `paymentConfirmationMsat`): ask
+    /// before sending more than this many msat; "0" = always. Unset reads
+    /// as 100 sats (iOS default). Persisted by Profile only — Android has
+    /// no payment-sending flow that checks it yet.
+    PAYMENT_CONFIRMATION_MSAT("paymentConfirmationMsat"),
+
+    // TODO(auto-download): enable together with the "Auto download media"
+    // row in YouScreen once Android auto-downloads attachments (iOS default
+    // on): AUTO_DOWNLOAD_MEDIA("autoDownloadMedia"),
 }
