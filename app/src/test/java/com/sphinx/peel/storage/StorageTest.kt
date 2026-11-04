@@ -503,4 +503,68 @@ class StorageTest {
         storage.insertMessages(listOf(msg("c", 3, 0, "alice")))
         assertFalse(storage.newestMessageFromMe("alice"))
     }
+
+    private fun threadMsg(uuid: String, index: Long, chat: String, fromMe: Boolean = false, thread: String? = null, content: String = "words", type: Int = 0) =
+        MessageRow(
+            uuid = uuid, serverIndex = index, type = type, chat = chat, fromMe = fromMe, sender = """{"alias":"${if (fromMe) "me" else "other"}"}""",
+            body = if (thread != null) """{"content":"$content","threadUuid":"$thread"}""" else """{"content":"$content"}""",
+            msat = null, timestamp = index, tag = null, paymentHash = null,
+        )
+
+    @Test
+    fun `threads need our participation, 2 replies in a tribe and words`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.upsertContact("tribe", "Tribe", null, isTribe = true, ready = true)
+        storage.insertMessages(
+            listOf(
+                // Direct: one reply is enough, we replied.
+                threadMsg("d-root", 1, "alice"), threadMsg("d-reply", 2, "alice", fromMe = true, thread = "d-root"),
+                // Direct: nobody of ours in it.
+                threadMsg("x-root", 3, "alice"), threadMsg("x-reply", 4, "alice", thread = "x-root"),
+                // Tribe: our root, one reply only.
+                threadMsg("t1-root", 5, "tribe", fromMe = true), threadMsg("t1-reply", 6, "tribe", thread = "t1-root"),
+                // Tribe: our root, two replies, one of them wordless (not counted).
+                threadMsg("t2-root", 7, "tribe", fromMe = true), threadMsg("t2-a", 8, "tribe", thread = "t2-root"),
+                threadMsg("t2-b", 9, "tribe", thread = "t2-root", content = " "),
+                // Tribe: our root, two replies with words.
+                threadMsg("t3-root", 10, "tribe", fromMe = true), threadMsg("t3-a", 11, "tribe", thread = "t3-root"),
+                threadMsg("t3-b", 12, "tribe", thread = "t3-root", content = "", type = 6),
+                // Original not stored.
+                threadMsg("o-reply", 13, "alice", fromMe = true, thread = "missing"),
+            ),
+        )
+
+        val threads = storage.threads()
+
+        assertEquals(listOf("t3-root", "d-root"), threads.map { it.root.uuid })
+        assertEquals(2, threads[0].count)
+        assertEquals(1, threads[1].count)
+    }
+
+    @Test
+    fun `threads sort by last activity and count unread replies`() {
+        val storage = newStorage()
+        storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
+        storage.insertMessages(
+            listOf(
+                threadMsg("a-root", 1, "alice", fromMe = true), threadMsg("a-1", 2, "alice", thread = "a-root"),
+                threadMsg("b-root", 3, "alice", fromMe = true), threadMsg("b-1", 4, "alice", thread = "b-root"),
+                threadMsg("a-2", 5, "alice", thread = "a-root"), threadMsg("a-3", 6, "alice", fromMe = true, thread = "a-root"),
+            ),
+        )
+        storage.setRead("alice", index = 2, pending = false)
+
+        val threads = storage.threads()
+
+        assertEquals(listOf("a-root", "b-root"), threads.map { it.root.uuid })
+        assertEquals("a-3", threads[0].latest.uuid)
+        assertEquals(6L, threads[0].lastTimestamp)
+        assertEquals(1L, threads[0].unread) // a-2 only; a-3 is ours
+        assertEquals(1L, threads[1].unread)
+        assertEquals(2, storage.unreadThreadCount())
+
+        storage.setRead("alice", index = 6, pending = false)
+        assertEquals(0, storage.unreadThreadCount())
+    }
 }

@@ -146,13 +146,16 @@ fun ConversationScreen(
     chat: String,
     onBack: () -> Unit,
     onJoinCall: (chat: String, title: String, link: CallLink, camera: Boolean) -> Unit,
+    /// A thread's root uuid to open straight into (the Threads list) —
+    /// closing the thread shows the chat as usual.
+    initialThreadRoot: String? = null,
 ) {
     val isAgent = chat == engine.agentPubkey
     var conversation by remember(chat) { mutableStateOf<com.sphinx.peel.storage.ConversationRow?>(null) }
     var messages by remember(chat) { mutableStateOf(emptyList<MessageRow>()) }
     var draft by remember(chat) { mutableStateOf("") }
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
-    var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
+    var openThreadRoot by remember(chat, initialThreadRoot) { mutableStateOf<String?>(initialThreadRoot) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
     val scope = rememberCoroutineScope()
@@ -896,7 +899,7 @@ private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("a
 /// carry the tribe's own shared pubkey as `sender.pubkey`, not the
 /// member's — keying on it here would make two different members land
 /// on the same colour.
-private fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Triple<String, String?, String> {
+internal fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Triple<String, String?, String> {
     val sender = senderJson(row)
     val name = if (row.fromMe) myAlias else senderAlias(row)
     val photoUrl = if (row.fromMe) myPhotoUrl else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
@@ -906,7 +909,7 @@ private fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?,
 
 /// A message's own text, from `body`'s `content` field — the same body
 /// `Engine.sendMessage` writes, and the one `mapMessage` stores as is.
-private fun previewContent(row: MessageRow): String =
+internal fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
 /// Whether `row` counts toward a thread at all — PeelCore's own
