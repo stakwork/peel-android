@@ -12,6 +12,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -79,6 +80,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     @Volatile private var state: Map<String, ByteArray> = storage.loadCoreState()
     private var transport: Transport? = null
     private var listenerStarted = false
+    /// True from `start()` until `cancel()`: whether a drop should trigger
+    /// [reconnectLoop] at all (PeelCore's own `keepConnected`).
+    @Volatile private var keepConnected = false
+    private var reconnectJob: Job? = null
     /// The memes server's bearer token, kept until shortly before it
     /// expires — `downloadAttachment`'s own sign-in, independent of the
     /// MQTT connection (`withMemes`).
@@ -297,7 +302,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             val loginTime = clock.next()
             val xpub = coreXpubFromSeed(seed, loginTime, network)
             val signature = coreRootSignMs(seed, loginTime, network)
-            val connection = Transport(server, clientID = xpub, username = loginTime, password = signature)
+            val connection = Transport(
+                server, clientID = xpub, username = loginTime, password = signature,
+                onUnexpectedDisconnect = ::onConnectionDropped,
+            )
             connection.connect()
             transport = connection
             // Before the register publish, not after: the same small race
@@ -981,7 +989,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // wait is up to `historyWaitMs`, and a fresh restore has no reads or
         // mutes to answer, so awaiting here stalled the contacts restore for
         // up to a minute after "Connected". Answers land through the listener.
-        scope.launch { fetchReadsAndMutesAwaiting() }
+        // Its own independent launch, so [afterConnect]'s own runCatching
+        // does not reach a failure in here — caught here instead, same reason.
+        scope.launch {
+            runCatching { fetchReadsAndMutesAwaiting() }
+                .onFailure { Log.w("PeelEngine", "fetchReadsAndMutes failed", it) }
+        }
     }
 
     private suspend fun fetchReadsAndMutesAwaiting() {
@@ -1032,7 +1045,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     }
 
     suspend fun disconnect() = mutex.withLock {
-        transport?.close()
+        // Already dead when this runs from `reconnectLoop` (closing what
+        // just dropped on its own) — a second close on it must not throw.
+        transport?.let { runCatching { it.close() } }
         transport = null
         // So the next `connect()` starts a fresh collector on the new
         // Transport: without this, `startListening` stayed a no-op after
@@ -1046,6 +1061,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// this so a wiped `Storage` is never written to by a restore page
     /// still in flight.
     fun cancel() {
+        keepConnected = false
         calls?.close()
         scope.cancel()
     }
@@ -1062,13 +1078,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     fun start() {
         if (started) return
         started = true
+        keepConnected = true
         scope.launch {
             backfillContactsIfNeeded()
             if (!connectAndRegister()) return@launch
-            // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
-            // an earlier answer cannot be used.
-            if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
-            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
+            afterConnect()
             refreshTribeNames()
             runCatching { syncBoostAmount() }
         }
@@ -1101,24 +1115,76 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
     /// Called whenever the app returns to the foreground, after `start()`
     /// has already run once (`MainActivity`'s lifecycle observer) —
-    /// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up,
-    /// trimmed to what this port can actually tell: nothing here can tell
-    /// a connection that is still good from one the OS quietly killed
-    /// while backgrounded (no ping/keep-alive loop exists yet to notice),
-    /// so this always reconnects first rather than guess from `transport`
-    /// being non-null. A no-op before `start()` has ever run.
+    /// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up.
+    /// Nothing here can tell a connection that is still good from one the
+    /// OS quietly killed while backgrounded without actually trying it
+    /// (HiveMQ's own disconnected-listener only fires for a drop it saw;
+    /// a frozen/killed process never gets the chance), so this always
+    /// reconnects first rather than trust [Transport.isConnected]. A
+    /// no-op before `start()` has ever run. Supersedes a drop
+    /// [reconnectLoop] is already retrying, not a second one alongside it.
     fun resume() {
         if (!started || restoreRunning) return
+        reconnectJob?.cancel()
         scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
+            afterConnect()
+            runCatching { syncBoostAmount() }
+        }
+    }
+
+    /// A still-open `Transport` just dropped on its own — PeelCore's own
+    /// `connectionClosed`. Starts [reconnectLoop] unless one is already
+    /// running: a second drop signal while already reconnecting (or one
+    /// that raced `resume()`'s own reconnect) is not a second loop.
+    private fun onConnectionDropped() {
+        if (!keepConnected || reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch { reconnectLoop() }
+    }
+
+    /// Reconnects with backoff — 1, 2, 4, 8, 16s, then 30s and capped
+    /// there, PeelCore's own `reconnectLoop` — until it succeeds or
+    /// [keepConnected] goes false. Each attempt is a full
+    /// `disconnect()` + `connectAndRegister()`, the same pair `resume()`
+    /// already does, so the new Transport's subscriptions (tribe
+    /// management, whatever the core's own `RunReturn`s ask for) are
+    /// always redone from scratch, never assumed to have survived the
+    /// drop — see `Transport`'s own doc comment on why HiveMQ's built-in
+    /// `automaticReconnect()` is not used instead.
+    private suspend fun reconnectLoop() {
+        var attempt = 1
+        while (keepConnected) {
+            val retryInSeconds = minOf(30, 1 shl minOf(attempt - 1, 5))
+            connectionStateFlow.value = ConnectionState.Offline(retryInSeconds)
+            delay(retryInSeconds * 1_000L)
+            if (!keepConnected) return
+            disconnect()
+            if (connectAndRegister()) {
+                afterConnect()
+                runCatching { syncBoostAmount() }
+                return
+            }
+            attempt++
+        }
+    }
+
+    /// The catch-up every successful (re)connect needs — `start()`'s own
+    /// first one, and `resume()`/`reconnectLoop()`'s after each later
+    /// one. Wrapped here, not left to each caller: a drop mid-catch-up
+    /// (the same risk `publishLocked` always had, now a plain
+    /// [IllegalStateException] from `Transport` instead of HiveMQ's own
+    /// uncaught one) must not crash whatever launched this — a fresh
+    /// drop is [onConnectionDropped]'s own job to retry, not a reason to
+    /// kill the coroutine that called this.
+    private suspend fun afterConnect() {
+        runCatching {
             // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
             // an earlier answer cannot be used.
             if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
             // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
-            runCatching { syncBoostAmount() }
-        }
+        }.onFailure { Log.w("PeelEngine", "catch-up after connect failed", it) }
     }
 
     /// Each known tribe's real name and photo, from its own registry —
