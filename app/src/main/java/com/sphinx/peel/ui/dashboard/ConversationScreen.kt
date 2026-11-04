@@ -146,13 +146,24 @@ fun ConversationScreen(
     chat: String,
     onBack: () -> Unit,
     onJoinCall: (chat: String, title: String, link: CallLink, camera: Boolean) -> Unit,
+    /// A message to scroll to and flash once its chat has loaded — what the
+    /// Mentions list opens (`AppModel.focus(on:)`). `focusThreadUuid` is that
+    /// message's thread root, when it has one: the thread opens instead.
+    focusMessageUuid: String? = null,
+    focusThreadUuid: String? = null,
+    /// A thread's root uuid to open straight into (the Threads list) —
+    /// closing the thread shows the chat as usual.
+    initialThreadRoot: String? = null,
 ) {
     val isAgent = chat == engine.agentPubkey
     var conversation by remember(chat) { mutableStateOf<com.sphinx.peel.storage.ConversationRow?>(null) }
     var messages by remember(chat) { mutableStateOf(emptyList<MessageRow>()) }
     var draft by remember(chat) { mutableStateOf("") }
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
-    var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
+    var openThreadRoot by remember(chat, initialThreadRoot, focusThreadUuid) { mutableStateOf<String?>(focusThreadUuid ?: initialThreadRoot) }
+    // Cleared once the scroll has happened, so the 3s reload never repeats it.
+    var pendingFocus by remember(chat) { mutableStateOf(focusMessageUuid) }
+    val highlight = remember(chat) { MessageHighlight() }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
     val scope = rememberCoroutineScope()
@@ -385,6 +396,7 @@ fun ConversationScreen(
             engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, myPhotoUrl = myPhotoUrl, audioPlayer = audioPlayer,
             chatName = title, threadRootUuid = openRoot, messages = messages,
             onBack = { openThreadRoot = null },
+            focusUuid = pendingFocus, onFocusConsumed = { pendingFocus = null },
             onSent = { scope.launch { reload() } },
             onJoinCall = { link -> onJoinCall(chat, title, link, false) },
         )
@@ -469,13 +481,37 @@ fun ConversationScreen(
             val last = displayedMessages.size - 1
             if (last < 0) return@LaunchedEffect
             if (!positioned) {
-                listState.scrollToItem(last)
-                positioned = true
+                // A pending focus positions the list itself, below.
+                if (pendingFocus == null) {
+                    listState.scrollToItem(last)
+                    positioned = true
+                }
             } else {
                 val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
                 if (last > previousLast && (atBottom || displayedMessages[last].fromMe)) listState.animateScrollToItem(last)
             }
             previousLast = last
+        }
+        // Scroll the focus target to the middle and flash it, once messages
+        // have loaded; not found (older than anything stored, or hidden),
+        // the chat just opens at the newest.
+        val focusTarget = pendingFocus
+        LaunchedEffect(focusTarget, messages.isNotEmpty()) {
+            if (focusTarget == null || messages.isEmpty()) return@LaunchedEffect
+            val index = displayedMessages.indexOfFirst { it.uuid == focusTarget }
+            if (index >= 0) {
+                highlight.show(focusTarget)
+                positioned = true
+                listState.animateScrollToCenter(index)
+                previousLast = displayedMessages.size - 1
+                pendingFocus = null
+                scope.launch { highlight.fade() }
+            } else {
+                if (displayedMessages.isNotEmpty()) listState.scrollToItem(displayedMessages.size - 1)
+                positioned = true
+                previousLast = displayedMessages.size - 1
+                pendingFocus = null
+            }
         }
         KeepAtBottomOnKeyboard(listState, displayedMessages.size - 1)
         LazyColumn(
@@ -511,6 +547,7 @@ fun ConversationScreen(
                     onJoinCall = { link -> onJoinCall(chat, title, link, false) },
                     onDelete = { deleteMessage(row) },
                     onMoneyError = { error = it },
+                    highlight = highlight.alphaFor(row.uuid),
                 )
             }
         }
@@ -602,7 +639,10 @@ private fun ThreadScreen(
     onBack: () -> Unit,
     onSent: () -> Unit,
     onJoinCall: (CallLink) -> Unit,
+    focusUuid: String? = null,
+    onFocusConsumed: () -> Unit = {},
 ) {
+    val highlight = remember(threadRootUuid) { MessageHighlight() }
     var draft by remember(threadRootUuid) { mutableStateOf("") }
     var error by remember(threadRootUuid) { mutableStateOf<String?>(null) }
     var sendingLabel by remember(threadRootUuid) { mutableStateOf<String?>(null) }
@@ -765,13 +805,34 @@ private fun ThreadScreen(
             val last = replies.size
             if (replies.isEmpty()) return@LaunchedEffect
             if (!positioned) {
-                listState.scrollToItem(last)
-                positioned = true
+                // A pending focus positions the list itself, below.
+                if (focusUuid == null) {
+                    listState.scrollToItem(last)
+                    positioned = true
+                }
             } else {
                 val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
                 if (last > previousLast && (atBottom || replies[last - 1].fromMe)) listState.animateScrollToItem(last)
             }
             previousLast = last
+        }
+        // The root is item 0, replies follow it.
+        LaunchedEffect(focusUuid, messages.isNotEmpty()) {
+            if (focusUuid == null || messages.isEmpty()) return@LaunchedEffect
+            val index = if (focusUuid == threadRootUuid) 0 else replies.indexOfFirst { it.uuid == focusUuid }.let { if (it >= 0) it + 1 else -1 }
+            if (index >= 0) {
+                highlight.show(focusUuid)
+                positioned = true
+                listState.animateScrollToCenter(index)
+                previousLast = replies.size
+                onFocusConsumed()
+                scope.launch { highlight.fade() }
+            } else {
+                listState.scrollToItem(replies.size)
+                positioned = true
+                previousLast = replies.size
+                onFocusConsumed()
+            }
         }
         KeepAtBottomOnKeyboard(listState, replies.size)
         LazyColumn(
@@ -795,6 +856,7 @@ private fun ThreadScreen(
                         onBoost = { sendBoost(root) }.takeIf { canBoost(root, rootBoosts) },
                         onJoinCall = onJoinCall,
                         onDelete = { deleteMessage(root) },
+                        highlight = highlight.alphaFor(root.uuid),
                     )
                     HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                 }
@@ -821,6 +883,7 @@ private fun ThreadScreen(
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                     onJoinCall = onJoinCall,
                     onDelete = { deleteMessage(row) },
+                    highlight = highlight.alphaFor(row.uuid),
                 )
             }
         }
@@ -896,7 +959,7 @@ private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("a
 /// carry the tribe's own shared pubkey as `sender.pubkey`, not the
 /// member's — keying on it here would make two different members land
 /// on the same colour.
-private fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Triple<String, String?, String> {
+internal fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Triple<String, String?, String> {
     val sender = senderJson(row)
     val name = if (row.fromMe) myAlias else senderAlias(row)
     val photoUrl = if (row.fromMe) myPhotoUrl else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
@@ -906,7 +969,7 @@ private fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?,
 
 /// A message's own text, from `body`'s `content` field — the same body
 /// `Engine.sendMessage` writes, and the one `mapMessage` stores as is.
-private fun previewContent(row: MessageRow): String =
+internal fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
 /// Whether `row` counts toward a thread at all — PeelCore's own
@@ -1109,6 +1172,8 @@ private fun MessageRowView(
     onDelete: (() -> Unit)? = null,
     onMoneyError: (String) -> Unit = {},
     deleteReplyCount: Int = threadSummary?.replyCount ?: 0,
+    /// Alpha of the focus flash drawn behind the row; 0 for none.
+    highlight: Float = 0f,
 ) {
     val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe)
     val content = previewContent(row)
@@ -1131,6 +1196,7 @@ private fun MessageRowView(
         Row(
             Modifier
                 .fillMaxWidth()
+                .then(if (highlight > 0f) Modifier.background(Theme.colors.accent.copy(alpha = highlight)) else Modifier)
                 .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
                 .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null && !row.deleted) menuOpen = true })
                 .padding(top = if (startsRun) 8.dp else 1.dp, bottom = if (endsRun) 2.dp else 7.dp),
