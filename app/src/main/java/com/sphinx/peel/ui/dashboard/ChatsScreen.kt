@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.storage.ConversationRow
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.AgentTag
@@ -155,10 +156,11 @@ private fun ChatListBody(
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
                 // Not while searching. No thread/mention counts are tracked
-                // yet, so the badges stay 0; Apps always shows (iOS only
-                // when Stadeum is connected).
+                // yet, so the badges stay 0; Apps shows only with a live
+                // Stadeum workspace or a development talk home, as on iOS
+                // (Android has no Stadeum pairing yet, so for now never).
                 if (!searching) {
-                    item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
+                    if (Stadeum.showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", 0) { onOpenRoute(DashboardRoute.THREADS) } }
                     item { NavRow(Icons.Filled.AlternateEmail, "Mentions", 0) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }
