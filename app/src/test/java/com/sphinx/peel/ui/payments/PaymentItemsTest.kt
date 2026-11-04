@@ -75,4 +75,18 @@ class PaymentItemsTest {
         assertEquals(listOf(3 * day, 2 * day), days.map { it.first })
         assertEquals(listOf(2, 1), days.map { it.second.size })
     }
+
+    @Test
+    fun `display words follow the iPhone`() {
+        val tribe = com.sphinx.peel.storage.ContactRow("chat1", "Sphinx & Stak", null, true, true)
+        val fee = PaymentItem.build(listOf(PaymentRecord(a, 1, 3_000, false, null, false, null)), emptyList(), { tribe }, { message(0, true, "{}") }).single()
+        assertEquals("Sphinx & Stak", fee.title)
+        assertEquals("Message fee in #Sphinx & Stak", fee.subtitle)
+        assertEquals("Message fee sent", fee.headline)
+        assertEquals("In #Sphinx & Stak", fee.context)
+        val bare = PaymentItem.build(listOf(PaymentRecord(a, 1, 3_000, false, null, false, null)), emptyList()) { null }.single()
+        assertEquals("Keysend", bare.title)
+        assertEquals("Sent, not tied to a chat", bare.subtitle)
+        assertEquals("62c22a\u2026" + "27d6", PaymentItem.shortKey("62c22a" + "0".repeat(52) + "27d6"))
+    }
 }

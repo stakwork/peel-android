@@ -210,9 +210,10 @@ fun ConversationScreen(
     val isTribe = conversation?.isTribe ?: false
     val title = if (isAgent) "Peel" else (conversation?.name ?: chat.take(12))
     val myAlias = storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
-    val mentionMembers = remember(messages, conversation, isTribe, isAgent) {
+    val myPhotoUrl = storage.value(com.sphinx.peel.storage.Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() }
+    val mentionMembers = remember(messages, conversation, isTribe, isAgent, myPhotoUrl) {
         val peer = conversation?.takeIf { !isTribe && !isAgent }?.let { MentionMember(it.alias ?: title, it.photoUrl, it.chat) }
-        chatMentionMembers(messages, myAlias, isTribe, peer)
+        chatMentionMembers(messages, myAlias, myPhotoUrl, isTribe, peer)
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -381,7 +382,7 @@ fun ConversationScreen(
     val openRoot = openThreadRoot
     if (openRoot != null) {
         ThreadScreen(
-            engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, audioPlayer = audioPlayer,
+            engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, myPhotoUrl = myPhotoUrl, audioPlayer = audioPlayer,
             chatName = title, threadRootUuid = openRoot, messages = messages,
             onBack = { openThreadRoot = null },
             onSent = { scope.launch { reload() } },
@@ -452,7 +453,7 @@ fun ConversationScreen(
         // surviving message, not the root itself - so a thread that just
         // got a reply jumps to where that reply would sit, same as an
         // active chat bumping to the bottom.
-        val threads = remember(messages, isTribe, myAlias) { if (isTribe) threadSummaries(messages, myAlias) else emptyMap() }
+        val threads = remember(messages, isTribe, myAlias, myPhotoUrl) { if (isTribe) threadSummaries(messages, myAlias, myPhotoUrl) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
             messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type != DELETE_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
@@ -500,7 +501,7 @@ fun ConversationScreen(
                     ((next.timestamp ?: 0L) - (row.timestamp ?: 0L) > 5 * 60 * 1000L)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias, myPhotoUrl = myPhotoUrl,
                     replyUuid = replyUuid, parent = parent, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts,
                     threadSummary = row.uuid?.let { threads[it] },
@@ -593,6 +594,7 @@ private fun ThreadScreen(
     isTribe: Boolean,
     isAgent: Boolean,
     myAlias: String,
+    myPhotoUrl: String?,
     audioPlayer: AudioPlayer,
     chatName: String,
     threadRootUuid: String,
@@ -608,7 +610,7 @@ private fun ThreadScreen(
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    val mentionMembers = remember(messages, myAlias, isTribe) { chatMentionMembers(messages, myAlias, isTribe, null) }
+    val mentionMembers = remember(messages, myAlias, myPhotoUrl, isTribe) { chatMentionMembers(messages, myAlias, myPhotoUrl, isTribe, null) }
     val root = messages.firstOrNull { it.uuid == threadRootUuid }
     val replies = remember(messages, threadRootUuid) {
         messages.filter { it.threadUuid == threadRootUuid }.sortedBy { it.timestamp ?: 0L }
@@ -786,7 +788,7 @@ private fun ThreadScreen(
                     // collapsed row in the *main* list, not itself, inside
                     // the thread sheet that's already open because of it.
                     MessageRowView(
-                        row = root, startsRun = true, endsRun = replies.firstOrNull()?.let { runSenderKey(root) != runSenderKey(it) } ?: true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                        row = root, startsRun = true, endsRun = replies.firstOrNull()?.let { runSenderKey(root) != runSenderKey(it) } ?: true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias, myPhotoUrl = myPhotoUrl,
                         replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                         boosts = rootBoosts, threadSummary = null, deleteReplyCount = replies.size,
                         onOpenThread = {}, onReply = {},
@@ -813,7 +815,7 @@ private fun ThreadScreen(
                 val endsRun = next == null || runSenderKey(row) != runSenderKey(next)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias, myPhotoUrl = myPhotoUrl,
                     replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
@@ -894,10 +896,10 @@ private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("a
 /// carry the tribe's own shared pubkey as `sender.pubkey`, not the
 /// member's — keying on it here would make two different members land
 /// on the same colour.
-private fun senderDisplay(row: MessageRow, myAlias: String, isTribe: Boolean): Triple<String, String?, String> {
+private fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Triple<String, String?, String> {
     val sender = senderJson(row)
     val name = if (row.fromMe) myAlias else senderAlias(row)
-    val photoUrl = if (row.fromMe) null else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
+    val photoUrl = if (row.fromMe) myPhotoUrl else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
     val hueKey = if (isTribe && !row.fromMe) name else (sender?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: row.chat)
     return Triple(name, photoUrl, hueKey)
 }
@@ -988,6 +990,7 @@ private fun canDelete(row: MessageRow, replyCount: Int): Boolean {
 private fun chatMentionMembers(
     messages: List<MessageRow>,
     myAlias: String,
+    myPhotoUrl: String?,
     isTribe: Boolean,
     peer: MentionMember?,
 ): List<MentionMember> {
@@ -995,7 +998,7 @@ private fun chatMentionMembers(
     peer?.let { byName[it.name] = it }
     for (row in messages) {
         if (row.fromMe || senderJson(row) == null) continue
-        val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
+        val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe)
         if (name == "Someone" || name == myAlias) continue
         val existing = byName[name]
         if (existing == null || (existing.photoUrl == null && photoUrl != null)) byName[name] = MentionMember(name, photoUrl, hueKey)
@@ -1037,7 +1040,7 @@ private data class ThreadSummaryData(
 /// isTribe` only), so callers pass an empty map for a DM instead of
 /// calling this — which is also why `senderDisplay` is always called
 /// with `isTribe = true` here, never `false`.
-private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<String, ThreadSummaryData> {
+private fun threadSummaries(messages: List<MessageRow>, myAlias: String, myPhotoUrl: String?): Map<String, ThreadSummaryData> {
     val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         val root = row.threadUuid ?: continue
@@ -1051,7 +1054,7 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
         val participants = mutableListOf<ThreadParticipant>()
         val seen = mutableSetOf<String>()
         for (row in replies.sortedByDescending { it.timestamp ?: 0L }) {
-            val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe = true)
+            val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe = true)
             if (seen.add(if (row.fromMe) "me" else hueKey)) {
                 participants.add(ThreadParticipant(name, photoUrl, hueKey))
                 if (participants.size == 3) break
@@ -1059,7 +1062,7 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
         }
         val last = replies.maxByOrNull { it.timestamp ?: 0L }
         val lastReply = last?.let {
-            val (name, _, hueKey) = senderDisplay(it, myAlias, isTribe = true)
+            val (name, _, hueKey) = senderDisplay(it, myAlias, myPhotoUrl, isTribe = true)
             val text = MessageMarkup.plainText(previewContent(it)).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
             ThreadLastReply(name, hueKey, text)
         }
@@ -1092,6 +1095,7 @@ private fun MessageRowView(
     isAgent: Boolean,
     isTribe: Boolean,
     myAlias: String,
+    myPhotoUrl: String?,
     replyUuid: String?,
     parent: MessageRow?,
     engine: Engine,
@@ -1106,7 +1110,7 @@ private fun MessageRowView(
     onMoneyError: (String) -> Unit = {},
     deleteReplyCount: Int = threadSummary?.replyCount ?: 0,
 ) {
-    val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
+    val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe)
     val content = previewContent(row)
     // A call message (type 32), or - the Mac app's own convention, no
     // `call::` wrapper there - plain text that is only a call link.
