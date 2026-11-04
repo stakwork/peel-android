@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.ConversationRow
+import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.AgentTag
 import com.sphinx.peel.ui.components.ConversationAvatar
@@ -108,6 +109,7 @@ private fun ChatListBody(
     onOpenChat: (String) -> Unit = {},
 ) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
+    var unreadMentions by remember { mutableStateOf(0L) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
     var allTribes by remember { mutableStateOf(false) }
@@ -120,6 +122,9 @@ private fun ChatListBody(
     // the honest fallback for anything that arrives outside a restore.
     suspend fun reload() {
         conversations = withContext(Dispatchers.Default) { storage.conversations() }
+        unreadMentions = withContext(Dispatchers.Default) {
+            storage.unreadMentions(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You")
+        }
     }
     LaunchedEffect(restoreProgress) { reload() }
     LaunchedEffect(Unit) {
@@ -154,13 +159,13 @@ private fun ChatListBody(
             NoSearchResults(query)
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
-                // Not while searching. No thread/mention counts are tracked
-                // yet, so the badges stay 0; Apps always shows (iOS only
+                // Not while searching. No thread counts are tracked
+                // yet, so that badge stays 0; Apps always shows (iOS only
                 // when Stadeum is connected).
                 if (!searching) {
                     item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", 0) { onOpenRoute(DashboardRoute.THREADS) } }
-                    item { NavRow(Icons.Filled.AlternateEmail, "Mentions", 0) { onOpenRoute(DashboardRoute.MENTIONS) } }
+                    item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }
                 }
 

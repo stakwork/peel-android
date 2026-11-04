@@ -7,6 +7,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.sphinx.peel.engine.InvoiceRecord
+import com.sphinx.peel.engine.Mentions
 import com.sphinx.peel.engine.PaymentRecord
 import org.json.JSONObject
 
@@ -93,6 +94,10 @@ private fun extractReplyUuid(body: String?): String? =
 
 private fun extractThreadUuid(body: String?): String? =
     body?.let { runCatching { JSONObject(it).optString("threadUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
+/// A message's own text, from `body`'s `content` field.
+private fun messageContent(body: String?): String =
+    body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
 /// A row's own claimed sender alias, from its raw `sender` JSON — used
 /// only by `Storage.applyDeletes`'s own authorization check (matching a
@@ -474,6 +479,35 @@ class Storage(context: Context, account: String = "default") {
     /// here has per chat so far, revisit once a busy tribe makes "load
     /// more" worth building.
     fun messages(chat: String): List<MessageRow> = readMessages("chat = ?", arrayOf(chat), "timestamp ASC, id ASC")
+
+    /// The newest `limit` messages that mention this account's own tribe
+    /// alias, newest first — PeelCore's `Storage.mentions()`. There is no
+    /// `mentionsMe` column here: a SQL prefilter (someone else's, not deleted,
+    /// in a tribe, text containing an `@`) picks the candidates and
+    /// `Mentions.mentions` decides in Kotlin. "@all" is not a mention for
+    /// this list, only the alias itself.
+    fun mentions(myAlias: String, limit: Int = 200): List<MessageRow> = mentionRows(myAlias).take(limit)
+
+    /// Mentions past their chat's read marker, over every tribe — PeelCore's
+    /// `unreadMentions`, the count on the Dashboard's Mentions row. A chat
+    /// with no marker counts them all; a message with no server index yet
+    /// never does.
+    fun unreadMentions(myAlias: String): Long {
+        val lastReads = HashMap<String, Long>()
+        return mentionRows(myAlias).count { row ->
+            val index = row.serverIndex ?: return@count false
+            index > lastReads.getOrPut(row.chat) { lastRead(row.chat) ?: -1L }
+        }.toLong()
+    }
+
+    private fun mentionRows(myAlias: String): List<MessageRow> {
+        val aliases = setOf(Mentions.tribeAlias(myAlias))
+        return readMessages(
+            "fromMe = 0 AND deleted = 0 AND type IN (0, $attachmentMessageType) AND body LIKE '%@%' " +
+                "AND chat IN (SELECT pubkey FROM contact WHERE isTribe = 1)",
+            emptyArray(), "timestamp DESC, id DESC",
+        ).filter { row -> Mentions.mentions(messageContent(row.body), aliases) }
+    }
 
     private fun readMessages(selection: String, args: Array<String>, orderBy: String): List<MessageRow> {
         val rows = mutableListOf<MessageRow>()
