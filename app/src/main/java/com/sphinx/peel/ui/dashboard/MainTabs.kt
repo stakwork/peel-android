@@ -83,6 +83,10 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
     // The Apps/Threads/Mentions placeholder pages, opened from the rows at
     // the top of Chats; replaces the tab area the same way an open chat does.
     var openRoute by remember { mutableStateOf<DashboardRoute?>(null) }
+    // Set when a chat is opened from the Threads list, straight into that
+    // thread; `openRoute` stays THREADS underneath, so Back from the chat
+    // returns to the list.
+    var openThreadRoot by remember { mutableStateOf<String?>(null) }
 
     var callPhase by remember { mutableStateOf<CallPhase?>(null) }
     // The full call screen is in front, rather than just the banner (or
@@ -179,12 +183,16 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
                 val back = { openRoute = null }
                 when (route) {
                     DashboardRoute.APPS -> AppsScreen(onBack = back)
-                    DashboardRoute.THREADS -> ThreadsScreen(onBack = back)
+                    DashboardRoute.THREADS -> ThreadsScreen(engine, storage, onBack = back, onOpenThread = { threadChat, root ->
+                        openThreadRoot = root
+                        openChat = threadChat
+                    })
                     DashboardRoute.MENTIONS -> MentionsScreen(onBack = back)
                 }
             } else if (chat != null) {
                 ConversationScreen(
-                    engine, storage, chat, onBack = { openChat = null },
+                    engine, storage, chat, onBack = { openChat = null; openThreadRoot = null },
+                    initialThreadRoot = openThreadRoot,
                     onJoinCall = { joinChat, joinTitle, link, camera -> connect(joinChat, joinTitle, link, camera) },
                 )
             } else {

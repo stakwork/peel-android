@@ -82,6 +82,34 @@ data class ConversationRow(
     val shownUnread: Long get() = if (muted) 0 else unread
 }
 
+/// One row of the Threads list — PeelCore's `ThreadSummary` as
+/// `Storage.threads()` builds it: a thread's original message, how many
+/// replies it has, when it last moved, how many of them are new, and its
+/// newest reply. See `Storage.threads()` for which threads make the list.
+data class ThreadListItem(
+    val conversation: ConversationRow,
+    /// The thread's original message (the root every reply names by uuid).
+    val root: MessageRow,
+    /// Replies with words, not counting the original.
+    val count: Int,
+    val lastTimestamp: Long,
+    /// Replies from others past the chat's read marker.
+    val unread: Long,
+    val latest: MessageRow,
+    /// Up to the last 3 distinct senders, most recent first.
+    val participants: List<MessageRow>,
+)
+
+/// Content type 0 is text, 6 an attachment (`engine/Attachment.kt`'s
+/// `ATTACHMENT_MESSAGE_TYPE`); same rule as the conversation screen's
+/// `isThreadContent` — PeelCore's `type IN contentSQL AND noWords = 0`.
+private fun isThreadContentRow(row: MessageRow): Boolean {
+    if (row.deleted || (row.type != 0 && row.type != 6)) return false
+    if (row.type == 6) return true
+    val content = row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
+    return content.isNotBlank()
+}
+
 /// What a message's own JSON `body` names as its reply/thread target —
 /// shared by `Storage.insertMessages` (deriving `message.replyUuid`/
 /// `threadUuid` for a row being written) and `Storage.v6` (backfilling
@@ -858,6 +886,58 @@ class Storage(context: Context, account: String = "default") {
         }
         return rows
     }
+
+    /// The Threads list — PeelCore's `Storage.threads()`: threads (replies
+    /// carrying a `threadUuid`, content with words only) in chats the
+    /// dashboard lists, whose original message is stored. A tribe thread
+    /// needs 2+ replies, a direct one shows from its first. Only threads
+    /// this account took part in (it wrote a reply, or the original).
+    /// Newest activity first, then newest original; at most 200.
+    fun threads(): List<ThreadListItem> {
+        val conversations = conversations().associateBy { it.chat }
+        if (conversations.isEmpty()) return emptyList()
+        val all = readMessages("threadUuid IS NOT NULL", emptyArray(), "timestamp ASC, id ASC")
+            .filter { it.chat in conversations && isThreadContentRow(it) }
+        if (all.isEmpty()) return emptyList()
+        val byThread = all.groupBy { it.chat to it.threadUuid!! }
+        val items = mutableListOf<ThreadListItem>()
+        for ((key, replies) in byThread) {
+            val (chat, rootUuid) = key
+            val conversation = conversations.getValue(chat)
+            if (conversation.isTribe && replies.size < 2) continue
+            val root = readMessages("chat = ? AND uuid = ?", arrayOf(chat, rootUuid), "id ASC").firstOrNull() ?: continue
+            if (replies.none { it.fromMe } && !root.fromMe) continue
+            val newestFirst = replies.sortedWith(compareByDescending<MessageRow> { it.timestamp ?: 0L }.thenByDescending { it.id })
+            val lastRead = readChatState(helper.readableDatabase, chat)?.lastRead ?: -1L
+            val participants = mutableListOf<MessageRow>()
+            val seen = mutableSetOf<String>()
+            for (row in newestFirst) {
+                val who = if (row.fromMe) "me" else (aliasOf(row.sender) ?: row.sender ?: "")
+                if (seen.add(who)) {
+                    participants.add(row)
+                    if (participants.size == 3) break
+                }
+            }
+            items.add(
+                ThreadListItem(
+                    conversation = conversation,
+                    root = root,
+                    count = replies.size,
+                    lastTimestamp = replies.maxOf { it.timestamp ?: 0L },
+                    unread = replies.count { !it.fromMe && (it.serverIndex ?: Long.MIN_VALUE) > lastRead }.toLong(),
+                    latest = newestFirst.first(),
+                    participants = participants,
+                ),
+            )
+        }
+        return items
+            .sortedWith(compareByDescending<ThreadListItem> { it.lastTimestamp }.thenByDescending { it.root.id })
+            .take(200)
+    }
+
+    /// Threads with something new — the dashboard Threads row's badge
+    /// (`AppModel.unreadThreads`).
+    fun unreadThreadCount(): Int = threads().count { it.unread > 0 }
 
     private fun readContact(db: SQLiteDatabase, pubkey: String): ContactRow? {
         db.query(
