@@ -460,9 +460,13 @@ fun ConversationScreen(
                 if (index == newMessageIndex) NewMessagesDivider()
                 val replyUuid = row.replyUuid
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
+                val next = displayedMessages.getOrNull(index + 1)
+                val endsRun = next == null || !isSameDay(row.timestamp, next.timestamp) ||
+                    runSenderKey(row) != runSenderKey(next) ||
+                    ((next.timestamp ?: 0L) - (row.timestamp ?: 0L) > 5 * 60 * 1000L)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                     replyUuid = replyUuid, parent = parent, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts,
                     threadSummary = row.uuid?.let { threads[it] },
@@ -733,7 +737,7 @@ private fun ThreadScreen(
                     // collapsed row in the *main* list, not itself, inside
                     // the thread sheet that's already open because of it.
                     MessageRowView(
-                        row = root, startsRun = true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                        row = root, startsRun = true, endsRun = replies.firstOrNull()?.let { runSenderKey(root) != runSenderKey(it) } ?: true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                         replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                         boosts = rootBoosts, threadSummary = null, deleteReplyCount = replies.size,
                         onOpenThread = {}, onReply = {},
@@ -756,9 +760,11 @@ private fun ThreadScreen(
             itemsIndexed(replies, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
                 val previous = replies.getOrNull(index - 1) ?: root
                 val startsRun = previous == null || runSenderKey(previous) != runSenderKey(row)
+                val next = replies.getOrNull(index + 1)
+                val endsRun = next == null || runSenderKey(row) != runSenderKey(next)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                     replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
@@ -1014,6 +1020,7 @@ private fun rowSortKey(row: MessageRow, threads: Map<String, ThreadSummaryData>)
 private fun MessageRowView(
     row: MessageRow,
     startsRun: Boolean,
+    endsRun: Boolean,
     isAgent: Boolean,
     isTribe: Boolean,
     myAlias: String,
@@ -1053,7 +1060,7 @@ private fun MessageRowView(
                 .fillMaxWidth()
                 .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
                 .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null && !row.deleted) menuOpen = true })
-                .padding(top = if (startsRun) 8.dp else 1.dp, bottom = 2.dp),
+                .padding(top = if (startsRun) 8.dp else 1.dp, bottom = if (endsRun) 2.dp else 7.dp),
         ) {
         Box(Modifier.width(32.dp)) {
             if (startsRun) {
