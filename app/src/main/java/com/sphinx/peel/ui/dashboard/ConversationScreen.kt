@@ -108,6 +108,7 @@ import com.sphinx.peel.ui.components.formatDuration
 import com.sphinx.peel.ui.components.prepareImageForSending
 import com.sphinx.peel.ui.components.VoiceRecorder
 import com.sphinx.peel.ui.theme.Theme
+import com.sphinx.peel.engine.MessageMarkup
 import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -500,7 +501,7 @@ fun ConversationScreen(
             text = draft,
             onTextChange = { draft = it },
             placeholder = if (isAgent) "Ask Peel" else "Message $title",
-            replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to previewContent(target) },
+            replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to MessageMarkup.plainText(previewContent(target)) },
             onCancelReply = { replyTo = null },
             onPickPhoto = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onTakePhoto = {
@@ -949,15 +950,6 @@ private fun canDelete(row: MessageRow, replyCount: Int): Boolean {
     return replyCount < 2
 }
 
-/// The first `http(s)://` link in plain text — a plain scan, not
-/// PeelCore's own full markup parser (`MessageMarkup.firstLink`, built
-/// for a renderer that understands `[text](url)` and the rest of actual
-/// markdown; this port's own message text is always drawn plain, so a
-/// bare URL is the only kind of "link in the text" that can appear at
-/// all).
-private val linkRegex = Regex("""https?://[^\s]+""")
-private fun firstLink(text: String): String? = linkRegex.find(text)?.value?.trimEnd('.', ',', ')', ']', '!', '?')
-
 /// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
 /// (`threadUuid ?? replyUuid ?? uuid`): a message already in a thread
 /// keeps it going; one that's itself a plain reply starts a thread at
@@ -1015,7 +1007,7 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
         val last = replies.maxByOrNull { it.timestamp ?: 0L }
         val lastReply = last?.let {
             val (name, _, hueKey) = senderDisplay(it, myAlias, isTribe = true)
-            val text = previewContent(it).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
+            val text = MessageMarkup.plainText(previewContent(it)).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
             ThreadLastReply(name, hueKey, text)
         }
         ThreadSummaryData(
@@ -1143,10 +1135,14 @@ private fun MessageRowView(
             } else if (!row.deleted && callLink != null) {
                 CallBlock(callLink, engine, onJoinCall)
             } else if (!row.deleted && (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE)) {
-                Text(
+                // Markdown as the iOS app reads it; an @mention of this
+                // account (or @all) lights up. None in the agent chat.
+                val mentionAliases = remember(myAlias, isAgent) {
+                    if (isAgent) emptySet() else com.sphinx.peel.engine.Mentions.ownAliases(myAlias)
+                }
+                com.sphinx.peel.ui.components.MessageText(
                     content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Theme.colors.text,
+                    myAliases = mentionAliases,
                     modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
                 )
             }
@@ -1168,7 +1164,7 @@ private fun MessageRowView(
         // deletable content) — PeelCore's own `MessageMenu`. Opens only
         // for a content row with a uuid at all (the `combinedClickable`
         // above), so nothing here needs to re-check that.
-        val linkToCopy = callLink?.url ?: firstLink(content)
+        val linkToCopy = callLink?.url ?: MessageMarkup.firstLink(content)
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("Reply") }, onClick = { menuOpen = false; onReply() })
             if (onBoost != null) {
@@ -1584,7 +1580,7 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
     ) {
         Text(name, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = PersonHue.of(hueKey).fill)
         Text(
-            if (parent.deleted) "Message deleted" else previewContent(parent),
+            if (parent.deleted) "Message deleted" else MessageMarkup.plainText(previewContent(parent)),
             style = MaterialTheme.typography.labelSmall,
             color = Theme.colors.secondaryText,
             maxLines = 1,

@@ -43,6 +43,8 @@ sections for code that isn't written yet.
     `Invoice.swift`, `Sats.swift`); see `docs/money-parity.md`.
   - `ui/payments/` — the Payments tab, Receive/Send, the QR scanner (CameraX +
     ZXing) and the in-chat payment and request rows.
+  - `engine/MessageMarkup.kt`, `Mentions.kt` — message markdown parser (pure, JVM-tested) and
+    mention helpers; `ui/components/MessageText.kt` draws it (`docs/phases/18-markdown.md`).
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
