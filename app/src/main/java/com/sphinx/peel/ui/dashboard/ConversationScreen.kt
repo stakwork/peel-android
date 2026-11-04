@@ -78,7 +78,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -450,7 +453,7 @@ fun ConversationScreen(
         // Boosts are never a row of their own (PeelCore's own `BoostLineView`
         // shows them as a chip under the message they boost, by its own
         // `replyUuid`) - summed once per `messages` change, not per row.
-        val boosts = remember(messages) { boostSummaries(messages) }
+        val boosts = remember(messages, myAlias, myPhotoUrl, isTribe) { boostSummaries(messages, myAlias, myPhotoUrl, isTribe) }
         // Nor is a thread's own reply ever shown inline, once it's really
         // a thread - PeelCore's own `rows(...)` collapses every message
         // that carries a `threadUuid` behind its root's "N replies" row,
@@ -756,7 +759,7 @@ private fun ThreadScreen(
     // Boosts show and can be sent inside a thread too - a boostable
     // message doesn't stop being one just because it's shown here
     // rather than the main list.
-    val boosts = remember(messages) { boostSummaries(messages) }
+    val boosts = remember(messages, myAlias, myPhotoUrl, isTribe) { boostSummaries(messages, myAlias, myPhotoUrl, isTribe) }
 
     fun sendBoost(target: MessageRow) {
         val targetUuid = target.uuid ?: return
@@ -999,13 +1002,19 @@ private const val VOICE_CANCEL_DISTANCE_DP = 80
 /// `docs/money-parity.md`). PeelCore's `shownInChats` leaves them out too.
 private val HIDDEN_MONEY_TYPES = setOf(3, 7, 8, 9)
 
-private data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean)
+/// One distinct boost sender, as `senderDisplay` describes them.
+internal data class BoostSender(val name: String, val photoUrl: String?, val hueKey: String)
+
+internal data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean, val senders: List<BoostSender> = emptyList())
 
 /// Every boost in `messages`, summed per message it boosts — PeelCore's
 /// `BoostSummary`, trimmed: no pending/unsettled/failed tracking — a
 /// boost is a single send-or-fail message, same as a text send, not
 /// something with its own multi-step delivery state to track.
-private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary> {
+///
+/// `senders` lists each distinct booster (by `hueKey`/name), first-seen
+/// order, for the avatars at the chip's right end.
+internal fun boostSummaries(messages: List<MessageRow>, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Map<String, BoostSummary> {
     val byTarget = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         if (row.type != BOOST_MESSAGE_TYPE) continue
@@ -1013,7 +1022,11 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
         byTarget.getOrPut(target) { mutableListOf() }.add(row)
     }
     return byTarget.mapValues { (_, boosts) ->
-        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe })
+        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe },
+            senders = boosts
+                .map { senderDisplay(it, myAlias, myPhotoUrl, isTribe).let { (name, photoUrl, hueKey) -> BoostSender(name, photoUrl, hueKey) } }
+                .distinctBy { it.hueKey to it.name },
+        )
     }
 }
 
@@ -1728,7 +1741,9 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
 /// lit (the accent colour) when this device's own history has a boost on
 /// it, plain otherwise. No pending/failed states: this port never sends
 /// a new boost yet, so everything shown here already reached its final
-/// state before this device ever saw it.
+/// state before this device ever saw it. Ends with the booster's small
+/// circular avatar (up to 3, overlapping, each ringed in `fieldFill`
+/// when there are several distinct boosters), as on iOS.
 @Composable
 private fun BoostChip(boosts: BoostSummary) {
     Row(
@@ -1741,11 +1756,29 @@ private fun BoostChip(boosts: BoostSummary) {
         Icon(Icons.Filled.Bolt, contentDescription = null, tint = Theme.colors.attention, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(4.dp))
         Text(
-            "${formattedSats(boosts.totalMsat)} sats",
+            buildAnnotatedString {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(formattedSats(boosts.totalMsat)) }
+                append(" sats")
+            },
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
             color = if (boosts.boostedByMe) Theme.colors.accent else Theme.colors.text,
         )
+        if (boosts.senders.isNotEmpty()) {
+            Spacer(Modifier.width(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy((-4).dp)) {
+                for (sender in boosts.senders.take(3)) {
+                    Box(Modifier.clip(CircleShape).background(Theme.colors.fieldFill).padding(1.dp)) {
+                        Avatar(
+                            name = sender.name.ifBlank { "?" },
+                            url = sender.photoUrl,
+                            size = 16.dp,
+                            hue = PersonHue.of(sender.hueKey),
+                            shape = AvatarShape.CIRCLE,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
