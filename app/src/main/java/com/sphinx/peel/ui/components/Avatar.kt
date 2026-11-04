@@ -20,7 +20,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,7 +105,19 @@ fun Avatar(
             )
         } else {
             val multiplier = if (initials.length > 1) 0.38f else if (size < 24.dp) 0.55f else 0.42f
-            Text(initials, color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size.value * multiplier).sp)
+            val fontSize = (size.value * multiplier).sp
+            Text(
+                initials,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                style = TextStyle(
+                    fontSize = fontSize,
+                    lineHeight = fontSize,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
+                ),
+            )
         }
     }
 }

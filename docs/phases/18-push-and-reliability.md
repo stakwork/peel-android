@@ -1,4 +1,4 @@
-# Phase 16 — Push notifications and connection reliability
+# Phase 18 — Push notifications and connection reliability
 
 ## Status (2026-11-04)
 
@@ -73,10 +73,13 @@ pushes fall back to the generic line until that is confirmed on a device.
   (`singleTop`, `onNewIntent`) -> `DeepLink` -> `MainTabs`. POST_NOTIFICATIONS
   asked at launch on 13+.
 - **Reliability** (`Engine`, `Transport`, `ConnectionWatcher`): 30 s MQTT
-  keep-alive; an unexpected drop starts a reconnect loop with exponential
-  backoff (1 s … 60 s + jitter); network change (`NetworkCallback`) and app
-  start (`ProcessLifecycleOwner`) reconnect at once. `start`/`resume` share
-  `establish`.
+  keep-alive; an unexpected drop (`Transport`'s disconnect listener) starts
+  main's `reconnectLoop` (backoff 1 s … 30 s, `ConnectionState.Offline`); a
+  failed first connect starts it too. Network change (`NetworkCallback`) and app
+  start (`ProcessLifecycleOwner`) call `resume()` at once. `start`, `resume` and
+  the loop share `afterConnect` (reads/mutes, restore or catch-up, then
+  `onConnected` for push registration). `Engine.isOnline` is the push's "is the
+  connection up" (`isConnected` only says a transport exists).
 - **Calls** (`call/CallService`): foreground service `microphone|camera` while
   a call is active, with a Leave action; an incoming-call notification with
   `setFullScreenIntent` and a Join action (which opens the chat).

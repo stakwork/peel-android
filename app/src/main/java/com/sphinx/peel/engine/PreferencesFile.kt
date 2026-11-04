@@ -29,10 +29,28 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         /// PeelCore's own `Preference<UInt64>.boostAmountMsat`.
         const val TIP_AMOUNT_KEY = "tip_amount"
 
+        /// Peel-only key (iOS `Preference<UInt64>.paymentConfirmationMsat`):
+        /// payments/boosts over this many msat are confirmed first, in
+        /// whole msat as a JSON string. The official apps keep and ignore it.
+        const val PAYMENT_CONFIRMATION_KEY = "peel.payment_confirmation_msat"
+
+        /// The official apps' own keys (PeelCore `Preferences.pinTimeoutKey` / `biometricKey`).
+        const val PIN_TIMEOUT_KEY = "pin_timeout"
+        const val BIOMETRIC_KEY = "biometric_enabled"
+
         fun parse(text: String): PreferencesFile {
             val root = JSONObject(text)
-            val array = root.optJSONArray("items") ?: JSONArray()
-            val items = (0 until array.length()).mapNotNull { array.optJSONObject(it) }.toMutableList()
+            // PeelCore's `PreferencesFile.init(text:)`: a file the official
+            // apps could not read is refused whole (this throws), so a sync
+            // neither reads nor rewrites it.
+            val array = root.optJSONArray("items") ?: throw IllegalArgumentException("unreadable preferences file")
+            val items = (0 until array.length()).map { index ->
+                val item = array.optJSONObject(index) ?: throw IllegalArgumentException("unreadable preferences file")
+                val readable = item.opt("key") is String && item.opt("identifier") is String && item.opt("date") is String &&
+                    item.opt("value").let { it is String || it is Int || it is Long || it is Boolean || it is JSONObject }
+                if (!readable) throw IllegalArgumentException("unreadable preferences file")
+                item
+            }.toMutableList()
             return PreferencesFile(root, items)
         }
 
@@ -46,12 +64,17 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         /// A whole number as the official apps write one: a JSON string
         /// of digits, or a JSON number they also read — PeelCore's own
         /// `JSONValue.wholeNumber`.
-        private fun wholeNumber(value: Any?): Long? = when (value) {
+        internal fun wholeNumber(value: Any?): Long? = when (value) {
             is String -> value.toLongOrNull()
             is Int -> value.toLong()
             is Long -> value
             else -> null
         }
+
+        /// An item's date in seconds as PeelCore reads it (`readDate`):
+        /// a string `Double` reads, finite; null if it does not read.
+        internal fun readDate(item: JSONObject): Long? =
+            (item.opt("date") as? String)?.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { Math.floor(it).toLong() }
     }
 
     fun text(): String {
@@ -63,35 +86,45 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         return out.toString()
     }
 
-    /// `tip_amount`'s own item for the account-wide identifier, if the
-    /// file has one — the last copy, as the official apps apply every
-    /// item in order and let the last win (`PreferencesFile.merged`'s
-    /// own comment).
-    private fun tipAmountItem(): JSONObject? =
-        items.lastOrNull { it.optString("key") == TIP_AMOUNT_KEY && it.optString("identifier") == ACCOUNT_WIDE }
+    /// The account-wide item for `key`: the last copy, as the official
+    /// apps apply every item in order and let the last win.
+    private fun lastItem(key: String): JSONObject? =
+        items.lastOrNull { it.optString("key") == key && it.optString("identifier") == ACCOUNT_WIDE }
 
-    /// `tip_amount`'s own whole-sats value and date, if the file holds
-    /// one that reads.
-    fun tipAmount(): Pair<Long, Long>? {
-        val item = tipAmountItem() ?: return null
-        val sats = wholeNumber(item.opt("value"))?.takeIf { it > 0 } ?: return null
-        val date = wholeNumber(item.opt("date")) ?: 0L
-        return sats to date
+    /// `key`'s raw string value (or number, as a string) and its date, if
+    /// the file has an item for it. The date is null when it does not read.
+    fun entry(key: String): Pair<String, Long?>? {
+        val item = lastItem(key) ?: return null
+        val value = when (val raw = item.opt("value")) {
+            is String -> raw
+            is Int, is Long -> raw.toString()
+            else -> return null
+        }
+        return value to readDate(item)
     }
 
-    /// Replaces every copy of `tip_amount` (there should only ever be
-    /// one) with a single item carrying `sats`/`dateSeconds` — PeelCore's
-    /// own `Preference<UInt64>.boostAmountMsat.write`: the value is
-    /// whole sats, as a JSON string, never msat and never a raw number.
-    fun setTipAmount(sats: Long, dateSeconds: Long) {
-        items.removeAll { it.optString("key") == TIP_AMOUNT_KEY && it.optString("identifier") == ACCOUNT_WIDE }
+    /// Replaces every copy of `key` with one item (value as a JSON string,
+    /// date as a string of whole seconds, as PeelCore writes them).
+    fun setEntry(key: String, value: String, dateSeconds: Long) {
+        items.removeAll { it.optString("key") == key && it.optString("identifier") == ACCOUNT_WIDE }
         items.add(
             JSONObject().apply {
-                put("key", TIP_AMOUNT_KEY)
+                put("key", key)
                 put("identifier", ACCOUNT_WIDE)
                 put("date", dateSeconds.toString())
-                put("value", sats.toString())
+                put("value", value)
             },
         )
     }
+
+    /// `tip_amount`'s whole-sats value and date, if the file holds one
+    /// that reads (more than zero, no overflow in msat).
+    fun tipAmount(): Pair<Long, Long>? {
+        val (value, date) = entry(TIP_AMOUNT_KEY) ?: return null
+        val sats = PreferencesMerge.TIP.parse(value) ?: return null
+        return sats to (date ?: 0L)
+    }
+
+    /// PeelCore's `Preference<UInt64>.boostAmountMsat.write`: whole sats, as a JSON string.
+    fun setTipAmount(sats: Long, dateSeconds: Long) = setEntry(TIP_AMOUNT_KEY, sats.toString(), dateSeconds)
 }

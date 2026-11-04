@@ -1,4 +1,4 @@
-package com.sphinx.peel.ui.components
+package com.sphinx.peel.ui
 
 import android.app.Activity
 import android.content.Context
@@ -30,15 +30,25 @@ class SecureRefCount {
 
 private val refCount = SecureRefCount()
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
+internal fun Context.findActivity(): Activity? {
+    var current = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }
 
-/// Marks the window FLAG_SECURE while this is in the composition: blocks
-/// screenshots, screen recording and the recents thumbnail for the screens
-/// that show or take the twelve words or the PIN. Ref-counted.
+/// Marks the window FLAG_SECURE while the composable is in the tree: no
+/// screenshots, no screen recording, and a blank thumbnail in Recents.
+/// Reference-counted, because the lock screen can be replaced by a screen
+/// that also asks for it in the same frame (the flag must not flicker off).
+///
+/// Decision (docs/phases/17-lock-hardening.md): FLAG_SECURE on every screen
+/// that shows or takes a secret — lock/PIN, onboarding (words, PIN, restore),
+/// Twelve words, Change PIN, biometric setup. NOT on the whole app: chats are
+/// often screenshotted on purpose; instead the Recents thumbnail alone is
+/// hidden app-wide on API 33+ (`MainActivity`).
 @Composable
 fun SecureWindow() {
     val activity = LocalContext.current.findActivity()
@@ -51,11 +61,4 @@ fun SecureWindow() {
             if (window != null && refCount.release()) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
-}
-
-/// Wraps sensitive content in [SecureWindow].
-@Composable
-fun SecureScreen(content: @Composable () -> Unit) {
-    SecureWindow()
-    content()
 }

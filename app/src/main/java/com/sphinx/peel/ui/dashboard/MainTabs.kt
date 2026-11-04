@@ -59,6 +59,7 @@ import com.sphinx.peel.ui.call.chat
 import com.sphinx.peel.ui.call.link
 import com.sphinx.peel.ui.call.title
 import com.sphinx.peel.ui.theme.Theme
+import com.sphinx.peel.ui.payments.PaymentsScreen
 import com.sphinx.peel.ui.you.YouScreen
 import kotlin.coroutines.resume
 import kotlinx.coroutines.launch
@@ -236,7 +237,7 @@ fun MainTabs(
                 Box(Modifier.weight(1f)) {
                     when (tab) {
                         MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
-                        MainTab.PAYMENTS -> NotBuiltYet("Payments")
+                        MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize())
                         MainTab.YOU -> YouScreen(engine, storage, secretStore, onForgotten)
                         MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                     }
@@ -244,13 +245,6 @@ fun MainTabs(
                 BottomBar(tab) { tab = it }
             }
         }
-    }
-}
-
-@Composable
-private fun NotBuiltYet(title: String) {
-    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-        Text("$title isn't built yet.", color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

@@ -1,6 +1,5 @@
 package com.sphinx.peel.ui.onboarding
 
-import com.sphinx.peel.ui.components.SecureWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,6 +73,7 @@ private sealed class Step {
 /// screen; a new account instead continues on to show its words first.
 @Composable
 fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady: (engine: Engine) -> Unit) {
+    com.sphinx.peel.ui.SecureWindow()
     var path by remember { mutableStateOf(Path.NEW_ACCOUNT) }
     var step by remember { mutableStateOf<Step>(Step.Welcome) }
     var enteredWords by remember { mutableStateOf(List(12) { "" }) }
@@ -86,7 +86,6 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
     var working by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    SecureWindow()
 
     fun back() {
         problem = null

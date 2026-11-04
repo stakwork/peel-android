@@ -10,7 +10,7 @@ import com.sphinx.peel.push.MessageNotifier
 import com.sphinx.peel.push.Notifications
 import com.sphinx.peel.push.PushRegistrar
 import com.sphinx.peel.ui.dashboard.DeepLink
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,7 +38,9 @@ import com.sphinx.peel.ui.onboarding.OnboardingScreen
 import com.sphinx.peel.ui.onboarding.RestoringAccountScreen
 import com.sphinx.peel.ui.theme.PeelTheme
 
-class MainActivity : ComponentActivity() {
+/// A FragmentActivity (still a ComponentActivity, `setContent` works) because
+/// BiometricPrompt needs one.
+class MainActivity : FragmentActivity() {
     /// What a tapped notification asked for, until `MainTabs` has opened it.
     private var deepLink by mutableStateOf<DeepLink?>(null)
 
@@ -53,6 +55,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // No chat contents in the Recents thumbnail (API 33+). Screens that show
+        // a secret are additionally FLAG_SECURE (`SecureWindow`).
+        if (android.os.Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
         Notifications.createChannels(applicationContext)
         // Android 13+: asked once, here, as iOS asks once when an account opens.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Notifications.permitted(this)) {
@@ -79,6 +84,8 @@ class MainActivity : ComponentActivity() {
 private sealed class Screen {
     object Onboarding : Screen()
     object Lock : Screen()
+    /// Idle past the PIN timeout: the engine keeps running behind the lock.
+    data class Relock(val engine: Engine) : Screen()
     data class Restoring(val engine: Engine) : Screen()
     data class Home(val engine: Engine) : Screen()
 }
@@ -102,9 +109,12 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage, deepLink: DeepLi
             screen = if (engine.restoreProgress.value.restoring) Screen.Restoring(engine) else Screen.Home(engine)
         }
         Screen.Lock -> LockScreen(secretStore, storage) { engine -> screen = Screen.Home(engine) }
+        is Screen.Relock -> LockScreen(secretStore, storage, existing = current.engine) { engine -> screen = Screen.Home(engine) }
         is Screen.Restoring -> RestoringAccountScreen(current.engine) { screen = Screen.Home(current.engine) }
         is Screen.Home -> {
             KeepConnected(current.engine, storage)
+            RelockWhenIdle(current.engine) { screen = Screen.Relock(current.engine) }
+            BiometricHousekeeping(current.engine, secretStore)
             MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { screen = Screen.Onboarding }
         }
     }
@@ -127,5 +137,46 @@ private fun KeepConnected(engine: Engine, storage: Storage) {
             notifier.detach()
             PushRegistrar.accountClosed()
         }
+    }
+}
+
+/// The PIN timeout (`PinTimeout`): remembers when the app left the screen
+/// and, on coming back after longer than the setting, asks for the PIN (or a
+/// biometric) again. Monotonic time, so changing the clock does not help.
+/// iOS also re-locks an app left open in front; here only time spent in the
+/// background counts (a gap, docs/phases/17-lock-hardening.md).
+@Composable
+private fun RelockWhenIdle(engine: Engine, relock: () -> Unit) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(engine, lifecycleOwner) {
+        var stoppedAt = -1L
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> stoppedAt = android.os.SystemClock.elapsedRealtime()
+                Lifecycle.Event.ON_START -> {
+                    if (stoppedAt >= 0) {
+                        val idle = android.os.SystemClock.elapsedRealtime() - stoppedAt
+                        if (com.sphinx.peel.account.PinTimeout.isLockDue(engine.pinTimeoutHours(), idle)) relock()
+                    }
+                    stoppedAt = -1L
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+}
+
+/// Tells the engine whether this device can offer biometrics (so
+/// `biometric_enabled` syncs), and applies the synced wish's "off": another
+/// device turning biometric unlock off turns it off here too. A synced "on"
+/// is only offered in You, never enrolled without the PIN (PeelCore decision 10).
+@Composable
+private fun BiometricHousekeeping(engine: Engine, secretStore: SecretStore) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(engine) {
+        engine.syncsBiometrics = com.sphinx.peel.ui.lock.BiometricUnlock.available(context)
+        if (engine.biometricWish() == false && secretStore.biometricEnrolled) secretStore.disableBiometric()
     }
 }

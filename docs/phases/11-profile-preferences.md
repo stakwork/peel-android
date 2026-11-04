@@ -1,5 +1,19 @@
 # Phase 11 — Profile and preferences sync
 
+## Status (2026-11-02): sync widened
+
+Syncs now (both directions, `PreferencesMerge` + `Engine.syncPreferences`,
+same rules as iOS): `tip_amount` and `peel.payment_confirmation_msat`
+(Confirm payments; only taken from the file when stricter, like iOS).
+The default boost is 100 sats again (iOS's `defaultBoostAmountMsat`);
+the earlier "10 sats, the user's choice" note below is superseded.
+`PreferencesFile` parsing now refuses a file the official apps could not
+read, and dates are read like iOS (`Double` seconds, capped a day ahead).
+Left: `pin_timeout`, `biometric_enabled`, `ai_agent_config`, `timezone`,
+`peel.time_zone`, `chat_color` — Android has no matching feature. Not
+unit-tested: the engine glue (needs native lib/server). See
+`docs/money-parity.md` for the key table.
+
 ## Status (2026-10-29)
 
 **Built:** the "You" tab stopped being a dev placeholder (pubkey,
@@ -123,6 +137,36 @@ check words again. A real, previously invisible gap this round's own
 report or a test. Fixed: the `RESTORE` branch now writes both settings
 in the one commit.
 
+**Update (2026-10-30), Profile rework to match iOS:** `YouScreen.kt`
+rebuilt after the iOS screenshots: centred "You" title, header without
+the pubkey, thousands-grouped balance ("5.179 sats", `YouOptions.groupedSats`),
+Agent card, one Account card with inset dividers (Twelve words, Change
+PIN, Fingerprint, Ask for the PIN, Boost amount, Confirm payments,
+Server), a Debug card ("Force test crash" throws
+`RuntimeException("Test crash")` from its click handler, a debug aid kept
+visible like iOS) and "Forget this account" in its own card. Twelve words
+is now intro ("Show words") -> PIN -> "Your twelve words" (2-column grid,
+"Hides in N s" countdown from 30, Reveal/Hide; SecureWindow, hide on
+`ON_STOP`, clearing chars all unchanged). Change PIN uses the round back
+button. Boost amount is a full screen (presets 10/50/100/500/1.000 with a
+check, "Another amount" input, same whole-sats > 0 validation) instead of
+a dialog. `PinPad` got outlined empty dots, a Backspace icon key and a
+bold title (affects the lock screen too, as on iOS). New pure helpers in
+`ui/you/YouOptions.kt` with `YouOptionsTest`.
+
+*Persisted but not enforced:* "Ask for the PIN" (`Setting.PIN_TIMEOUT_HOURS`,
+unset = never) — there is still no re-lock-after-timeout in
+`MainActivity`/`LockScreen`; "Confirm payments"
+(`Setting.PAYMENT_CONFIRMATION_MSAT`, unset = over 100 sats) — no payment
+flow checks it. Neither syncs between devices.
+
+*Not ported:* Stadeum section (left for later); "Auto download media"
+(row is commented out in `YouScreen.kt` with a TODO and a commented
+`Setting` key — Android has no auto-download); Fingerprint — the row
+renders a disabled, off switch because `androidx.biometric` is not a
+dependency and `SecretStore` has no biometric-bound key (no "Turn on"
+action either). Not compiled or run when written.
+
 **Open:**
 
 - Only `tip_amount` syncs. PeelCore's own registry also covers Face
@@ -206,10 +250,8 @@ in the one commit.
 - The boost menu says just "Boost", not "Boost N sats" — the user's
   own explicit call, unlike PeelCore's own menu
   (`quickBoostLabel`), which does name the amount.
-- The boost default changed from 100 sats (PeelCore's own
-  `defaultBoostAmountMsat`) to 10 — also the user's own explicit
-  choice for this port, not a porting mistake; see
-  `BOOST_AMOUNT_MSAT`'s own doc comment in `Attachment.kt`.
+- (Superseded 2026-11-02: the boost default is back to 100 sats, as on
+  iOS; it had been 10 by an earlier explicit choice.)
 
 ## Journal
 

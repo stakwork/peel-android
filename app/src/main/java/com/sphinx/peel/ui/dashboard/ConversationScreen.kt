@@ -62,6 +62,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -69,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -79,8 +81,15 @@ import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
 import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
+import com.sphinx.peel.engine.declaredAmountMsat
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.DIRECT_PAYMENT_MESSAGE_TYPE
+import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
+import com.sphinx.peel.ui.payments.ChatMoneyAction
+import com.sphinx.peel.ui.payments.ChatMoneyDialog
+import com.sphinx.peel.ui.payments.PaymentMessage
+import com.sphinx.peel.ui.payments.RequestMessage
 import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
@@ -88,6 +97,9 @@ import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AudioPlayer
+import com.sphinx.peel.ui.components.VideoAttachment
+import com.sphinx.peel.ui.components.ZoomableImageDialog
+import com.sphinx.peel.ui.components.readMediaDurationMs
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.call.CallScreen
@@ -126,6 +138,7 @@ fun ConversationScreen(
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
     var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
+    var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
     val audioPlayer = remember(chat) { AudioPlayer() }
@@ -334,7 +347,7 @@ fun ConversationScreen(
     if (openRoot != null) {
         ThreadScreen(
             engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, audioPlayer = audioPlayer,
-            threadRootUuid = openRoot, messages = messages,
+            chatName = title, threadRootUuid = openRoot, messages = messages,
             onBack = { openThreadRoot = null },
             onSent = { scope.launch { reload() } },
             onJoinCall = { link -> onJoinCall(chat, title, link, false) },
@@ -406,7 +419,7 @@ fun ConversationScreen(
         // active chat bumping to the bottom.
         val threads = remember(messages, isTribe, myAlias) { if (isTribe) threadSummaries(messages, myAlias) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
-            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
 
@@ -454,9 +467,13 @@ fun ConversationScreen(
                 if (index == newMessageIndex) NewMessagesDivider()
                 val replyUuid = row.replyUuid
                 val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
+                val next = displayedMessages.getOrNull(index + 1)
+                val endsRun = next == null || !isSameDay(row.timestamp, next.timestamp) ||
+                    runSenderKey(row) != runSenderKey(next) ||
+                    ((next.timestamp ?: 0L) - (row.timestamp ?: 0L) > 5 * 60 * 1000L)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                     replyUuid = replyUuid, parent = parent, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts,
                     threadSummary = row.uuid?.let { threads[it] },
@@ -465,6 +482,7 @@ fun ConversationScreen(
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                     onJoinCall = { link -> onJoinCall(chat, title, link, false) },
                     onDelete = { deleteMessage(row) },
+                    onMoneyError = { error = it },
                 )
             }
         }
@@ -498,6 +516,8 @@ fun ConversationScreen(
             onReleaseRecord = { voiceRecorder.release() },
             onCancelRecord = { voiceRecorder.cancel() },
             sendingLabel = sendingLabel,
+            onSendSats = { moneyAction = ChatMoneyAction.SEND }.takeIf { !isTribe && !isAgent },
+            onRequestSats = { moneyAction = ChatMoneyAction.REQUEST }.takeIf { !isTribe && !isAgent },
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
@@ -518,6 +538,13 @@ fun ConversationScreen(
                 }
             },
         )
+        moneyAction?.let { action ->
+            ChatMoneyDialog(
+                action, engine, chat, title,
+                onDismiss = { moneyAction = null },
+                onDone = { moneyAction = null; scope.launch { reload() } },
+            )
+        }
     }
 }
 
@@ -537,6 +564,7 @@ private fun ThreadScreen(
     isAgent: Boolean,
     myAlias: String,
     audioPlayer: AudioPlayer,
+    chatName: String,
     threadRootUuid: String,
     messages: List<MessageRow>,
     onBack: () -> Unit,
@@ -690,6 +718,7 @@ private fun ThreadScreen(
         ) {
             Column(Modifier.weight(1f)) {
                 Text("Thread", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+                Text("#$chatName", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText, maxLines = 1)
             }
             IconButton(onClick = onBack) {
                 Icon(Icons.Filled.Close, contentDescription = "Close", tint = Theme.colors.secondaryText)
@@ -725,7 +754,7 @@ private fun ThreadScreen(
                     // collapsed row in the *main* list, not itself, inside
                     // the thread sheet that's already open because of it.
                     MessageRowView(
-                        row = root, startsRun = true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                        row = root, startsRun = true, endsRun = replies.firstOrNull()?.let { runSenderKey(root) != runSenderKey(it) } ?: true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                         replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                         boosts = rootBoosts, threadSummary = null, deleteReplyCount = replies.size,
                         onOpenThread = {}, onReply = {},
@@ -748,9 +777,11 @@ private fun ThreadScreen(
             itemsIndexed(replies, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
                 val previous = replies.getOrNull(index - 1) ?: root
                 val startsRun = previous == null || runSenderKey(previous) != runSenderKey(row)
+                val next = replies.getOrNull(index + 1)
+                val endsRun = next == null || runSenderKey(row) != runSenderKey(next)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
                     replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
@@ -864,6 +895,12 @@ private fun isThreadContent(row: MessageRow): Boolean {
 /// `VoiceMessage.cancelDistance` (80 points).
 private const val VOICE_CANCEL_DISTANCE_DP = 80
 
+/// Money messages that are bookkeeping, not a row: the type-3 note a payer's
+/// app sends once a request is paid (it flips the request to Paid), and the
+/// paid-attachment purchase messages (7, 8, 9: not supported here,
+/// `docs/money-parity.md`). PeelCore's `shownInChats` leaves them out too.
+private val HIDDEN_MONEY_TYPES = setOf(3, 7, 8, 9)
+
 private data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean)
 
 /// Every boost in `messages`, summed per message it boosts — PeelCore's
@@ -878,7 +915,7 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
         byTarget.getOrPut(target) { mutableListOf() }.add(row)
     }
     return byTarget.mapValues { (_, boosts) ->
-        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: 0L }, boostedByMe = boosts.any { it.fromMe })
+        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe })
     }
 }
 
@@ -935,7 +972,14 @@ private fun threadRoot(row: MessageRow): String = row.threadUuid ?: row.replyUui
 /// participant avatars.
 private data class ThreadParticipant(val name: String, val photoUrl: String?, val hueKey: String)
 
-private data class ThreadSummaryData(val replyCount: Int, val lastTimestamp: Long?, val participants: List<ThreadParticipant>)
+private data class ThreadLastReply(val senderName: String, val hueKey: String, val text: String)
+
+private data class ThreadSummaryData(
+    val replyCount: Int,
+    val lastTimestamp: Long?,
+    val participants: List<ThreadParticipant>,
+    val lastReply: ThreadLastReply? = null,
+)
 
 /// Every REAL thread among `messages` (2+ messages), by its root's uuid
 /// — PeelCore's own `ThreadSummary`, trimmed: no unread count (Phase
@@ -968,7 +1012,14 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
                 if (participants.size == 3) break
             }
         }
+        val last = replies.maxByOrNull { it.timestamp ?: 0L }
+        val lastReply = last?.let {
+            val (name, _, hueKey) = senderDisplay(it, myAlias, isTribe = true)
+            val text = previewContent(it).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
+            ThreadLastReply(name, hueKey, text)
+        }
         ThreadSummaryData(
+            lastReply = lastReply,
             replyCount = replies.size,
             lastTimestamp = replies.mapNotNull { it.timestamp }.maxOrNull(),
             participants = participants,
@@ -992,6 +1043,7 @@ private fun rowSortKey(row: MessageRow, threads: Map<String, ThreadSummaryData>)
 private fun MessageRowView(
     row: MessageRow,
     startsRun: Boolean,
+    endsRun: Boolean,
     isAgent: Boolean,
     isTribe: Boolean,
     myAlias: String,
@@ -1006,6 +1058,7 @@ private fun MessageRowView(
     onBoost: (() -> Unit)? = null,
     onJoinCall: (CallLink) -> Unit = {},
     onDelete: (() -> Unit)? = null,
+    onMoneyError: (String) -> Unit = {},
     deleteReplyCount: Int = threadSummary?.replyCount ?: 0,
 ) {
     val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
@@ -1031,7 +1084,7 @@ private fun MessageRowView(
                 .fillMaxWidth()
                 .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
                 .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null && !row.deleted) menuOpen = true })
-                .padding(top = if (startsRun) 8.dp else 1.dp, bottom = 2.dp),
+                .padding(top = if (startsRun) 8.dp else 1.dp, bottom = if (endsRun) 2.dp else 7.dp),
         ) {
         Box(Modifier.width(32.dp)) {
             if (startsRun) {
@@ -1056,6 +1109,15 @@ private fun MessageRowView(
                     if (time != null) {
                         Spacer(Modifier.width(6.dp))
                         Text(time, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                        if (row.fromMe && row.status == "DELIVERED") {
+                            Spacer(Modifier.width(3.dp))
+                            Icon(
+                                Icons.Filled.Bolt,
+                                contentDescription = "Delivered",
+                                tint = Theme.colors.confirmed,
+                                modifier = Modifier.size(10.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -1074,7 +1136,11 @@ private fun MessageRowView(
                 AttachmentView(row, engine, audioPlayer)
                 if (content.isNotEmpty()) Spacer(Modifier.height(4.dp))
             }
-            if (!row.deleted && callLink != null) {
+            if (!row.deleted && row.type == DIRECT_PAYMENT_MESSAGE_TYPE) {
+                PaymentMessage(row, name)
+            } else if (!row.deleted && row.type == INVOICE_MESSAGE_TYPE) {
+                RequestMessage(row, name, engine, engine.storage, onError = onMoneyError)
+            } else if (!row.deleted && callLink != null) {
                 CallBlock(callLink, engine, onJoinCall)
             } else if (!row.deleted && (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE)) {
                 Text(
@@ -1182,10 +1248,10 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
 /// `ThreadSummaryButton`.
 @Composable
 private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
-    Row(
-        Modifier.clickable(onClick = onClick).padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val timeContext = androidx.compose.ui.platform.LocalContext.current
+    val time = summary.lastTimestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
+    Column(Modifier.clickable(onClick = onClick).padding(vertical = 2.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         if (summary.participants.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) {
                 summary.participants.forEach { participant ->
@@ -1203,6 +1269,25 @@ private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.accent,
         )
+        if (time != null) {
+            Spacer(Modifier.width(6.dp))
+            Text(time, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+        }
+    }
+    summary.lastReply?.takeIf { it.text.isNotEmpty() }?.let { last ->
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = PersonHue.of(last.hueKey).fill, fontWeight = FontWeight.Bold))
+                append("${last.senderName}: ")
+                pop()
+                append(last.text)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = Theme.colors.secondaryText,
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+    }
     }
 }
 
@@ -1310,6 +1395,8 @@ private fun AttachmentPlaceholder(isError: Boolean = false, content: @Composable
 @Composable
 private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: AudioPlayer) {
     if (attachment.kind == AttachmentKind.IMAGE) {
+        var zoomed by remember(attachment.file) { mutableStateOf(false) }
+        if (zoomed) ZoomableImageDialog(attachment.file) { zoomed = false }
         AsyncImage(
             model = attachment.file,
             contentDescription = attachment.fileName ?: "Image",
@@ -1318,8 +1405,13 @@ private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: Aud
                 .fillMaxWidth()
                 .heightIn(max = 240.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Theme.colors.fieldFill),
+                .background(Theme.colors.fieldFill)
+                .clickable { zoomed = true },
         )
+        return
+    }
+    if (attachment.kind == AttachmentKind.VIDEO) {
+        VideoAttachment(attachment.file)
         return
     }
     if (attachment.kind == AttachmentKind.AUDIO) {
@@ -1360,50 +1452,62 @@ private fun AudioAttachmentRow(attachment: DownloadedAttachment, audioPlayer: Au
     val isThis = audioPlayer.playingFile == attachment.file
     val playing = isThis && audioPlayer.isPlaying
     val position = if (isThis) audioPlayer.positionMs else 0
-    val duration = if (isThis && audioPlayer.durationMs > 0) audioPlayer.durationMs else 0
+    val fileDuration by produceState(0, attachment.file) { value = readMediaDurationMs(attachment.file) }
+    val duration = if (isThis && audioPlayer.durationMs > 0) audioPlayer.durationMs else fileDuration
     // Dragging sets this so the thumb follows the finger instead of
     // snapping back to the player's own (slower-to-update) position
     // until the drag lands.
     var dragPosition by remember(attachment.file) { mutableStateOf<Float?>(null) }
+    val shown = dragPosition?.let { (it * duration).toInt() } ?: position
 
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(Theme.colors.fieldFill)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { scope.launch { audioPlayer.toggle(attachment.file) } }, modifier = Modifier.size(36.dp)) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Theme.colors.accent)
+                .clickable { scope.launch { audioPlayer.toggle(attachment.file) } },
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
                 if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                 contentDescription = if (playing) "Pause" else "Play",
-                tint = Theme.colors.accent,
+                tint = Color.White,
             )
         }
-        Spacer(Modifier.width(4.dp))
-        Slider(
-            value = dragPosition ?: (if (duration > 0) position.toFloat() / duration else 0f),
-            onValueChange = { dragPosition = it },
-            onValueChangeFinished = {
-                val target = dragPosition
-                if (target != null && duration > 0) audioPlayer.seekTo((target * duration).toInt())
-                dragPosition = null
-            },
-            modifier = Modifier.weight(1f).height(24.dp),
-            colors = SliderDefaults.colors(
-                thumbColor = Theme.colors.accent,
-                activeTrackColor = Theme.colors.accent,
-                inactiveTrackColor = Theme.colors.inputBorder,
-            ),
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            formatDuration(if (duration > 0) (dragPosition?.let { (it * duration).toInt() } ?: position) else 0),
-            style = MaterialTheme.typography.labelSmall,
-            color = Theme.colors.secondaryText,
-            modifier = Modifier.width(36.dp),
-        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Slider(
+                value = dragPosition ?: (if (duration > 0) position.toFloat() / duration else 0f),
+                onValueChange = { dragPosition = it },
+                onValueChangeFinished = {
+                    val target = dragPosition
+                    if (target != null && duration > 0) {
+                        if (!isThis) scope.launch { audioPlayer.toggle(attachment.file); audioPlayer.seekTo((target * duration).toInt()) }
+                        else audioPlayer.seekTo((target * duration).toInt())
+                    }
+                    dragPosition = null
+                },
+                modifier = Modifier.fillMaxWidth().height(24.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = Theme.colors.accent,
+                    activeTrackColor = Theme.colors.accent,
+                    inactiveTrackColor = Theme.colors.inputBorder,
+                ),
+            )
+            Text(
+                "${formatDuration(shown)} / ${formatDuration(duration)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Theme.colors.secondaryText,
+            )
+        }
     }
 }
 
@@ -1555,6 +1659,10 @@ private fun Composer(
     onCancelRecord: () -> Unit,
     sendingLabel: String?,
     onSend: () -> Unit,
+    /// Sats to a person (a DM, not a tribe or the agent): the attach menu's
+    /// "Send sats" and "Request sats". Null hides them.
+    onSendSats: (() -> Unit)? = null,
+    onRequestSats: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         if (replyTarget != null) {
@@ -1604,6 +1712,8 @@ private fun Composer(
                     // app has no dedicated video picker either; a video
                     // reaches the send path through this same option there.
                     DropdownMenuItem(text = { Text("File") }, onClick = { attachMenuOpen = false; onPickFile() })
+                    if (onSendSats != null) DropdownMenuItem(text = { Text("Send sats") }, onClick = { attachMenuOpen = false; onSendSats() })
+                    if (onRequestSats != null) DropdownMenuItem(text = { Text("Request sats") }, onClick = { attachMenuOpen = false; onRequestSats() })
                 }
             }
             Box(

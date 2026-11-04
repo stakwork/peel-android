@@ -28,7 +28,7 @@ class PeelMessagingService : FirebaseMessagingService() {
         val app = applicationContext
         val engine = PushRegistrar.activeEngine()
         val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-        val plan = PushPlan.decide(engineOpen = engine != null, connected = engine?.isConnected == true, foreground = foreground)
+        val plan = PushPlan.decide(engineOpen = engine != null, connected = engine?.isOnline == true, foreground = foreground)
         if (plan.reconnect) engine?.resume()
         if (!plan.postResolved) return
         val data = message.data
