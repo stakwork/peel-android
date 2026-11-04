@@ -2,10 +2,12 @@ package com.sphinx.peel.ui.dashboard
 
 import android.content.Intent
 import android.webkit.MimeTypeMap
+import com.sphinx.peel.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -58,6 +60,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -93,6 +96,7 @@ import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.declaredAmountMsat
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.DELETE_MESSAGE_TYPE
 import com.sphinx.peel.engine.DIRECT_PAYMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
 import com.sphinx.peel.ui.payments.ChatMoneyAction
@@ -107,6 +111,8 @@ import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AudioPlayer
 import com.sphinx.peel.ui.components.VideoAttachment
+import com.sphinx.peel.ui.components.mediaBubble
+import com.sphinx.peel.ui.components.readImageSize
 import com.sphinx.peel.ui.components.ZoomableImageDialog
 import com.sphinx.peel.ui.components.readMediaDurationMs
 import com.sphinx.peel.ui.components.AvatarShape
@@ -117,6 +123,7 @@ import com.sphinx.peel.ui.components.formatDuration
 import com.sphinx.peel.ui.components.prepareImageForSending
 import com.sphinx.peel.ui.components.VoiceRecorder
 import com.sphinx.peel.ui.theme.Theme
+import com.sphinx.peel.engine.MessageMarkup
 import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -185,6 +192,14 @@ fun ConversationScreen(
         engine.markRead(chat)
     }
     LaunchedEffect(chat, restoreProgress) { reload() }
+    // Entering a chat: ask the server what became of its unconfirmed sends,
+    // so their bolts settle (PeelCore's `AppModel.selectedChat` didSet). The
+    // engine also asks on foreground, reconnect and history pages via `openChat`.
+    DisposableEffect(chat) {
+        engine.openChat = chat
+        onDispose { if (engine.openChat == chat) engine.openChat = null }
+    }
+    LaunchedEffect(chat) { engine.checkOwnMessageStatus(chat) }
     LaunchedEffect(chat) {
         while (true) {
             delay(3_000)
@@ -356,6 +371,13 @@ fun ConversationScreen(
         }
     }
 
+    val listState = rememberLazyListState()
+    // Hidden until the first load is positioned at the bottom (no
+    // visible scroll); afterwards only follow a new message when the
+    // user is already at the bottom or sent it themselves.
+    var positioned by remember(chat) { mutableStateOf(false) }
+    var previousLast by remember(chat) { mutableStateOf(-1) }
+
     val openRoot = openThreadRoot
     if (openRoot != null) {
         ThreadScreen(
@@ -432,25 +454,16 @@ fun ConversationScreen(
         // active chat bumping to the bottom.
         val threads = remember(messages, isTribe, myAlias) { if (isTribe) threadSummaries(messages, myAlias) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
-            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type != DELETE_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
 
         // Only our own first crossing into "new" gets the line - PeelCore's
         // own `rows(...)` clears `newAfter` the moment one row claims it.
         val newMessageIndex = remember(displayedMessages, newAfterIndex) {
-            newAfterIndex?.let { after ->
-                displayedMessages.indexOfFirst { !it.fromMe && it.type != BOOST_MESSAGE_TYPE && (it.serverIndex ?: -1L) > after }
-                    .takeIf { it >= 0 }
-            }
+            newMessagesIndex(displayedMessages, newAfterIndex, BOOST_MESSAGE_TYPE)
         }
 
-        val listState = rememberLazyListState()
-        // Hidden until the first load is positioned at the bottom (no
-        // visible scroll); afterwards only follow a new message when the
-        // user is already at the bottom or sent it themselves.
-        var positioned by remember(chat) { mutableStateOf(false) }
-        var previousLast by remember(chat) { mutableStateOf(-1) }
         LaunchedEffect(displayedMessages.size) {
             val last = displayedMessages.size - 1
             if (last < 0) return@LaunchedEffect
@@ -463,6 +476,7 @@ fun ConversationScreen(
             }
             previousLast = last
         }
+        KeepAtBottomOnKeyboard(listState, displayedMessages.size - 1)
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
@@ -514,7 +528,7 @@ fun ConversationScreen(
             onTextChange = { draft = it },
             members = mentionMembers,
             placeholder = if (isAgent) "Ask Peel" else "Message $title",
-            replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to previewContent(target) },
+            replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to MessageMarkup.plainText(previewContent(target)) },
             onCancelReply = { replyTo = null },
             onPickPhoto = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onTakePhoto = {
@@ -542,6 +556,8 @@ fun ConversationScreen(
                 draft = ""
                 replyTo = null
                 error = null
+                // Sending reads the chat: "New messages" has done its job.
+                newAfterIndex = null
                 scope.launch {
                     try {
                         engine.sendMessage(chat, toSend, isTribe, replyUuid, inThread)
@@ -755,6 +771,7 @@ private fun ThreadScreen(
             }
             previousLast = last
         }
+        KeepAtBottomOnKeyboard(listState, replies.size)
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
@@ -986,28 +1003,6 @@ private fun chatMentionMembers(
     return byName.values.toList()
 }
 
-/// Message text with each `@mention` highlighted — PeelCore's `\B@[^\s]+`
-/// highlight, in the accent colour on a faint accent background.
-private fun highlightMentions(content: String, accent: Color): androidx.compose.ui.text.AnnotatedString =
-    androidx.compose.ui.text.buildAnnotatedString {
-        append(content)
-        for (m in mentionRegex.findAll(content)) {
-            addStyle(
-                androidx.compose.ui.text.SpanStyle(color = accent, background = accent.copy(alpha = 0.25f)),
-                m.range.first, m.range.last + 1,
-            )
-        }
-    }
-
-/// The first `http(s)://` link in plain text — a plain scan, not
-/// PeelCore's own full markup parser (`MessageMarkup.firstLink`, built
-/// for a renderer that understands `[text](url)` and the rest of actual
-/// markdown; this port's own message text is always drawn plain, so a
-/// bare URL is the only kind of "link in the text" that can appear at
-/// all).
-private val linkRegex = Regex("""https?://[^\s]+""")
-private fun firstLink(text: String): String? = linkRegex.find(text)?.value?.trimEnd('.', ',', ')', ']', '!', '?')
-
 /// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
 /// (`threadUuid ?? replyUuid ?? uuid`): a message already in a thread
 /// keeps it going; one that's itself a plain reply starts a thread at
@@ -1065,7 +1060,7 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
         val last = replies.maxByOrNull { it.timestamp ?: 0L }
         val lastReply = last?.let {
             val (name, _, hueKey) = senderDisplay(it, myAlias, isTribe = true)
-            val text = previewContent(it).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
+            val text = MessageMarkup.plainText(previewContent(it)).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
             ThreadLastReply(name, hueKey, text)
         }
         ThreadSummaryData(
@@ -1193,11 +1188,14 @@ private fun MessageRowView(
             } else if (!row.deleted && callLink != null) {
                 CallBlock(callLink, engine, onJoinCall)
             } else if (!row.deleted && (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE)) {
-                val accent = Theme.colors.accent
-                Text(
-                    remember(content, accent) { highlightMentions(content, accent) },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Theme.colors.text,
+                // Markdown as the iOS app reads it; an @mention of this
+                // account (or @all) lights up. None in the agent chat.
+                val mentionAliases = remember(myAlias, isAgent) {
+                    if (isAgent) emptySet() else com.sphinx.peel.engine.Mentions.ownAliases(myAlias)
+                }
+                com.sphinx.peel.ui.components.MessageText(
+                    content,
+                    myAliases = mentionAliases,
                     modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
                 )
             }
@@ -1219,7 +1217,7 @@ private fun MessageRowView(
         // deletable content) — PeelCore's own `MessageMenu`. Opens only
         // for a content row with a uuid at all (the `combinedClickable`
         // above), so nothing here needs to re-check that.
-        val linkToCopy = callLink?.url ?: firstLink(content)
+        val linkToCopy = callLink?.url ?: MessageMarkup.firstLink(content)
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("Reply") }, onClick = { menuOpen = false; onReply() })
             if (onBoost != null) {
@@ -1366,13 +1364,26 @@ private fun dayHeading(timestamp: Long): String {
 
 @Composable
 private fun DayDivider(timestamp: Long) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.Center) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Theme.colors.divider.copy(alpha = 0.25f))
+            .padding(vertical = 8.dp, horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
         Text(
             dayHeading(timestamp),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.secondaryText,
+            modifier = Modifier
+                .padding(horizontal = 10.dp)
+                .border(0.5.dp, Theme.colors.divider, RoundedCornerShape(50))
+                .background(Theme.colors.background, RoundedCornerShape(50))
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         )
+        HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
     }
 }
 
@@ -1383,13 +1394,12 @@ private fun NewMessagesDivider() {
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
         Text(
-            "New messages",
+            stringResource(R.string.new_messages),
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Bold,
             color = Theme.colors.accent,
-            modifier = Modifier.padding(horizontal = 8.dp),
+            modifier = Modifier.padding(start = 10.dp),
         )
-        HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
     }
 }
 
@@ -1448,13 +1458,13 @@ private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: Aud
     if (attachment.kind == AttachmentKind.IMAGE) {
         var zoomed by remember(attachment.file) { mutableStateOf(false) }
         if (zoomed) ZoomableImageDialog(attachment.file) { zoomed = false }
+        val size by produceState<Pair<Int, Int>?>(null, attachment.file) { value = readImageSize(attachment.file) }
         AsyncImage(
             model = attachment.file,
             contentDescription = attachment.fileName ?: "Image",
-            contentScale = ContentScale.Fit,
+            contentScale = ContentScale.Crop,
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 240.dp)
+                .mediaBubble(size?.first ?: 0, size?.let { it.first.toFloat() / it.second } ?: (4f / 3f))
                 .clip(RoundedCornerShape(10.dp))
                 .background(Theme.colors.fieldFill)
                 .clickable { zoomed = true },
@@ -1635,7 +1645,7 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
     ) {
         Text(name, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = PersonHue.of(hueKey).fill)
         Text(
-            if (parent.deleted) "Message deleted" else previewContent(parent),
+            if (parent.deleted) "Message deleted" else MessageMarkup.plainText(previewContent(parent)),
             style = MaterialTheme.typography.labelSmall,
             color = Theme.colors.secondaryText,
             maxLines = 1,

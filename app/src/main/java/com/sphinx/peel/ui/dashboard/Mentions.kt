@@ -36,7 +36,3 @@ fun insertMention(text: String, word: MentionWord, member: MentionMember): Pair<
     val insert = mentionHandle(member.name) + " "
     return (text.substring(0, word.start) + insert + text.substring(word.end)) to (word.start + insert.length)
 }
-
-/// A mention inside message text: `@` at the start of a word, up to the next
-/// space — the same `\B@[^\s]+` PeelCore's `MessageMarkup` uses.
-val mentionRegex = Regex("""\B@[^\s]+""")

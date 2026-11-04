@@ -1,5 +1,7 @@
 package com.sphinx.peel.storage
 
+import com.sphinx.peel.engine.MONEY_SEND_TYPES
+import com.sphinx.peel.engine.SendStatus
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
@@ -632,18 +634,66 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
-    /// What the mixer said about a tag this account sent under, just now
-    /// (`RunReturn.sentStatus`) — `FAILED` as it comes; anything else
-    /// (`COMPLETE`, the one other status this reads) counts as delivered
-    /// the same way the message's own echo already would, so this mostly
-    /// only matters for a send whose echo never arrives. A tag that
-    /// never names a stored row (a payment, or a type this device sends
-    /// nothing of yet) is a no-op.
-    fun markSendStatus(tag: String, delivered: Boolean) {
-        helper.writableDatabase.execSQL(
-            "UPDATE message SET status = ? WHERE tag = ? AND status = 'PENDING'",
-            arrayOf(if (delivered) "DELIVERED" else "FAILED", tag),
+    /// What the mixer said about a tag this account sent under, whether
+    /// live (`RunReturn.sentStatus`) or in a `getTags` reply — PeelCore's
+    /// `Storage.applyStatus`, the one forward-only rule: no status or
+    /// `PENDING` becomes `DELIVERED`, `UNSETTLED` (money sends only) or
+    /// `FAILED`; `UNSETTLED` becomes `DELIVERED` or `FAILED`; `FAILED`
+    /// becomes `DELIVERED` (the server had it after all); `DELIVERED` never
+    /// changes. A tag naming no stored row is a no-op. Returns whether a
+    /// message row moved.
+    fun markSendStatus(tag: String, status: SendStatus): Boolean {
+        val from = status.movesFrom
+        if (from.isEmpty()) return false
+        val fromSql = from.joinToString(",") { "'$it'" }
+        val onlyMoney = if (status == SendStatus.UNSETTLED) {
+            "AND type IN (${MONEY_SEND_TYPES.joinToString(",")})"
+        } else ""
+        val db = helper.writableDatabase
+        db.execSQL(
+            "UPDATE message SET status = ? WHERE tag = ? AND fromMe = 1 AND (status IS NULL OR status IN ($fromSql)) $onlyMoney",
+            arrayOf(status.raw, tag),
         )
+        return db.compileStatement("SELECT changes()").simpleQueryForLong() > 0
+    }
+
+    /// Delivered-or-failed shorthand kept for the live `sentStatus` call sites.
+    fun markSendStatus(tag: String, delivered: Boolean) {
+        markSendStatus(tag, if (delivered) SendStatus.DELIVERED else SendStatus.FAILED)
+    }
+
+    /// The tags of this chat's own messages the server has not confirmed or
+    /// refused (no status, or `PENDING`), newest first, at most 200 —
+    /// PeelCore's `unconfirmedTags(in:)`, what `Engine.checkOwnMessageStatus`
+    /// asks about when a chat is open.
+    fun unconfirmedTags(chat: String): List<String> =
+        helper.readableDatabase.query(
+            "message", arrayOf("tag"),
+            "chat = ? AND fromMe = 1 AND deleted = 0 AND tag IS NOT NULL AND (status IS NULL OR status = 'PENDING')",
+            arrayOf(chat), null, null, "id DESC", "200",
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+
+    /// Every send of ours the server has not confirmed or refused, for
+    /// `Engine.checkPendingSends` — PeelCore's `pendingSendTags(textBefore:)`
+    /// trimmed to this port's tables: our messages still `PENDING` that
+    /// either may have paid (sats, a payment or boost) or are older than
+    /// [textBefore] (ms), newest first, at most 200; our messages with no
+    /// status at all (restored history, another device's), at most 200; and
+    /// the invoices we pay still `PENDING`, at most 200. Invites have no
+    /// table here yet.
+    fun pendingSendTags(textBefore: Long): List<String> {
+        val moneyTypes = MONEY_SEND_TYPES.joinToString(",")
+        val sql = """
+            SELECT tag FROM (SELECT tag FROM message WHERE fromMe = 1 AND status = 'PENDING' AND tag IS NOT NULL
+                AND (COALESCE(msat, 0) > 0 OR type IN ($moneyTypes) OR COALESCE(timestamp, 0) < ?)
+                ORDER BY id DESC LIMIT 200)
+            UNION ALL SELECT tag FROM (SELECT tag FROM message WHERE fromMe = 1 AND status IS NULL AND tag IS NOT NULL
+                ORDER BY id DESC LIMIT 200)
+            UNION ALL SELECT tag FROM (SELECT tag FROM invoice WHERE incoming = 0 AND status = 'PENDING' AND tag IS NOT NULL
+                ORDER BY createdAt DESC LIMIT 200)
+        """.trimIndent()
+        return helper.readableDatabase.rawQuery(sql, arrayOf(textBefore.toString()))
+            .use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }.distinct()
     }
 
     /// A contact's alias/photo, from the newest message naming them so
