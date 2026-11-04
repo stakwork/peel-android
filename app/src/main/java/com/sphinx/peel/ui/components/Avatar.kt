@@ -15,11 +15,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -100,7 +105,19 @@ fun Avatar(
             )
         } else {
             val multiplier = if (initials.length > 1) 0.38f else if (size < 24.dp) 0.55f else 0.42f
-            Text(initials, color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size.value * multiplier).sp)
+            val fontSize = (size.value * multiplier).sp
+            Text(
+                initials,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                style = TextStyle(
+                    fontSize = fontSize,
+                    lineHeight = fontSize,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
+                ),
+            )
         }
     }
 }
@@ -120,6 +137,13 @@ fun ConversationAvatar(conversation: ConversationRow, size: Dp, modifier: Modifi
     )
 }
 
+/// The same vertical orange gradient `ic_launcher_background` fills the
+/// launcher icon with (`design/peel.svg`'s own `skin` gradient) — kept as
+/// one pair of colors here rather than a second read of the drawable,
+/// since `Brush.verticalGradient` needs real `Color`s, not whatever a
+/// `<gradient>` inside a vector drawable resolves to at draw time.
+private val peelLogoGradient = Brush.verticalGradient(listOf(Color(0xFFF59A4B), Color(0xFFD9661F)))
+
 /// Peel's own icon as the agent's avatar — `Apps/Shared/Avatar.swift`'s
 /// `PeelLogo`: agents are rounded squares like tribes, never the hashed
 /// colour people and tribes get. The launcher's own foreground glyph
@@ -128,7 +152,7 @@ fun ConversationAvatar(conversation: ConversationRow, size: Dp, modifier: Modifi
 @Composable
 fun PeelLogo(size: Dp, modifier: Modifier = Modifier) {
     Box(
-        modifier.size(size).clip(RoundedCornerShape(size * 0.25f)).background(Color(0xFF618AFF)),
+        modifier.size(size).clip(RoundedCornerShape(size * 0.25f)).background(peelLogoGradient),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

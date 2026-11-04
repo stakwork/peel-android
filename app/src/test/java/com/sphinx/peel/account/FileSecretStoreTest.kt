@@ -43,6 +43,12 @@ class FileSecretStoreTest {
         assertThrows(SecretStoreFailure.KeystoreUnavailable::class.java) { store().loadMnemonic("123456") }
     }
 
+    @Test fun `chars variant returns the words`() {
+        val s = store()
+        s.save(mnemonic, "123456")
+        assertEquals(mnemonic, String(s.loadMnemonicChars("123456")))
+    }
+
     @Test fun `legacy blob is migrated, v1 removed, words still open`() {
         legacy()
         val s = store()

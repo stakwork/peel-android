@@ -1,4 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#618AFF" />
-</shape>
+<!-- Full-bleed, no rounding of its own — unlike design/peel.svg's own
+     824-square tile (rx 184, the macOS icon shape), an adaptive icon's
+     background fills its whole 108x108 edge to edge and lets the OS
+     apply whatever mask shape (circle, squircle, rounded square) that
+     device's own launcher wants; rounding it here too would double up
+     and could show a visible seam under some masks. Same two layers as
+     the source: the orange `skin` gradient, then the white `sheen`
+     fading out by halfway down, both vertical top-to-bottom. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0 H108 V108 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="0"
+                android:endX="54"
+                android:endY="108"
+                android:startColor="#F59A4B"
+                android:endColor="#D9661F" />
+        </aapt:attr>
+    </path>
+    <path android:pathData="M0,0 H108 V108 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="0"
+                android:endX="54"
+                android:endY="108">
+                <item android:offset="0" android:color="#2EFFFFFF" />
+                <item android:offset="0.5" android:color="#00FFFFFF" />
+                <item android:offset="1" android:color="#00FFFFFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

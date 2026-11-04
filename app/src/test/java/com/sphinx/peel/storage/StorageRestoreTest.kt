@@ -60,3 +60,72 @@ class StorageRestoreTest {
         assertEquals(7L, storage.maxServerIndex())
     }
 }
+
+/// The account's own profile, recovered from what it sent (peel's
+/// `newestOwnAlias` / `newestOwnPhotoURL`).
+@RunWith(RobolectricTestRunner::class)
+class StorageOwnProfileTest {
+    private fun open() = Storage(ApplicationProvider.getApplicationContext(), account = "own-${System.nanoTime()}")
+
+    private fun sent(uuid: String, index: Long, chat: String, sender: String?, type: Int = 0) = MessageRow(
+        uuid = uuid, serverIndex = index, type = type, chat = chat, fromMe = true, sender = sender, body = "x",
+        msat = null, timestamp = 1, tag = null, paymentHash = null,
+    )
+
+    private fun who(alias: String? = null, photo: String? = null): String {
+        val o = org.json.JSONObject()
+        if (alias != null) o.put("alias", alias)
+        if (photo != null) o.put("photo_url", photo)
+        return o.toString()
+    }
+
+    private fun Storage.people(vararg keys: String) = keys.forEach { upsertContact(it, null, null, false, true) }
+
+    @Test
+    fun `alias comes from the newest own direct message and blank ones are skipped`() {
+        val s = open()
+        s.people("alice")
+        s.insertMessages(listOf(
+            sent("1", 1, "alice", who("Old")),
+            sent("2", 2, "alice", who("  Me  ")),
+            sent("3", 3, "alice", who("   ")),
+            sent("4", 4, "alice", who()),
+        ))
+        assertEquals("Me", s.newestOwnAlias())
+    }
+
+    @Test
+    fun `tribe only messages give no alias`() {
+        val s = open()
+        s.upsertContact("tribe", null, null, true, true)
+        s.insertMessages(listOf(sent("1", 1, "tribe", who("Rewritten", "https://x/p.jpg"))))
+        assertNull(s.newestOwnAlias())
+    }
+
+    @Test
+    fun `photo is https only, empty on the newest means none, tribes are the fallback`() {
+        val s = open()
+        s.people("alice")
+        s.insertMessages(listOf(
+            sent("1", 1, "alice", who("Me", "https://x/old.jpg")),
+            sent("2", 2, "alice", who("Me", "http://insecure/p.jpg")),
+        ))
+        assertNull(s.newestOwnPhotoUrl())
+
+        val t = open()
+        t.people("alice")
+        t.insertMessages(listOf(
+            sent("1", 1, "alice", who("Me", "https://x/old.jpg")),
+            sent("2", 2, "alice", who("Me", "https://x/new.jpg")),
+            sent("3", 3, "alice", who("Me", "https://x/boost.jpg"), type = 29),
+        ))
+        assertEquals("https://x/new.jpg", t.newestOwnPhotoUrl())
+        t.insertMessages(listOf(sent("4", 4, "alice", who("Me", ""))))
+        assertNull(t.newestOwnPhotoUrl())
+
+        val u = open()
+        u.upsertContact("tribe", null, null, true, true)
+        u.insertMessages(listOf(sent("1", 1, "tribe", who("Me", "https://x/tribe.jpg"))))
+        assertEquals("https://x/tribe.jpg", u.newestOwnPhotoUrl())
+    }
+}

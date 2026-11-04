@@ -18,7 +18,15 @@ interface SecretStore {
 
     /// Opens the words. Counts as a PIN attempt (throttled, see `LockoutPolicy`):
     /// throws `LockedOut` while a wait is due and `WrongPin` for a wrong PIN.
-    fun loadMnemonic(pin: String): String
+    fun loadMnemonic(pin: String): String {
+        val words = loadMnemonicChars(pin)
+        return try { String(words) } finally { words.fill('\u0000') }
+    }
+
+    /// Same as `loadMnemonic` but as a `CharArray` the caller must zero
+    /// (`fill('\u0000')`) as soon as it has used it, so the words are not
+    /// kept as an immutable `String` longer than needed.
+    fun loadMnemonicChars(pin: String): CharArray
     fun save(mnemonic: String, pin: String)
     fun changePin(oldPin: String, newPin: String)
     fun deleteMnemonic()
@@ -73,12 +81,17 @@ internal object PinBox {
     private val random = SecureRandom()
 
     fun seal(mnemonic: String, pin: String, iterations: Int = ITERATIONS): ByteArray {
+        val bytes = mnemonic.toByteArray(Charsets.UTF_8)
+        return try { seal(bytes, pin, iterations) } finally { bytes.fill(0) }
+    }
+
+    fun seal(plain: ByteArray, pin: String, iterations: Int = ITERATIONS): ByteArray {
         val salt = ByteArray(SALT_LENGTH).also { random.nextBytes(it) }
         val key = derive(pin, salt, iterations)
         val nonce = ByteArray(NONCE_LENGTH).also { random.nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, nonce))
-        val combined = nonce + cipher.doFinal(mnemonic.toByteArray(Charsets.UTF_8))
+        val combined = nonce + cipher.doFinal(plain)
 
         val out = ByteBuffer.allocate(HEADER_LENGTH + combined.size)
         out.put(VERSION)
@@ -88,8 +101,16 @@ internal object PinBox {
         return out.array()
     }
 
-    fun open(sealed: ByteArray, pin: String, iterations: Int = ITERATIONS): String =
-        openWithKey(sealed, deriveKey(sealed, pin, iterations), iterations)
+    fun open(sealed: ByteArray, pin: String, iterations: Int = ITERATIONS): String {
+        val bytes = openBytes(sealed, pin, iterations)
+        return try { String(bytes, Charsets.UTF_8) } finally { bytes.fill(0) }
+    }
+
+    /// The plaintext as bytes the caller must zero.
+    fun openBytes(sealed: ByteArray, pin: String, iterations: Int = ITERATIONS): ByteArray {
+        val key = deriveKey(sealed, pin, iterations)
+        return try { openWithKeyBytes(sealed, key, iterations) } finally { key.encoded.fill(0) }
+    }
 
     /// The AES key a PIN derives for this blob (the slow step).
     fun deriveKey(sealed: ByteArray, pin: String, iterations: Int = ITERATIONS): SecretKeySpec {
@@ -115,11 +136,16 @@ internal object PinBox {
     /// Opens with an already-derived key (the PIN's, or the one biometric
     /// unlock releases); a wrong key fails authentication as a wrong PIN.
     fun openWithKey(sealed: ByteArray, key: SecretKeySpec, iterations: Int = ITERATIONS): String {
+        val bytes = openWithKeyBytes(sealed, key, iterations)
+        return try { String(bytes, Charsets.UTF_8) } finally { bytes.fill(0) }
+    }
+
+    fun openWithKeyBytes(sealed: ByteArray, key: SecretKeySpec, iterations: Int = ITERATIONS): ByteArray {
         val parsed = parse(sealed, iterations)
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, parsed.nonce))
-            String(cipher.doFinal(parsed.ciphertext), Charsets.UTF_8)
+            cipher.doFinal(parsed.ciphertext)
         } catch (e: Exception) {
             // A wrong PIN derives a wrong key, which fails authentication.
             throw SecretStoreFailure.WrongPin
@@ -140,7 +166,9 @@ internal object PinBox {
     /// all agree on the digits '0'–'9').
     internal fun derive(pin: String, salt: ByteArray, iterations: Int = ITERATIONS): SecretKeySpec {
         val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(pin.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val pinBytes = pin.toByteArray(Charsets.UTF_8)
+        mac.init(SecretKeySpec(pinBytes, "HmacSHA256"))
+        pinBytes.fill(0)
         val hashLength = mac.macLength
         val block = ByteArray(salt.size + 4)
         salt.copyInto(block)
@@ -264,6 +292,11 @@ class FileSecretStore internal constructor(
     ///  2. Only after v2 verifiably unwraps to exactly the v1 bytes is v1 deleted.
     /// A crash after 1 leaves both: the next run finds v2 good and deletes v1.
     /// A v2 that does not unwrap while v1 exists (key lost) is discarded and redone.
+    /// Wraps the existing v1 bytes as-is (no PIN needed, so this can run eagerly
+    /// at construction) rather than re-sealing with a fresh PinBox salt on a
+    /// verified unlock: the Keystore layer is the real improvement over bare v1,
+    /// and getting it in place immediately — not only after the next unlock —
+    /// closes the offline-brute-force window sooner.
     @Synchronized
     internal fun migrate() {
         if (!legacyFile.exists()) return
@@ -283,13 +316,19 @@ class FileSecretStore internal constructor(
         if (wall.unwrap(file.readBytes().copyOfRange(1, file.length().toInt()), aad).contentEquals(legacy)) legacyFile.delete()
     }
 
-    override fun loadMnemonic(pin: String): String {
+    override fun loadMnemonicChars(pin: String): CharArray {
         if (!hasMnemonic) throw SecretStoreFailure.NoAccount
         beginAttempt()
-        val inner = readInner()
-        val words = PinBox.open(inner, pin, iterations)
-        succeeded()
-        return words
+        val plain = PinBox.openBytes(readInner(), pin, iterations)
+        try {
+            succeeded()
+            val buffer = Charsets.UTF_8.decode(ByteBuffer.wrap(plain))
+            val chars = CharArray(buffer.remaining()).also { buffer.get(it) }
+            buffer.array().fill('\u0000')
+            return chars
+        } finally {
+            plain.fill(0)
+        }
     }
 
     override fun save(mnemonic: String, pin: String) {
@@ -301,12 +340,18 @@ class FileSecretStore internal constructor(
 
     override fun changePin(oldPin: String, newPin: String) {
         require(Pin.isValid(newPin)) { "the PIN must be ${Pin.LENGTH} digits" }
-        val mnemonic = loadMnemonic(oldPin)
-        writeInner(PinBox.seal(mnemonic, newPin, iterations))
-        // The wrapped derived key belongs to the old PIN's salt: no longer opens anything.
-        disableBiometric()
-        // A v1 leftover (migration unavailable) must not keep the old PIN alive.
-        legacyFile.delete()
+        val words = loadMnemonicChars(oldPin)
+        val bytes = Charsets.UTF_8.encode(java.nio.CharBuffer.wrap(words))
+        val plain = ByteArray(bytes.remaining()).also { bytes.get(it) }
+        try {
+            writeInner(PinBox.seal(plain, newPin, iterations))
+            // The wrapped derived key belongs to the old PIN's salt: no longer opens anything.
+            disableBiometric()
+            // A v1 leftover (migration unavailable) must not keep the old PIN alive.
+            legacyFile.delete()
+        } finally {
+            words.fill('\u0000'); plain.fill(0); bytes.array().fill(0)
+        }
     }
 
     override fun deleteMnemonic() {
@@ -326,7 +371,7 @@ class FileSecretStore internal constructor(
         beginAttempt()
         val inner = readInner()
         val key = PinBox.deriveKey(inner, pin, iterations)
-        PinBox.openWithKey(inner, key, iterations) // WrongPin if it is not the PIN
+        PinBox.openWithKeyBytes(inner, key, iterations).fill(0) // WrongPin if it is not the PIN
         succeeded()
         val cipher = try { vault.newEncryptCipher() } catch (e: Exception) { throw SecretStoreFailure.BiometricUnavailable }
         return BiometricEnrollment(cipher, key.encoded)
@@ -360,9 +405,12 @@ class FileSecretStore internal constructor(
             val bytes = bioFile.readBytes()
             val ct = bytes.copyOfRange(2 + bytes[1].toInt(), bytes.size)
             val key = authenticated.doFinal(ct)
-            val words = PinBox.openWithKey(readInner(), SecretKeySpec(key, "AES"), iterations)
-            key.fill(0)
-            return words
+            val plain = try {
+                PinBox.openWithKeyBytes(readInner(), SecretKeySpec(key, "AES"), iterations)
+            } finally {
+                key.fill(0)
+            }
+            return try { String(plain, Charsets.UTF_8) } finally { plain.fill(0) }
         } catch (e: SecretStoreFailure.KeystoreUnavailable) {
             throw e
         } catch (e: Exception) {

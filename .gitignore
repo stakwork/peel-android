@@ -9,3 +9,22 @@ captures/
 .cxx/
 *.apk
 *.aab
+*.jks
+*.keystore
+
+# scripts/build-ffi.sh's own download cache (sphinx-rs release assets,
+# re-fetched on demand — never the source of truth, that's sphinxrs.lock).
+.build/
+
+# Secrets / credentials — never commit
+*.p12
+*.pem
+*.pfx
+*.key
+.env
+.env.*
+!.env.example
+keystore.properties
+secrets.properties
+google-services.json
+service-account*.json

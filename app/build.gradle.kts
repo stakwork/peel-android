@@ -3,6 +3,18 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Read a value from a Gradle property (-PNAME=...) or the environment; blank = unset.
+fun propOrEnv(name: String): String? =
+    (providers.gradleProperty(name).orNull ?: System.getenv(name))?.takeIf { it.isNotBlank() }
+
+val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+val hasReleaseSigning = listOf(
+    releaseKeystorePath, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword
+).all { it != null }
+
 android {
     namespace = "com.sphinx.peel"
     compileSdk = 36
@@ -11,13 +23,34 @@ android {
         applicationId = "com.sphinx.peel"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = propOrEnv("VERSION_CODE")?.toInt() ?: 1
+        versionName = propOrEnv("VERSION_NAME") ?: "1.0.0"
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
+            // Release ships arm64-v8a only: x86_64 is only for emulators, and the
+            // JNA aar's other ABIs are dropped too. Debug stays unfiltered so debug
+            // builds still run on x86_64 emulators. (A library's abiFilters, e.g. in
+            // :sphinxrs, do not constrain the app, so the filter is set here.)
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -28,6 +61,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

@@ -18,8 +18,8 @@ class PreferencesMergeTest {
         """{"key":"$key","identifier":"0","date":"$date","value":"$value"}"""
 
     @Test
-    fun `default boost is 100 sats`() {
-        assertEquals(100_000L, BOOST_AMOUNT_MSAT)
+    fun `default boost is 10 sats`() {
+        assertEquals(10_000L, BOOST_AMOUNT_MSAT)
     }
 
     @Test

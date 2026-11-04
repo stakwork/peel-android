@@ -267,6 +267,47 @@ class Storage(context: Context, account: String = "default") {
         return rows
     }
 
+    /// The account's own name, from the newest message it sent in a direct
+    /// chat (peel's `newestOwnAlias`): the server keeps no profile, but a
+    /// sent message's `sender` carries the name it was sent under. Tribe
+    /// chats are skipped, tribes rewrite the sender. First non-blank
+    /// trimmed alias of the newest 50 wins.
+    fun newestOwnAlias(): String? {
+        for (sender in ownSenders(tribes = false, withoutPayments = false)) {
+            val alias = runCatching { JSONObject(sender).optString("alias") }.getOrNull()?.trim()
+            if (!alias.isNullOrEmpty()) return alias
+        }
+        return null
+    }
+
+    /// The account's own photo, likewise (peel's `newestOwnPhotoURL`): the
+    /// newest own direct, non-payment/boost message that carries a
+    /// `photo_url` field decides; empty means none; only https counts. Own
+    /// messages in tribes are the fallback (tribes keep the photo).
+    fun newestOwnPhotoUrl(): String? {
+        for (tribes in listOf(false, true)) {
+            for (sender in ownSenders(tribes, withoutPayments = true)) {
+                val obj = runCatching { JSONObject(sender) }.getOrNull() ?: continue
+                if (!obj.has("photo_url") || obj.isNull("photo_url")) continue
+                return obj.optString("photo_url").trim().takeIf { it.startsWith("https://") }
+            }
+        }
+        return null
+    }
+
+    private fun ownSenders(tribes: Boolean, withoutPayments: Boolean): List<String> {
+        val senders = mutableListOf<String>()
+        val chatTest = if (tribes) "chat IN (SELECT pubkey FROM contact WHERE isTribe = 1)"
+        else "chat NOT IN (SELECT pubkey FROM contact WHERE isTribe = 1) AND chat IN (SELECT pubkey FROM contact)"
+        val typeTest = if (withoutPayments) " AND type NOT IN (5, 29)" else ""
+        helper.readableDatabase.rawQuery(
+            "SELECT sender FROM message WHERE fromMe = 1 AND sender IS NOT NULL AND serverIndex IS NOT NULL AND $chatTest$typeTest " +
+                "ORDER BY serverIndex DESC LIMIT 50",
+            null,
+        ).use { while (it.moveToNext()) senders.add(it.getString(0)) }
+        return senders
+    }
+
     /// The highest `serverIndex` any stored message carries, or null for
     /// no message at all yet — where a catch-up sync resumes from
     /// (`Engine.catchUpMessages`), one past this. Every message a restore
@@ -295,6 +336,18 @@ class Storage(context: Context, account: String = "default") {
         ).use { cursor ->
             if (!cursor.moveToFirst() || cursor.isNull(0)) return null
             return cursor.getLong(0)
+        }
+    }
+
+    /// Whether the newest stored message (by server index) of `chat` is
+    /// ours — iOS's `setLastMessagesOnChats` rule for settling a restored
+    /// chat as read. False when the chat has no indexed message.
+    fun newestMessageFromMe(chat: String): Boolean {
+        helper.readableDatabase.rawQuery(
+            "SELECT fromMe FROM message WHERE chat = ? AND serverIndex IS NOT NULL ORDER BY serverIndex DESC LIMIT 1",
+            arrayOf(chat),
+        ).use { cursor ->
+            return cursor.moveToFirst() && cursor.getInt(0) != 0
         }
     }
 
@@ -614,11 +667,11 @@ class Storage(context: Context, account: String = "default") {
     /// messages, by the look of them) — so one of those can be the first
     /// call seen for a chat, writing a member's name in as if it belonged
     /// to the chat itself, before a later call reveals it's a tribe.
-    /// Always nulling here (rather than only at the moment `isTribe`
-    /// turns true) fixes that regardless of call order, and also heals a
-    /// row a previous, buggier version of this method already got wrong
-    /// — confirmed on a real account (`docs/phases/04-dashboard.md`) — the
-    /// next time anything calls this for that pubkey.
+    /// A row that already was a tribe keeps its stored name/photo; they
+    /// are nulled only when a row is newly recognised as a tribe, which
+    /// fixes that regardless of call order, and also heals a row a
+    /// previous, buggier version of this method already got wrong
+    /// — confirmed on a real account (`docs/phases/04-dashboard.md`).
     fun upsertContact(pubkey: String, alias: String?, photoUrl: String?, isTribe: Boolean, ready: Boolean = false) =
         upsertContact(helper.writableDatabase, pubkey, alias, photoUrl, isTribe, ready)
 
@@ -627,8 +680,15 @@ class Storage(context: Context, account: String = "default") {
         val tribe = isTribe || existing?.isTribe == true
         val values = ContentValues().apply {
             put("pubkey", pubkey)
-            put("alias", if (tribe) null else (alias ?: existing?.alias))
-            put("photoUrl", if (tribe) null else (photoUrl ?: existing?.photoUrl))
+            // A tribe's name/photo are never taken from the message, but one
+            // already stored for a row that was a tribe (`updateTribeInfo`,
+            // the registry's own answer) is kept: nulling it here made every
+            // later message of the tribe reset its name to the public key.
+            // A row only just recognised as a tribe still drops what a member's
+            // message wrote into it.
+            val keepTribeInfo = tribe && existing?.isTribe == true
+            put("alias", if (tribe) (if (keepTribeInfo) existing?.alias else null) else (alias ?: existing?.alias))
+            put("photoUrl", if (tribe) (if (keepTribeInfo) existing?.photoUrl else null) else (photoUrl ?: existing?.photoUrl))
             put("isTribe", if (tribe) 1 else 0)
             put("ready", if (ready || existing?.ready == true) 1 else 0)
             // `CONFLICT_REPLACE` replaces the whole row — a price fetched
@@ -718,6 +778,7 @@ class Storage(context: Context, account: String = "default") {
                 (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
                 (SELECT COUNT(*) FROM message m
                     WHERE m.chat = c.pubkey AND m.fromMe = 0
+                        AND m.type IN (0, 5, 6, 2, 32, 29)
                         AND m.serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)
                         AND (m.type != 29 OR EXISTS (
                             SELECT 1 FROM message t WHERE t.chat = c.pubkey AND t.uuid = m.replyUuid AND t.fromMe = 1

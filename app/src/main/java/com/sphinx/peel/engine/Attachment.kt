@@ -22,6 +22,13 @@ const val BOOST_MESSAGE_TYPE = 29
 /// bare-link fallback), so this alone is not the whole check.
 const val CALL_MESSAGE_TYPE = 32
 
+/// A member joined a tribe (`MessageType.groupJoin`). Its sender's `pubkey`
+/// is the tribe's, so it proves the chat is a tribe even without `host`.
+const val GROUP_JOIN_MESSAGE_TYPE = 14
+
+/// The owner approved a member (`MessageType.memberApprove`); same proof as a join.
+const val MEMBER_APPROVE_MESSAGE_TYPE = 20
+
 /// A message of this type deletes another, named by `replyUuid` the same
 /// way a reply or a boost names its own target — PeelCore's own
 /// `MessageType.delete`. `Engine.deleteMessage` and
@@ -29,10 +36,12 @@ const val CALL_MESSAGE_TYPE = 32
 const val DELETE_MESSAGE_TYPE = 17
 
 /// What a one-tap boost sends before anyone has ever chosen their own
-/// amount, in msat — 100 sats, PeelCore's own `defaultBoostAmountMsat`. Once someone
+/// amount, in msat — 10 sats, this port's own default (PeelCore's own
+/// `defaultBoostAmountMsat` is 100 sats; the user explicitly chose a
+/// different number for this port, not a porting mistake). Once someone
 /// sets it from Profile, `Engine.boostAmountMsat()` reads their own
 /// choice instead — see `Setting.BOOST_AMOUNT_MSAT`.
-const val BOOST_AMOUNT_MSAT = 100_000L
+const val BOOST_AMOUNT_MSAT = 10_000L
 
 /// What an attachment message's JSON says — PeelCore's
 /// `AttachmentFields`, trimmed to what sending an image and receiving
@@ -137,3 +146,24 @@ fun classifyOutgoingFile(fileName: String, declaredMediaType: String?): Pair<Str
 }
 
 private val VIDEO_EXTENSIONS = setOf("mov", "mp4", "m4v", "3gp")
+
+/// The sats a message's own JSON body declares in its top-level numeric
+/// `amount`, in msat — PeelCore's `DeclaredAmount.decode`. A tribe echoes
+/// our own boost back with no `msat`, so this is the only record of what it
+/// paid. Null when the body is not JSON, or `amount` is absent, not a whole
+/// number, or negative.
+fun declaredAmountMsat(body: String?): Long? {
+    if (body == null) return null
+    val amount = runCatching { JSONObject(body).opt("amount") }.getOrNull()
+    if (amount !is Number) return null
+    val value = when (amount) {
+        is Int, is Long -> amount.toLong()
+        is Double, is Float -> {
+            val d = amount.toDouble()
+            if (d != Math.floor(d) || d.isInfinite() || d.isNaN()) return null
+            if (d >= 9.223372036854775807E18) Long.MAX_VALUE else d.toLong()
+        }
+        else -> return null
+    }
+    return value.takeIf { it >= 0 }
+}

@@ -3,11 +3,41 @@ package com.sphinx.peel.ui
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.view.Window
 import android.view.WindowManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+
+/// Counts how many composables currently want the window secure, so that
+/// nested or overlapping uses (a PIN prompt inside the words screen) don't
+/// clear the flag while another still needs it. Pure: no Android types.
+class SecureRefCount {
+    private var count = 0
+
+    /// Returns true when the flag must now be set.
+    @Synchronized
+    fun acquire(): Boolean = (++count == 1)
+
+    /// Returns true when the flag must now be cleared.
+    @Synchronized
+    fun release(): Boolean {
+        if (count == 0) return false
+        return (--count == 0)
+    }
+
+    val active: Int @Synchronized get() = count
+}
+
+private val refCount = SecureRefCount()
+
+internal fun Context.findActivity(): Activity? {
+    var current = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}
 
 /// Marks the window FLAG_SECURE while the composable is in the tree: no
 /// screenshots, no screen recording, and a blank thumbnail in Recents.
@@ -21,32 +51,14 @@ import androidx.compose.ui.platform.LocalContext
 /// hidden app-wide on API 33+ (`MainActivity`).
 @Composable
 fun SecureWindow() {
-    val window = LocalContext.current.findActivity()?.window ?: return
-    DisposableEffect(window) {
-        SecureWindowFlag.acquire(window)
-        onDispose { SecureWindowFlag.release(window) }
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(activity) {
+        val window = activity?.window
+        if (window != null) {
+            if (refCount.acquire()) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        onDispose {
+            if (window != null && refCount.release()) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
-}
-
-internal object SecureWindowFlag {
-    private var holders = 0
-
-    fun acquire(window: Window) {
-        holders++
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-    }
-
-    fun release(window: Window) {
-        holders = (holders - 1).coerceAtLeast(0)
-        if (holders == 0) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-    }
-}
-
-internal fun Context.findActivity(): Activity? {
-    var current = this
-    while (current is ContextWrapper) {
-        if (current is Activity) return current
-        current = current.baseContext
-    }
-    return null
 }

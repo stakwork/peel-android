@@ -13,9 +13,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -59,8 +61,12 @@ import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 /// holds so far (`coreState`, `setting`, `contact`, `message`): no tribe
 /// membership, payments or reply/thread handling, so `run` and `connect`
 /// here commit a fraction of what the Mac/iPhone `commit` does.
-class Engine(mnemonic: String, val storage: Storage) {
-    val seed: String = Account.seedOf(mnemonic)
+class Engine(mnemonic: CharArray, val storage: Storage) {
+    /// The native core takes the seed as a `String`, so one lives as long as
+    /// the engine does; the words it came from are zeroed here, right away.
+    val seed: String = try { Account.seedOf(mnemonic) } finally { mnemonic.fill('\u0000') }
+    constructor(mnemonic: String, storage: Storage) : this(mnemonic.toCharArray(), storage)
+
     val network: String = storage.value(Setting.NETWORK) ?: "bitcoin"
 
     /// Guards `state` and `clock` the way Swift's `actor` isolates Engine:
@@ -83,6 +89,10 @@ class Engine(mnemonic: String, val storage: Storage) {
     @Volatile private var state: Map<String, ByteArray> = storage.loadCoreState()
     private var transport: Transport? = null
     private var listenerStarted = false
+    /// True from `start()` until `cancel()`: whether a drop should trigger
+    /// [reconnectLoop] at all (PeelCore's own `keepConnected`).
+    @Volatile private var keepConnected = false
+    private var reconnectJob: Job? = null
     /// The memes server's bearer token, kept until shortly before it
     /// expires — `downloadAttachment`'s own sign-in, independent of the
     /// MQTT connection (`withMemes`).
@@ -322,7 +332,10 @@ class Engine(mnemonic: String, val storage: Storage) {
             val loginTime = clock.next()
             val xpub = coreXpubFromSeed(seed, loginTime, network)
             val signature = coreRootSignMs(seed, loginTime, network)
-            val connection = Transport(server, clientID = xpub, username = loginTime, password = signature)
+            val connection = Transport(
+                server, clientID = xpub, username = loginTime, password = signature,
+                onUnexpectedDisconnect = ::onConnectionDropped,
+            )
             connection.connect()
             transport = connection
             // Before the register publish, not after: the same small race
@@ -1075,9 +1088,23 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// `getMutes`' own answers arrive asynchronously, same asymmetry as
     /// every other history ask, and land in `storeMessages` (which
     /// `askAndAwait`'s listener already runs every inbound `RunReturn`
-    /// through) — this only sends the asks and then flushes whatever this
-    /// device moved locally while it had nothing to send it to.
-    private suspend fun fetchReadsAndMutes() {
+    /// through) — this only sends the asks (the wait and the flush of
+    /// whatever this device moved locally while it had nothing to send it to
+    /// run in the background).
+    private fun fetchReadsAndMutes() {
+        // Not awaited by the caller (iOS only sends the two asks): each
+        // wait is up to `historyWaitMs`, and a fresh restore has no reads or
+        // mutes to answer, so awaiting here stalled the contacts restore for
+        // up to a minute after "Connected". Answers land through the listener.
+        // Its own independent launch, so [afterConnect]'s own runCatching
+        // does not reach a failure in here — caught here instead, same reason.
+        scope.launch {
+            runCatching { fetchReadsAndMutesAwaiting() }
+                .onFailure { Log.w("PeelEngine", "fetchReadsAndMutes failed", it) }
+        }
+    }
+
+    private suspend fun fetchReadsAndMutesAwaiting() {
         askAndAwait(historyWaitMs, expect = { it.lastRead != null }) {
             run { time, stateBytes -> coreGetReads(seed, time, stateBytes) }
         }
@@ -1125,7 +1152,9 @@ class Engine(mnemonic: String, val storage: Storage) {
     }
 
     suspend fun disconnect() = mutex.withLock {
-        transport?.close()
+        // Already dead when this runs from `reconnectLoop` (closing what
+        // just dropped on its own) — a second close on it must not throw.
+        transport?.let { runCatching { it.close() } }
         transport = null
         // So the next `connect()` starts a fresh collector on the new
         // Transport: without this, `startListening` stayed a no-op after
@@ -1139,6 +1168,7 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// this so a wiped `Storage` is never written to by a restore page
     /// still in flight.
     fun cancel() {
+        keepConnected = false
         calls?.close()
         scope.cancel()
     }
@@ -1155,11 +1185,11 @@ class Engine(mnemonic: String, val storage: Storage) {
     fun start() {
         if (started) return
         started = true
+        keepConnected = true
         scope.launch {
             backfillContactsIfNeeded()
             if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
-            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
+            afterConnect()
             refreshTribeNames()
             runCatching { syncPreferences() }
         }
@@ -1192,22 +1222,76 @@ class Engine(mnemonic: String, val storage: Storage) {
 
     /// Called whenever the app returns to the foreground, after `start()`
     /// has already run once (`MainActivity`'s lifecycle observer) —
-    /// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up,
-    /// trimmed to what this port can actually tell: nothing here can tell
-    /// a connection that is still good from one the OS quietly killed
-    /// while backgrounded (no ping/keep-alive loop exists yet to notice),
-    /// so this always reconnects first rather than guess from `transport`
-    /// being non-null. A no-op before `start()` has ever run.
+    /// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up.
+    /// Nothing here can tell a connection that is still good from one the
+    /// OS quietly killed while backgrounded without actually trying it
+    /// (HiveMQ's own disconnected-listener only fires for a drop it saw;
+    /// a frozen/killed process never gets the chance), so this always
+    /// reconnects first rather than trust [Transport.isConnected]. A
+    /// no-op before `start()` has ever run. Supersedes a drop
+    /// [reconnectLoop] is already retrying, not a second one alongside it.
     fun resume() {
         if (!started || restoreRunning) return
+        reconnectJob?.cancel()
         scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
-            fetchReadsAndMutes()
-            // A restore that failed or was cut short resumes from its cursor.
-            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
+            afterConnect()
             runCatching { syncPreferences() }
         }
+    }
+
+    /// A still-open `Transport` just dropped on its own — PeelCore's own
+    /// `connectionClosed`. Starts [reconnectLoop] unless one is already
+    /// running: a second drop signal while already reconnecting (or one
+    /// that raced `resume()`'s own reconnect) is not a second loop.
+    private fun onConnectionDropped() {
+        if (!keepConnected || reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch { reconnectLoop() }
+    }
+
+    /// Reconnects with backoff — 1, 2, 4, 8, 16s, then 30s and capped
+    /// there, PeelCore's own `reconnectLoop` — until it succeeds or
+    /// [keepConnected] goes false. Each attempt is a full
+    /// `disconnect()` + `connectAndRegister()`, the same pair `resume()`
+    /// already does, so the new Transport's subscriptions (tribe
+    /// management, whatever the core's own `RunReturn`s ask for) are
+    /// always redone from scratch, never assumed to have survived the
+    /// drop — see `Transport`'s own doc comment on why HiveMQ's built-in
+    /// `automaticReconnect()` is not used instead.
+    private suspend fun reconnectLoop() {
+        var attempt = 1
+        while (keepConnected) {
+            val retryInSeconds = minOf(30, 1 shl minOf(attempt - 1, 5))
+            connectionStateFlow.value = ConnectionState.Offline(retryInSeconds)
+            delay(retryInSeconds * 1_000L)
+            if (!keepConnected) return
+            disconnect()
+            if (connectAndRegister()) {
+                afterConnect()
+                runCatching { syncPreferences() }
+                return
+            }
+            attempt++
+        }
+    }
+
+    /// The catch-up every successful (re)connect needs — `start()`'s own
+    /// first one, and `resume()`/`reconnectLoop()`'s after each later
+    /// one. Wrapped here, not left to each caller: a drop mid-catch-up
+    /// (the same risk `publishLocked` always had, now a plain
+    /// [IllegalStateException] from `Transport` instead of HiveMQ's own
+    /// uncaught one) must not crash whatever launched this — a fresh
+    /// drop is [onConnectionDropped]'s own job to retry, not a reason to
+    /// kill the coroutine that called this.
+    private suspend fun afterConnect() {
+        runCatching {
+            // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
+            // an earlier answer cannot be used.
+            if (!restoreProgressFlow.value.restoring) fetchReadsAndMutes()
+            // A restore that failed or was cut short resumes from its cursor.
+            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
+        }.onFailure { Log.w("PeelEngine", "catch-up after connect failed", it) }
     }
 
     /// Each known tribe's real name and photo, from its own registry —
@@ -1219,17 +1303,30 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// config call failed) leaves every tribe showing by its pubkey, same
     /// as before this existed.
     private suspend fun refreshTribeNames() {
-        val host = storage.value(Setting.TRIBE_HOST) ?: return
+        // Only the account's own tribes host, never one a message names:
+        // a stranger must not be able to make Peel fetch from a host of
+        // their choosing (`Engine.discoveredTribe`'s same rule).
+        val host = storage.value(Setting.TRIBE_HOST)?.takeIf { it.isNotEmpty() } ?: return
+        val failed = mutableListOf<String>()
+        suspend fun attempt(chat: String): Boolean = try {
+            val info = TribeInfo.fetch(chat, host)
+            storage.updateTribeInfo(chat, info.name, info.img, info.pricePerMessageMsat, info.escrowMsat)
+            true
+        } catch (e: Exception) {
+            false
+        }
         for (tribe in storage.conversations()) {
             if (!tribe.isTribe || tribe.alias != null) continue
-            val info = try {
-                TribeInfo.fetch(tribe.chat, host)
-            } catch (e: Exception) {
-                continue
-            }
-            storage.updateTribeInfo(tribe.chat, info.name, info.img, info.pricePerMessageMsat, info.escrowMsat)
+            if (!attempt(tribe.chat)) failed.add(tribe.chat)
+        }
+        if (failed.isEmpty()) return
+        delay(2_000)
+        for (chat in failed) {
+            if (!attempt(chat)) Log.w("PeelTribes", "no tribe info for $chat from $host")
         }
     }
+
+    private enum class HistoryPhase { CONTACTS, MESSAGES }
 
     /// Contacts first, then every message from the beginning — PeelCore's
     /// `HistoryCursor.plan` and resume, minus the live/stall machinery.
@@ -1239,13 +1336,22 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// it stopped on instead of asking for everything again, and is removed
     /// in the commit that marks the restore finished. A failure leaves
     /// `NEEDS_RESTORE` set and is reported through [restoreProgress]; the
-    /// next `start()`/`resume()` runs it again from the cursor.
+    /// next `start()`/`resume()` runs it again from the cursor. Everything
+    /// after a successful finish is the same for a fresh and a resumed one.
     private suspend fun runRestore() {
         if (restoreRunning) return
         restoreRunning = true
         restoreProgressFlow.update { it.copy(outcome = null) }
+        var finished = false
         try {
-            var cursor = RestoreCursor.decode(storage.value(Setting.RESTORE_CURSOR)) ?: planRestore()
+            var cursor = RestoreCursor.decode(storage.value(Setting.RESTORE_CURSOR))
+            if (cursor != null) {
+                // Resumed: who the core knows as a person, for `contactHint`
+                // (a fresh restore learns it after its contacts run).
+                runCatching { refreshPersonKeys() }.onFailure { Log.w("PeelHistory", "listing contacts failed", it) }
+            } else {
+                cursor = planRestore()
+            }
             while (cursor != null) cursor = restoreRun(cursor)
             storage.apply(
                 Storage.Commit(
@@ -1254,6 +1360,7 @@ class Engine(mnemonic: String, val storage: Storage) {
                 ),
             )
             restoreProgressFlow.update { it.copy(restoring = false, outcome = RestoreOutcome.Finished) }
+            finished = true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1261,15 +1368,28 @@ class Engine(mnemonic: String, val storage: Storage) {
         } finally {
             restoreRunning = false
         }
+        if (finished) {
+            // History is stored: the account's own name/photo first (best
+            // effort), then the reads pass, which needs the rebuilt contacts.
+            runCatching { recoverOwnProfile() }.onFailure { Log.w("PeelHistory", "recovering own profile failed", it) }
+            runCatching { settleReadsAfterRestore() }.onFailure { Log.w("PeelHistory", "settling reads failed", it) }
+            runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
+        }
     }
 
     /// Asks the server what it holds and plans the restore from that; the
     /// plan is kept at once so even the first page's failure resumes.
     private suspend fun planRestore(): RestoreCursor? {
+        restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, null)) }
         val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
             run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
-        } ?: throw IllegalStateException("No answer from the server about what to restore.")
-        val plan = RestoreCursor.plan(parseCounts(countsAnswer.msgsCounts) ?: throw IllegalStateException("The server's counts could not be read."))
+        } ?: throw IllegalStateException("The server did not report your message history. Will retry.")
+        val counts = parseCounts(countsAnswer.msgsCounts)
+            ?: throw IllegalStateException("The server's counts could not be read. Will retry.")
+        // An item count, not the highest server index (that only says when
+        // to stop paging) — peel's `HistoryCursor` fix.
+        restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, counts.firstForEachKey)) }
+        val plan = RestoreCursor.plan(counts)
         if (plan != null) keepCursor(plan)
         return plan
     }
@@ -1281,31 +1401,87 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// One run of a restore from `cursor`; the run that follows it (kept
     /// before it starts), or null when this was the last. A page that never
     /// comes throws: a restore must never be marked finished with history
-    /// missing, which an earlier version of this did on a timeout.
+    /// missing.
     private suspend fun restoreRun(cursor: RestoreCursor): RestoreCursor? {
-        val phase = if (cursor.phase == RestoreCursor.Phase.CONTACTS) HistoryPhase.CONTACTS else HistoryPhase.MESSAGES
+        val contactsRun = cursor.phase == RestoreCursor.Phase.CONTACTS
+        val phase = if (contactsRun) HistoryPhase.CONTACTS else HistoryPhase.MESSAGES
+        val total = cursor.contactsTotal
+        // The Contacts line is right however the run was reached, fresh or
+        // resumed: done once the messages run is in flight (unknown total:
+        // RestoreCount(0, 0), which the screen treats as complete), and
+        // continuing from what was already fetched in a contacts run.
+        restoreProgressFlow.update {
+            if (contactsRun) it.copy(contacts = RestoreCount(minOf(cursor.fetched, total ?: cursor.fetched), total))
+            else it.copy(contacts = RestoreCount(total ?: 0, total ?: 0))
+        }
         var current = cursor
-        val complete = page(phase, cursor.end, cursor.next.toULong(), onPage = { next ->
-            current = current.advanced(next.toLong() - 1)
-            keepCursor(current)
-        }) { time, stateBytes, next ->
-            if (phase == HistoryPhase.CONTACTS) {
+        val complete = page(
+            phase, cursor.end, cursor.next.toULong(),
+            total = if (contactsRun) total else null,
+            restored = if (contactsRun) cursor.fetched else 0,
+            onPage = { next, items ->
+                current = current.advanced(next.toLong() - 1, items)
+                keepCursor(current)
+            },
+        ) { time, stateBytes, next ->
+            if (contactsRun) {
                 coreFetchFirstMsgsPerKey(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
             } else {
                 coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
             }
         }
-        if (!complete) throw IllegalStateException("No answer from the server while restoring ${if (phase == HistoryPhase.CONTACTS) "contacts" else "messages"}.")
-        if (phase == HistoryPhase.CONTACTS) {
+        if (!complete) throw IllegalStateException("Restoring ${if (contactsRun) "contacts" else "messages"} timed out. Will retry.")
+        if (contactsRun) {
             // Once, with every contacts page's own state already folded in
             // — not per page: `listContacts` decodes the core's *entire*
             // contact list every time it's asked.
-            storage.markContactsReady(parseContactPubkeys(coreListContacts(StateCodec.encode(state))))
+            val people = parseContactPubkeys(coreListContacts(StateCodec.encode(state)))
+            personKeys = people.toSet()
+            storage.markContactsReady(people)
+            val done = total ?: current.fetched
+            restoreProgressFlow.update { it.copy(contacts = RestoreCount(done, done)) }
         }
         return cursor.following()?.also { keepCursor(it) }
     }
 
-    private enum class HistoryPhase { CONTACTS, MESSAGES }
+    /// The core's direct contacts (persons; tribes are not in its registry),
+    /// cached for `contactHint`'s isPerson check.
+    private fun refreshPersonKeys() {
+        personKeys = parseContactPubkeys(coreListContacts(StateCodec.encode(state))).toSet()
+    }
+
+    @Volatile private var personKeys: Set<String> = emptySet()
+
+    /// The account's own name and photo, from the messages it sent (peel's
+    /// `recoverOwnProfile`): the server keeps no profile. Only what is not
+    /// stored yet: an alias that is empty/absent, a photo that is absent (an
+    /// empty stored value means "set or removed here" and wins).
+    private fun recoverOwnProfile() {
+        val settings = mutableMapOf<Setting, String>()
+        if (storage.value(Setting.ALIAS).isNullOrBlank()) {
+            storage.newestOwnAlias()?.let { settings[Setting.ALIAS] = it }
+        }
+        if (storage.value(Setting.PHOTO_URL) == null) {
+            storage.newestOwnPhotoUrl()?.let { settings[Setting.PHOTO_URL] = it }
+        }
+        // The profile screen reads these straight from storage (same
+        // `Commit(settings=...)` it writes), so there is no flow to update.
+        if (settings.isNotEmpty()) storage.apply(Storage.Commit(settings = settings))
+    }
+
+    /// iOS's post-restore read pass (`historyEnded`): the first `getReads`
+    /// came before the restore rebuilt the contacts, and the core drops
+    /// markers for contacts it does not know — the root cause of every
+    /// chat showing unread after a restore. So ask `getReads` again now
+    /// that history is stored, then mark every chat whose newest message is ours as read
+    /// (`setLastMessagesOnChats`). Chats whose newest message is incoming
+    /// are left alone.
+    private suspend fun settleReadsAfterRestore() {
+        fetchReadsAndMutesAwaiting()
+        for (conversation in storage.conversations()) {
+            if (storage.newestMessageFromMe(conversation.chat)) markRead(conversation.chat)
+        }
+    }
 
     /// Fetches every message from where this device's own history stands
     /// forward — PeelCore's own `syncMessages`, run on *every* connection
@@ -1324,36 +1500,42 @@ class Engine(mnemonic: String, val storage: Storage) {
     /// without the reconnect/live-overlap machinery this port doesn't have.
     private suspend fun catchUpMessages() {
         val start = ((storage.maxServerIndex() ?: -1L) + 1L).toULong()
-        page(HistoryPhase.MESSAGES, end = null, start = start, onPage = {}) { time, stateBytes, next ->
+        page(HistoryPhase.MESSAGES, end = null, start = start) { time, stateBytes, next ->
             coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
         }
     }
 
     /// One phase's pages, back to back, each one committed (state, the
     /// messages it carried, the contacts they reveal) before the next is
-    /// asked for. Starts at [start] (0 for a fresh restore's own phases;
-    /// where a saved cursor or this device's history stands otherwise).
-    /// [onPage] gets the next index to ask for after each stored page (the
-    /// restore's cursor). True when the phase ended: an empty page (the
-    /// server has nothing more) or `next` past `end`. False on no answer in
-    /// [historyWaitMs] (PeelCore's watchdog): the caller decides what that
-    /// means — a restore fails and resumes later, a catch-up just stops.
+    /// asked for. With [total] (contacts: an item count), progress is the
+    /// number of messages fetched so far out of it, not a server index. Starts at [start] (0 for a restore's own phases; where
+    /// this device's history already stands, for a catch-up — see
+    /// `catchUpMessages`). Stops on no answer in [historyWaitMs] (PeelCore's
+    /// watchdog, simplified to "stop" rather than "resume later"), an
+    /// empty page (the server has nothing more for this phase), or once
+    /// `next` passes `end`.
     private suspend fun page(
         phase: HistoryPhase,
         end: Long?,
-        start: ULong,
-        onPage: (next: ULong) -> Unit,
+        start: ULong = 0uL,
+        total: Long? = null,
+        restored: Long = 0,
+        onPage: (next: ULong, items: Long) -> Unit = { _, _ -> },
         call: (String, ByteArray, ULong) -> RunReturn,
     ): Boolean {
         var next = start
+        var restored = restored
         if (end != null && next > end.toULong()) return true
         while (true) {
-            // Sequential on purpose: the protocol gives a history page no
+            // Timed deliberately: the protocol gives a history page no
             // request id (`HistoryCursor.advance`'s own comment on
-            // PeelCore's side), so several asks in flight could not be told
-            // apart. The listener logs where each page's time goes
-            // (`PeelHistory`: core `handle` vs. storage) beside this
-            // round-trip total, which is what a timed restore should read.
+            // PeelCore's side), so a reply can only ever be matched to
+            // *some* outstanding ask, never to a specific one — pipelining
+            // several pages at once is not a missed optimization here,
+            // it is unsafe for either client. Logging each page's own
+            // round-trip cost is how to find out whether Android's restore
+            // actually is slower than the iPhone's for a reason that *can*
+            // be fixed (docs/phases/03-restoring.md, "Open").
             val askedAt = SystemClock.elapsedRealtime()
             val result = askAndAwait(historyWaitMs, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
@@ -1363,15 +1545,17 @@ class Engine(mnemonic: String, val storage: Storage) {
             // Already stored: the same listener that delivered this result
             // to askAndAwait ran it through `storeMessages` first.
             val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
-            val progress = RestoreCount((reached ?: next).toLong(), end)
+            restored += result.msgs.size
+            val progress = if (total != null) RestoreCount(minOf(restored, total), total) else RestoreCount((reached ?: next).toLong(), end)
             restoreProgressFlow.update {
                 if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
             }
-            if (reached == null) return true
+            if (reached == null) break
             next = reached + 1uL
-            onPage(next)
-            if (end != null && next > end.toULong()) return true
+            onPage(next, result.msgs.size.toLong())
+            if (end != null && next > end.toULong()) break
         }
+        return true
     }
 
     /// One core `Msg` as a stored row, or null for one this device cannot
@@ -1395,6 +1579,12 @@ class Engine(mnemonic: String, val storage: Storage) {
         } else {
             claimed ?: return null
         }
+        // A tribe echoes our own boost back with no `msat`; the amount is
+        // only in the body's `amount` (iOS does the same, also for another
+        // member's tribe boost, recognised by the sender's `host`).
+        val inTribe = !sender?.optString("host").isNullOrEmpty()
+        val msat = msg.msat?.toLong()
+            ?: if (type.toInt() == BOOST_MESSAGE_TYPE && (fromMe || inTribe)) declaredAmountMsat(msg.message) else null
         return MessageRow(
             uuid = msg.uuid,
             serverIndex = msg.index?.toLongOrNull(),
@@ -1403,7 +1593,7 @@ class Engine(mnemonic: String, val storage: Storage) {
             fromMe = fromMe,
             sender = msg.sender,
             body = msg.message,
-            msat = msg.msat?.toLong(),
+            msat = msat,
             timestamp = msg.timestamp?.toLong(),
             tag = msg.tag,
             paymentHash = msg.paymentHash,
@@ -1445,7 +1635,15 @@ class Engine(mnemonic: String, val storage: Storage) {
     private fun contactHint(row: MessageRow): ContactRow? {
         val sender = row.sender?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
         val host = sender.optString("host").takeIf { it.isNotEmpty() }
-        if (host != null) {
+        // Peel's isPerson: a chat the core holds a contact key for is a
+        // person, never a tribe — no new tribe flag for it (existing rows
+        // are not demoted).
+        val person = row.chat in personKeys
+        if (host != null && !person) {
+            return ContactRow(pubkey = row.chat, alias = null, photoUrl = null, isTribe = true, ready = true)
+        }
+        // iOS: a join/approve's sender pubkey is the tribe's, host or not.
+        if (!person && (row.type == GROUP_JOIN_MESSAGE_TYPE || row.type == MEMBER_APPROVE_MESSAGE_TYPE)) {
             return ContactRow(pubkey = row.chat, alias = null, photoUrl = null, isTribe = true, ready = true)
         }
         val pubkey = sender.optString("pubkey").takeIf { it.isNotEmpty() }
@@ -1488,7 +1686,7 @@ class Engine(mnemonic: String, val storage: Storage) {
         /// Bump whenever `backfillContactsIfNeeded`'s own logic changes in
         /// a way that fixes data an older version could have gotten
         /// wrong — this is the third such fix (see `Setting.CONTACTS_BACKFILLED`).
-        private const val BACKFILL_VERSION = "3"
+        private const val BACKFILL_VERSION = "4"
 
         private const val registerWaitMs = 10_000L
 

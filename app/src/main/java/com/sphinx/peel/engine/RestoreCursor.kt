@@ -34,39 +34,50 @@ internal data class RestoreCursor(
     val thenMessages: Boolean = false,
     /// Contacts run only: that messages run's highest index.
     val messagesEnd: Long? = null,
+    /// How many contacts the server said it holds (an item count, not an
+    /// index), kept so a resume can show the Contacts progress. Null: unknown.
+    val contactsTotal: Long? = null,
+    /// Items the contacts run has fetched so far (a resumed run's progress
+    /// starts here, not at 0).
+    val fetched: Long = 0,
 ) {
     enum class Phase(val code: String) { CONTACTS("C"), MESSAGES("M") }
 
     /// No more pages to ask for: `next` is past the highest index.
     val isPastEnd: Boolean get() = end != null && next > end
 
-    /// The same run after a page whose highest index was `reached`.
-    /// Never moves backwards: a stale or duplicate page changes nothing.
-    fun advanced(reached: Long): RestoreCursor = if (reached + 1 > next) copy(next = reached + 1) else this
+    /// The same run after a page whose highest index was `reached` and which
+    /// carried `items` items. Never moves backwards: a stale or duplicate
+    /// page changes nothing, and its items are not counted twice.
+    fun advanced(reached: Long, items: Long = 0): RestoreCursor =
+        if (reached + 1 > next) copy(next = reached + 1, fetched = fetched + items) else this
 
     /// The run that follows this one finishing, or null when it was the last.
     fun following(): RestoreCursor? =
-        if (phase == Phase.CONTACTS && thenMessages) RestoreCursor(Phase.MESSAGES, 0, messagesEnd) else null
+        if (phase == Phase.CONTACTS && thenMessages) RestoreCursor(Phase.MESSAGES, 0, messagesEnd, contactsTotal = contactsTotal, fetched = fetched) else null
 
     fun encode(): String = listOf(
         VERSION, phase.code, next, end ?: "", if (thenMessages) "1" else "0", messagesEnd ?: "",
+        contactsTotal ?: "", fetched,
     ).joinToString("|")
 
     companion object {
-        private const val VERSION = "1"
+        private const val VERSION = "2"
 
         /// Null for nothing stored or anything this version cannot read
         /// (a restore then starts from its counts, as it always did).
         fun decode(text: String?): RestoreCursor? {
             if (text.isNullOrEmpty()) return null
             val parts = text.split("|")
-            if (parts.size != 6 || parts[0] != VERSION) return null
+            if (parts.size != 8 || parts[0] != VERSION) return null
             val phase = Phase.values().firstOrNull { it.code == parts[1] } ?: return null
             val next = parts[2].toLongOrNull()?.takeIf { it >= 0 } ?: return null
             val end = parts[3].takeIf { it.isNotEmpty() }?.let { it.toLongOrNull() ?: return null }
             val then = when (parts[4]) { "1" -> true; "0" -> false; else -> return null }
             val messagesEnd = parts[5].takeIf { it.isNotEmpty() }?.let { it.toLongOrNull() ?: return null }
-            return RestoreCursor(phase, next, end, then, messagesEnd)
+            val contactsTotal = parts[6].takeIf { it.isNotEmpty() }?.let { it.toLongOrNull()?.takeIf { n -> n >= 0 } ?: return null }
+            val fetched = parts[7].toLongOrNull()?.takeIf { it >= 0 } ?: return null
+            return RestoreCursor(phase, next, end, then, messagesEnd, contactsTotal, fetched)
         }
 
         /// A restore: contacts first (one message per contact key), then
@@ -78,8 +89,9 @@ internal data class RestoreCursor(
                 counts.firstForEachKey > 0 -> RestoreCursor(
                     Phase.CONTACTS, 0, counts.firstForEachKeyHighestIndex,
                     thenMessages = hasMessages, messagesEnd = counts.totalHighestIndex.takeIf { hasMessages },
+                    contactsTotal = counts.firstForEachKey,
                 )
-                hasMessages -> RestoreCursor(Phase.MESSAGES, 0, counts.totalHighestIndex)
+                hasMessages -> RestoreCursor(Phase.MESSAGES, 0, counts.totalHighestIndex, contactsTotal = 0)
                 else -> null
             }
         }
