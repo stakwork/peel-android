@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -367,12 +368,19 @@ private fun YouMain(
             title = { Text("Boost amount") },
             text = {
                 Column {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         for (preset in listOf(10L, 50L, 100L, 500L, 1_000L)) {
-                            TextButton(onClick = { draft = preset.toString(); askedFor = null; error = null }) { Text("$preset") }
+                            TextButton(
+                                onClick = { draft = preset.toString(); askedFor = null; error = null },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(0.dp),
+                            ) {
+                                Text("$preset", maxLines = 1, softWrap = false, textAlign = TextAlign.Center)
+                            }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         BasicTextField(
                             value = draft,
                             onValueChange = { draft = it.filter(Char::isDigit) },
