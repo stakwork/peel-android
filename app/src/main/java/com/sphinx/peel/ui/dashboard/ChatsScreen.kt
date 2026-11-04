@@ -110,6 +110,7 @@ private fun ChatListBody(
 ) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
     var unreadMentions by remember { mutableStateOf(0L) }
+    var unreadThreads by remember { mutableStateOf(0L) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
     var allTribes by remember { mutableStateOf(false) }
@@ -125,6 +126,7 @@ private fun ChatListBody(
         unreadMentions = withContext(Dispatchers.Default) {
             storage.unreadMentions(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You")
         }
+        unreadThreads = withContext(Dispatchers.Default) { storage.unreadThreadCount().toLong() }
     }
     LaunchedEffect(restoreProgress) { reload() }
     LaunchedEffect(Unit) {
@@ -159,12 +161,12 @@ private fun ChatListBody(
             NoSearchResults(query)
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
-                // Not while searching. No thread counts are tracked
-                // yet, so that badge stays 0; Apps always shows (iOS only
-                // when Stadeum is connected).
+                // Not while searching. Threads counts threads with new
+                // replies, Mentions the unread mentions; Apps stays 0 and
+                // always shows (iOS only when Stadeum is connected).
                 if (!searching) {
                     item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
-                    item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", 0) { onOpenRoute(DashboardRoute.THREADS) } }
+                    item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
                     item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }
                 }

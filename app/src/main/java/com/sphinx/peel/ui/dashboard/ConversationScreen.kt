@@ -151,13 +151,16 @@ fun ConversationScreen(
     /// message's thread root, when it has one: the thread opens instead.
     focusMessageUuid: String? = null,
     focusThreadUuid: String? = null,
+    /// A thread's root uuid to open straight into (the Threads list) —
+    /// closing the thread shows the chat as usual.
+    initialThreadRoot: String? = null,
 ) {
     val isAgent = chat == engine.agentPubkey
     var conversation by remember(chat) { mutableStateOf<com.sphinx.peel.storage.ConversationRow?>(null) }
     var messages by remember(chat) { mutableStateOf(emptyList<MessageRow>()) }
     var draft by remember(chat) { mutableStateOf("") }
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
-    var openThreadRoot by remember(chat) { mutableStateOf(focusThreadUuid) }
+    var openThreadRoot by remember(chat, initialThreadRoot, focusThreadUuid) { mutableStateOf<String?>(focusThreadUuid ?: initialThreadRoot) }
     // Cleared once the scroll has happened, so the 3s reload never repeats it.
     var pendingFocus by remember(chat) { mutableStateOf(focusMessageUuid) }
     val highlight = remember(chat) { MessageHighlight() }

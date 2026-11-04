@@ -87,6 +87,10 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
     // The Apps/Threads/Mentions placeholder pages, opened from the rows at
     // the top of Chats; replaces the tab area the same way an open chat does.
     var openRoute by remember { mutableStateOf<DashboardRoute?>(null) }
+    // Set when a chat is opened from the Threads list, straight into that
+    // thread; `openRoute` stays THREADS underneath, so Back from the chat
+    // returns to the list.
+    var openThreadRoot by remember { mutableStateOf<String?>(null) }
 
     var callPhase by remember { mutableStateOf<CallPhase?>(null) }
     // The full call screen is in front, rather than just the banner (or
@@ -183,7 +187,10 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
                 val back = { openRoute = null }
                 when (route) {
                     DashboardRoute.APPS -> AppsScreen(onBack = back)
-                    DashboardRoute.THREADS -> ThreadsScreen(onBack = back)
+                    DashboardRoute.THREADS -> ThreadsScreen(engine, storage, onBack = back, onOpenThread = { threadChat, root ->
+                        openThreadRoot = root
+                        openChat = threadChat
+                    })
                     DashboardRoute.MENTIONS -> MentionsScreen(
                         storage,
                         onBack = back,
@@ -197,7 +204,8 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
             } else if (chat != null) {
                 ConversationScreen(
                     engine, storage, chat,
-                    onBack = { openChat = null; focusMessage = null; focusThread = null },
+                    onBack = { openChat = null; openThreadRoot = null; focusMessage = null; focusThread = null },
+                    initialThreadRoot = openThreadRoot,
                     focusMessageUuid = focusMessage, focusThreadUuid = focusThread,
                     onJoinCall = { joinChat, joinTitle, link, camera -> connect(joinChat, joinTitle, link, camera) },
                 )
