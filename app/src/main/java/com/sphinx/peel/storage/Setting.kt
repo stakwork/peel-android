@@ -17,6 +17,12 @@ enum class Setting(val key: String) {
     /// "1" while an account brought back from its words still needs its history.
     NEEDS_RESTORE("needsRestore"),
 
+    /// Where an interrupted restore stands (`RestoreCursor.encode`): which
+    /// phase, the next server index to ask for, where it ends. Written after
+    /// every page, removed in the commit that finishes the restore. Not
+    /// secret: indices only.
+    RESTORE_CURSOR("restoreCursor"),
+
     /// "1" once the twelve words were checked: three of them typed back, or
     /// all twelve to restore. Never the words themselves. An account with
     /// no record has not been checked.

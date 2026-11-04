@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Verify sphinxrs native library checksums
+        run: bash scripts/verify-sphinxrs-checksums.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Check signing secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required repository secrets:$missing"
+            exit 1
+          fi
+
+      - name: Decode keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/peel-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/peel-release.jks" >> "$GITHUB_ENV"
+
+      - name: Derive version from tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag '$TAG' is invalid. Tags must use the format vMAJOR.MINOR.PATCH (e.g. v1.2.3)."
+            exit 1
+          fi
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          if [ "$((10#$MINOR))" -gt 99 ] || [ "$((10#$PATCH))" -gt 99 ]; then
+            echo "::error::Release tag '$TAG' is invalid: minor and patch must each be <= 99."
+            exit 1
+          fi
+          VERSION_CODE=$((10#$MAJOR * 10000 + 10#$MINOR * 100 + 10#$PATCH))
+          echo "VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+      - name: Assemble signed release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
+
+      # - name: Build AAB
+      #   env:
+      #     ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      #     ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      #     ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      #   run: ./gradlew bundleRelease --stacktrace -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
+      # Later: upload app/build/outputs/bundle/release/*.aab to Google Play
+      # (e.g. r0adkll/upload-google-play) and/or attach it to the release.
+
+      - name: Locate signed APK
+        run: |
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/release/*.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::No release APK found in app/build/outputs/apk/release/"
+            exit 1
+          fi
+          apk="${apks[0]}"
+          if [[ "$(basename "$apk")" == *unsigned* ]]; then
+            echo "::error::Release APK is unsigned ($(basename "$apk")); signing was not applied."
+            exit 1
+          fi
+          cp "$apk" "peel-${VERSION_NAME}.apk"
+
+      - name: Upload APK to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" "peel-${VERSION_NAME}.apk" --clobber --repo ${{ github.repository }}
+
+      - name: Cleanup keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/peel-release.jks"

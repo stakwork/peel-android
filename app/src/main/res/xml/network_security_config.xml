@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release: no cleartext, system trust anchors only. NOTE: this only affects
+     the platform HTTP stack; raw sockets (MQTT/Netty, LiveKit) do not honor
+     it, so real enforcement is in code (NetworkPolicy). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

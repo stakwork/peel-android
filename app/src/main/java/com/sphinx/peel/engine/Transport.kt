@@ -32,7 +32,6 @@ class Transport(
     private val clientID: String,
     private val username: String,
     private val password: String,
-    private val allowUntrustedCertificate: Boolean = false,
 ) {
     /// Set by `Engine` once connected: called when the broker connection
     /// ends without [close] having been asked for.
@@ -40,6 +39,12 @@ class Transport(
     @Volatile private var closing = false
 
     private val client: Mqtt3AsyncClient = run {
+        // Release builds refuse plaintext MQTT; surfaced as an ordinary
+        // exception: Engine.connect() -> connectAndRegister() catches it and
+        // reports ConnectionState.Failed(message) to the UI.
+        if (!NetworkPolicy.tlsAllowed(server.tls, com.sphinx.peel.BuildConfig.DEBUG)) {
+            throw IllegalStateException("${server.host} is configured without TLS; plaintext MQTT is not allowed in release builds")
+        }
         val builder = MqttClient.builder()
             .useMqttVersion3()
             .identifier(clientID)
@@ -47,11 +52,16 @@ class Transport(
             .serverPort(server.port)
             .addDisconnectedListener { if (!closing) onLost?.invoke() }
         if (server.tls) {
-            // allowUntrustedCertificate has no effect yet: a dev build
-            // against a self-signed test server needs a custom
-            // TrustManager here (builder.sslConfig { trustManagerFactory =
-            // ... }), added once there is such a server to verify it
-            // against.
+            // Default SSL config: system trust store. Hostname verification
+            // is on by default — checked in hivemq-mqtt-client 1.4.1's
+            // bytecode (no source jar): MqttSslInitializer, with no custom
+            // HostnameVerifier set, calls SSLParameters
+            // .setEndpointIdentificationAlgorithm("HTTPS") so the TLS stack
+            // checks the certificate against server.host during the
+            // handshake, and falls back to HttpsURLConnection's default
+            // verifier. Not exercised against a live broker. There is no
+            // untrusted-certificate escape hatch; never set a custom
+            // verifier or TrustManager here.
             builder.sslWithDefaultConfig()
         }
         builder.buildAsync()

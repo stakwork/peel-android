@@ -22,32 +22,33 @@ Needs the Android SDK (`local.properties` → `sdk.dir`) and a JDK 17.
 
 `sphinxrs/src/main/java/uniffi/sphinxrs/sphinxrs.kt` and the `.so` files in
 `sphinxrs/src/main/jniLibs/` come from `stakwork/sphinx-rs`'s `sphinx-ffi`
-crate (`sphinx-ffi/src/sphinxrs.udl`), the same core the Mac/iOS
-`Sources/Sphinxrs` bindings are generated from
-(see `peel/scripts/build-ffi.sh`). `sphinx-ffi` ships its own
-`build-android.sh`, but that one uses `cross` (Docker) and builds all five
-ABIs; this was built locally instead, with `cargo-ndk`, for just the two
-ABIs that matter for development (a real device, and the emulator):
+crate, the same core the Mac/iOS `Sources/Sphinxrs` bindings are generated
+from. `sphinxrs/sphinxrs.lock` pins the exact release (the sha256 of each
+`.so` and the Kotlin bindings, then the tag) — the same shape `peel`'s own
+`Vendor/sphinxrs.lock` pins the Mac/iOS bindings with
+(`peel/scripts/build-ffi.sh`), just Android's own artifacts.
+
+`stakwork/sphinx-rs` CI (`build-all.yml`) attaches `sphinxrs.kt` and
+`kotlin-libraries.zip` (all five Android ABIs) to every release, so
+nothing here needs a local Rust/NDK toolchain or `cargo-ndk` — just
+download the pinned release's assets and check them against the lock:
 
 ```sh
-# toolchain, once:
-brew install --cask android-ndk
-cargo install cargo-ndk
-rustup target add aarch64-linux-android x86_64-linux-android
-
-# from a sphinx-rs checkout, sphinx-ffi/:
-cargo run --features=uniffi/cli --bin uniffi-bindgen generate src/sphinxrs.udl --language kotlin
-sed -i '' 's/return "uniffi_sphinxrs"/return "sphinxrs"/' src/uniffi/sphinxrs/sphinxrs.kt
-export ANDROID_NDK_HOME="/opt/homebrew/share/android-ndk"
-cargo ndk -t arm64-v8a -t x86_64 -o jniLibs build --release --features=uniffi/cli
+./scripts/build-ffi.sh                 # verifies the pinned release against the lock
+./scripts/build-ffi.sh --update v0.8.42 # moves to another release, rewrites the lock
 ```
 
-Then copy `src/uniffi/sphinxrs/sphinxrs.kt` and `jniLibs/*/libsphinxrs.so`
-into this repo's `sphinxrs/src/main/`.
+Either way it also checks that the core commit the release pins has
+upstream's known client security fixes (the same check `peel`'s own
+script runs) — set `GITHUB_TOKEN` to a token that can read the private
+`stakwork/sphinx` repo, or the check can only warn "unchecked" instead of
+actually confirming them.
 
-The `.so` files here are unstripped (`sphinx-ffi`'s release profile sets
-`debug = true`), which is why they're tens of MB; `strip` them for anything
-other than local development.
+The `.so` files are unstripped (`sphinx-ffi`'s release profile sets
+`debug = true`), which is why they're tens of MB; Android's own release
+build already tries to strip them and falls back to packaging them as-is
+when it can't (`stripReleaseDebugSymbols`'s own "Unable to strip..."
+message is expected, not an error).
 
 ## Verifying the bridge works
 

@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.you
 
+import com.sphinx.peel.ui.components.SecureWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +48,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.SecretStore
+import com.sphinx.peel.account.LockoutPolicy
 import com.sphinx.peel.account.SecretStoreFailure
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
@@ -435,6 +437,7 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
     var visible by remember { mutableStateOf(false) }
     var revealedAt by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
+    SecureWindow()
 
     fun hide() {
         words = emptyList()
@@ -475,12 +478,17 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                     working = true
                     scope.launch {
                         try {
-                            val mnemonic = withContext(Dispatchers.Default) { secretStore.loadMnemonic(pin) }
-                            words = Account.wordsIn(mnemonic)
+                            words = withContext(Dispatchers.Default) {
+                                val chars = secretStore.loadMnemonicChars(pin)
+                                try { Account.wordsIn(String(chars)) } finally { chars.fill('\u0000') }
+                            }
                             visible = false
                             problem = null
                             asking = false
                             revealedAt = System.currentTimeMillis()
+                        } catch (e: SecretStoreFailure.LockedOut) {
+                            problem = "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}."
+                            pin = ""
                         } catch (e: SecretStoreFailure.WrongPin) {
                             problem = "Wrong PIN"
                             pin = ""

@@ -500,6 +500,8 @@ internal interface _UniFFILib : Library {
     ): RustBuffer.ByValue
     fun uniffi_sphinxrs_fn_func_set_push_token(`seed`: RustBuffer.ByValue,`uniqueTime`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`pushToken`: RustBuffer.ByValue,`pushKey`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_sphinxrs_fn_func_set_push_token_for_app(`seed`: RustBuffer.ByValue,`uniqueTime`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`pushToken`: RustBuffer.ByValue,`pushKey`: RustBuffer.ByValue,`appId`: RustBuffer.ByValue,`pushEnvironment`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_sphinxrs_fn_func_decrypt_child_index(`encryptedChild`: RustBuffer.ByValue,`pushKey`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
     ): Long
     fun uniffi_sphinxrs_fn_func_get_msgs_counts(`seed`: RustBuffer.ByValue,`uniqueTime`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
@@ -521,6 +523,10 @@ internal interface _UniFFILib : Library {
     fun uniffi_sphinxrs_fn_func_update_tribe(`seed`: RustBuffer.ByValue,`uniqueTime`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`tribeServerPubkey`: RustBuffer.ByValue,`tribeJson`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_sphinxrs_fn_func_delete_tribe(`seed`: RustBuffer.ByValue,`uniqueTime`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`tribeServerPubkey`: RustBuffer.ByValue,`tribePubkey`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_sphinxrs_fn_func_show_senders(`seed`: RustBuffer.ByValue,`uniqueTime`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`tribeServerPubkey`: RustBuffer.ByValue,`tribePubkey`: RustBuffer.ByValue,`memberPubkey`: RustBuffer.ByValue,`on`: Byte,_uniffi_out_err: RustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_sphinxrs_fn_func_show_senders_onion(`seed`: RustBuffer.ByValue,`uniqueTime`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`tribePubkey`: RustBuffer.ByValue,`memberPubkey`: RustBuffer.ByValue,`on`: Byte,`amtMsat`: Long,`alias`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_sphinxrs_fn_func_add_node(`node`: RustBuffer.ByValue,_uniffi_out_err: RustCallStatus, 
     ): RustBuffer.ByValue
@@ -686,6 +692,8 @@ internal interface _UniFFILib : Library {
     ): Short
     fun uniffi_sphinxrs_checksum_func_set_push_token(
     ): Short
+    fun uniffi_sphinxrs_checksum_func_set_push_token_for_app(
+    ): Short
     fun uniffi_sphinxrs_checksum_func_decrypt_child_index(
     ): Short
     fun uniffi_sphinxrs_checksum_func_get_msgs_counts(
@@ -707,6 +715,10 @@ internal interface _UniFFILib : Library {
     fun uniffi_sphinxrs_checksum_func_update_tribe(
     ): Short
     fun uniffi_sphinxrs_checksum_func_delete_tribe(
+    ): Short
+    fun uniffi_sphinxrs_checksum_func_show_senders(
+    ): Short
+    fun uniffi_sphinxrs_checksum_func_show_senders_onion(
     ): Short
     fun uniffi_sphinxrs_checksum_func_add_node(
     ): Short
@@ -949,6 +961,9 @@ private fun uniffiCheckApiChecksums(lib: _UniFFILib) {
     if (lib.uniffi_sphinxrs_checksum_func_set_push_token() != 52747.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_sphinxrs_checksum_func_set_push_token_for_app() != 1696.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_sphinxrs_checksum_func_decrypt_child_index() != 2032.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -980,6 +995,12 @@ private fun uniffiCheckApiChecksums(lib: _UniFFILib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sphinxrs_checksum_func_delete_tribe() != 11926.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sphinxrs_checksum_func_show_senders() != 42925.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sphinxrs_checksum_func_show_senders_onion() != 14493.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sphinxrs_checksum_func_add_node() != 49737.toShort()) {
@@ -3018,6 +3039,15 @@ fun `setPushToken`(`seed`: String, `uniqueTime`: String, `state`: ByteArray, `pu
 
 @Throws(SphinxException::class)
 
+fun `setPushTokenForApp`(`seed`: String, `uniqueTime`: String, `state`: ByteArray, `pushToken`: String, `pushKey`: String, `appId`: String?, `pushEnvironment`: String?): RunReturn {
+    return FfiConverterTypeRunReturn.lift(
+    rustCallWithError(SphinxException) { _status ->
+    _UniFFILib.INSTANCE.uniffi_sphinxrs_fn_func_set_push_token_for_app(FfiConverterString.lower(`seed`),FfiConverterString.lower(`uniqueTime`),FfiConverterByteArray.lower(`state`),FfiConverterString.lower(`pushToken`),FfiConverterString.lower(`pushKey`),FfiConverterOptionalString.lower(`appId`),FfiConverterOptionalString.lower(`pushEnvironment`),_status)
+})
+}
+
+@Throws(SphinxException::class)
+
 fun `decryptChildIndex`(`encryptedChild`: String, `pushKey`: String): ULong {
     return FfiConverterULong.lift(
     rustCallWithError(SphinxException) { _status ->
@@ -3112,6 +3142,24 @@ fun `deleteTribe`(`seed`: String, `uniqueTime`: String, `state`: ByteArray, `tri
     return FfiConverterTypeRunReturn.lift(
     rustCallWithError(SphinxException) { _status ->
     _UniFFILib.INSTANCE.uniffi_sphinxrs_fn_func_delete_tribe(FfiConverterString.lower(`seed`),FfiConverterString.lower(`uniqueTime`),FfiConverterByteArray.lower(`state`),FfiConverterString.lower(`tribeServerPubkey`),FfiConverterString.lower(`tribePubkey`),_status)
+})
+}
+
+@Throws(SphinxException::class)
+
+fun `showSenders`(`seed`: String, `uniqueTime`: String, `state`: ByteArray, `tribeServerPubkey`: String, `tribePubkey`: String, `memberPubkey`: String, `on`: Boolean): RunReturn {
+    return FfiConverterTypeRunReturn.lift(
+    rustCallWithError(SphinxException) { _status ->
+    _UniFFILib.INSTANCE.uniffi_sphinxrs_fn_func_show_senders(FfiConverterString.lower(`seed`),FfiConverterString.lower(`uniqueTime`),FfiConverterByteArray.lower(`state`),FfiConverterString.lower(`tribeServerPubkey`),FfiConverterString.lower(`tribePubkey`),FfiConverterString.lower(`memberPubkey`),FfiConverterBoolean.lower(`on`),_status)
+})
+}
+
+@Throws(SphinxException::class)
+
+fun `showSendersOnion`(`seed`: String, `uniqueTime`: String, `state`: ByteArray, `tribePubkey`: String, `memberPubkey`: String, `on`: Boolean, `amtMsat`: ULong, `alias`: String): RunReturn {
+    return FfiConverterTypeRunReturn.lift(
+    rustCallWithError(SphinxException) { _status ->
+    _UniFFILib.INSTANCE.uniffi_sphinxrs_fn_func_show_senders_onion(FfiConverterString.lower(`seed`),FfiConverterString.lower(`uniqueTime`),FfiConverterByteArray.lower(`state`),FfiConverterString.lower(`tribePubkey`),FfiConverterString.lower(`memberPubkey`),FfiConverterBoolean.lower(`on`),FfiConverterULong.lower(`amtMsat`),FfiConverterString.lower(`alias`),_status)
 })
 }
 

@@ -23,8 +23,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- Network policy: usesCleartextTraffic/networkSecurityConfig only govern
+         the platform HTTP stack (HttpURLConnection, OkHttp). Raw sockets (the
+         MQTT client's Netty, LiveKit's media connection) ignore them, so
+         real enforcement is in code (NetworkPolicy, Transport, CallServer). -->
     <application
         android:allowBackup="false"
+        android:usesCleartextTraffic="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
@@ -32,7 +40,12 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustNothing"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <!-- adjustNothing: MainActivity's root already applies
+                 safeDrawingPadding(), which includes the IME inset. If the
+                 system also resized the window for the keyboard, content
+                 would shift twice (a gap above the keyboard). -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

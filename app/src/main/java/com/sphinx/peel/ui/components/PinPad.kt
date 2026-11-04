@@ -205,8 +205,11 @@ fun PinPrompt(
     onPinChange: (String) -> Unit,
     onComplete: () -> Unit,
     working: Boolean = false,
+    /// False while a wrong-PIN wait is running (`LockoutPolicy`): the keypad is dimmed and inert.
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    SecureWindow()
     Column(
         modifier.background(Theme.colors.background),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -216,7 +219,7 @@ fun PinPrompt(
             Text(title, style = MaterialTheme.typography.titleLarge, color = Theme.colors.text)
             Text(detail ?: " ", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
         }
-        PinPad(pin = pin, onPinChange = onPinChange, onComplete = onComplete, enabled = !working)
+        PinPad(pin = pin, onPinChange = onPinChange, onComplete = onComplete, enabled = !working && enabled)
         // PBKDF2 at a deliberately slow iteration count (SecretStore.kt)
         // runs on every unlock; with no indicator here it just looked
         // frozen for however long that takes on this device.

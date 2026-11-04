@@ -26,7 +26,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import com.sphinx.peel.ClipboardUtil
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -107,17 +108,19 @@ private fun WordField(
 /// once from a twelve-word clipboard, a single word fills just the one box.
 @Composable
 fun WordEntry(words: List<String>, onWordsChange: (List<String>) -> Unit, modifier: Modifier = Modifier) {
-    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val focusRequesters = remember { List(words.size) { FocusRequester() } }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(onClick = {
-            val text = clipboard.getText()?.text ?: return@Button
+            val text = ClipboardUtil.readText(context) ?: return@Button
             val parts = Account.wordsIn(text)
             if (parts.isEmpty()) return@Button
             val next = words.toMutableList()
             parts.take(next.size).forEachIndexed { i, word -> next[i] = word }
             onWordsChange(next)
+            // The words are in the boxes now; don't leave them on the clipboard.
+            ClipboardUtil.clear(context)
         }) { Text("Paste") }
 
         NumberedWords(places = words.indices.toList()) { index ->
