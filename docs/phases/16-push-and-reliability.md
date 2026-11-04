@@ -1,9 +1,49 @@
 # Phase 16 — Push notifications and connection reliability
 
-## Status (2026-11-02)
+## Status (2026-11-04)
 
-**Built, not yet compiled or run** (the pod this was written in has no JDK or
-Android SDK; `./gradlew assembleDebug` has to be run before trusting it).
+**Built; compiled and unit-tested** (`testDebugUnitTest` 204 tests, `assembleDebug`
+and `lintDebug` pass). Not yet run against a real FCM push or the hub.
+
+**Setup:** put the Firebase project's `google-services.json` in `app/`
+(git-ignored; without it the plugin is not applied and push is inert). Debug
+and release share one Firebase app.
+
+**Decided (2026-11-04)**
+- **Own app id.** Registration is `setPushTokenForApp(seed, time, state, token,
+  pushKey, appId, "production")` with appId `com.sphinx.peel.android`
+  (`BuildConfig.PUSH_APP_ID`, `push/PushApp`). Not `sphinx` (the official Android
+  app's: would overwrite its token on the same account) and not `com.sphinx.peel`
+  (the `applicationId`, equal to the iOS bundle id). FCM has no sandbox, so the
+  environment is always `production`.
+- **Registration flag `PUSH_REGISTER_WITH_HUB`.** Off for release builds. On only
+  with `-Ppeel.push.registerWithHub=true`, or for a debug build (no `release`
+  task requested) when `app/google-services.json` exists. `-Ppeel.push.registerWithHub=false`
+  also forces it off.
+- **Data-only pushes.** The server (`fcmMode=data`) sends no `notification` block,
+  only data: `child` (hex of 36 bytes: 12 nonce + 8 index + 16 tag, sealed with
+  this install's push key), `title` "Peel", `body` "You have new messages".
+  `PeelMessagingService` posts the notification itself. Badge-only pushes are
+  dropped server-side.
+- **Names, like iOS.** `push/PushNames`: `decryptChildIndex(child, pushKey)` ->
+  index -> `{"contact-<idx>": name, "tribe-<idx>": name}` -> "You have new
+  messages from NAME" / "... in TRIBE"; any failure is "Peel / You have new
+  messages". The map is `PushNameStore`: JSON sealed with a Keystore AES-GCM key
+  in `filesDir/push-names.v1`, readable while locked with no engine (no PIN, no
+  core state). Android extension in the same blob: `chat-contact-<idx>` /
+  `chat-tribe-<idx>` -> chat id, so the tap opens the chat without core state.
+  `PushNameSync` rewrites it (debounced 2 s) on open, when a restore finishes,
+  on every reconnect and when a `contact` row changes (`Storage.contactsVersion`).
+  Child indexes are the core's `my_idx` from `listContacts`
+  (`Engine.contactChildIndexes`). Cleared on "Forget this account".
+- **No duplicates (`PushPlan.decide`).** No engine: post. Engine open: `resume()`
+  if down; in the background also post the resolved notification under the chat's
+  id (`chat.hashCode()`, else one generic id), which `MessageNotifier`'s real
+  notification replaces (it also cancels the generic one). In front: nothing.
+
+**Uncertain:** whether the core's `listContacts` includes tribes and what exact
+JSON type `my_idx` has (parsed as number or string). If tribes are absent, tribe
+pushes fall back to the generic line until that is confirmed on a device.
 
 - **iOS reference** (`peel`): `Engine+Push.swift`, `PushToken.swift`,
   `Apps/iOS/Peel/PushRegistration.swift`, `PeelPush/PushNotificationContent.swift`,
@@ -24,8 +64,7 @@ Android SDK; `./gradlew assembleDebug` has to be run before trusting it).
   applied only if `app/google-services.json` exists. Without it there is no
   `FirebaseApp` and push is a no-op. Token re-registered on `onNewToken`, after
   unlock/login and after every reconnect; once per token per engine.
-  `BuildConfig.PUSH_REGISTER_WITH_HUB` is the iOS flag: `-Ppeel.push.registerWithHub=`
-  overrides, default on only with `google-services.json`.
+  `BuildConfig.PUSH_REGISTER_WITH_HUB` is the iOS flag (see Decided above).
 - **Notifications** (`push/Notifications`, `MessageNotifier`): channels
   `messages`, `payments`, `calls`, `ongoing_call`; shown for messages,
   attachments, payment requests (type 2), sats (type 5) and calls (type 32)
@@ -43,15 +82,14 @@ Android SDK; `./gradlew assembleDebug` has to be run before trusting it).
   `setFullScreenIntent` and a Join action (which opens the chat).
 
 **Open / not ported**
-- `setPushTokenForApp`'s `appId`/`pushEnvironment`: the bundled sphinxrs
-  bindings only expose `setPushToken`. Regenerate the bridge to add them.
-- Naming the chat in a push (child-index -> name map) — generic text only.
+- No client unregister in sphinx-rs (a signed-out token stays on the hub).
+- Hive links in notifications.
 - No FCM-delivered ring/VoIP push; the full-screen call notification comes
-  from the live MQTT connection, so a closed app only gets the generic push.
-- The server must actually send FCM for Android tokens; needs mixer work.
+  from the live MQTT connection, so a closed app only gets the named/generic push.
+- Mention-only mute (any mute is quiet), notification summaries, tribe join requests.
 - Join from the notification opens the chat; it does not auto-join.
 - The process is not kept alive in the background without a call (no
   connection foreground service); FCM wakes it.
-- Mention-only mute, notification summaries, tribe join requests.
-- Nothing here has a unit test; the pure pieces (`PushKeyStore.isValid`,
-  `PeelMessagingService.encryptedChild`) could.
+- Tests: pure JVM/Robolectric in `app/src/test/.../push/` (key validation,
+  `encryptedChild`, name directory, `resolve`, app id, `PushPlan`, sealed store).
+  The service, `PushNameSync` and Keystore use are only exercised on a device.

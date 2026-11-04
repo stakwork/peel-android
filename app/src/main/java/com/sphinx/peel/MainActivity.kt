@@ -121,7 +121,7 @@ private fun KeepConnected(engine: Engine, storage: Storage) {
     DisposableEffect(engine) {
         val watcher = ConnectionWatcher(context, engine).also { it.start() }
         val notifier = MessageNotifier(context, storage, engine).also { it.attach() }
-        PushRegistrar.accountOpened(context, engine)
+        PushRegistrar.accountOpened(context, engine, storage)
         onDispose {
             watcher.stop()
             notifier.detach()

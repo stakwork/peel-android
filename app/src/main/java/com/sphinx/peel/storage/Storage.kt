@@ -4,6 +4,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 
 /// `engine/Attachment.kt`'s own `ATTACHMENT_MESSAGE_TYPE`/
@@ -698,6 +700,7 @@ class Storage(context: Context, account: String = "default") {
             put("escrowMsat", existing?.escrowMsat ?: 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
     }
 
     /// A tribe's real name and photo, from its own registry
@@ -720,6 +723,7 @@ class Storage(context: Context, account: String = "default") {
             put("escrowMsat", escrowMsat)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
     }
 
     /// One contact or tribe, for whatever needs more than
@@ -749,6 +753,7 @@ class Storage(context: Context, account: String = "default") {
                     put("escrowMsat", existing?.escrowMsat ?: 0)
                 }
                 db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
             }
             db.setTransactionSuccessful()
         } finally {
@@ -825,6 +830,12 @@ class Storage(context: Context, account: String = "default") {
             )
         }
     }
+
+    private val contactsVersionFlow = MutableStateFlow(0)
+
+    /// Bumps whenever a `contact` row is written (name, tribe info, ready):
+    /// what `push/PushNameSync` watches to refresh the push name directory.
+    val contactsVersion: StateFlow<Int> = contactsVersionFlow
 
     fun close() = helper.close()
 

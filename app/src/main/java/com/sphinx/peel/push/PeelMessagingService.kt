@@ -1,35 +1,47 @@
 package com.sphinx.peel.push
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import org.json.JSONObject
 
 /// FCM entry point. `onNewToken` re-registers the token with the server
-/// (`PushRegistrar`); `onMessageReceived` is the push itself, which here as
-/// on iOS carries no message text, only `custom_data.child`, the sender's
-/// child index sealed under the push key (`aps.custom_data.child` in
-/// `PushNotificationResolver`). So it is a wake-up: with an account open it
-/// reconnects (a connected engine receives the message over MQTT and
-/// `MessageNotifier` shows it); with none it shows iOS's generic line,
-/// "You have new messages". Naming the chat (iOS' `PushNameDirectory`:
-/// child index -> name) is not ported: this port keeps no child-index
-/// map yet.
+/// (`PushRegistrar`); `onMessageReceived` is the push itself.
+///
+/// The server sends a data-only, high-priority message (no `notification`
+/// block): `child` (the contact/tribe child index sealed under this install's
+/// push key), `title` "Peel" and `body` "You have new messages". Nothing
+/// shows by itself, so this service does: it resolves `child` to a chat name
+/// through the sealed name directory (`PushNames`, iOS' notification
+/// extension port; works while locked, no engine needed) and posts it. With
+/// an account open it also reconnects (`resume`) so the real message arrives
+/// over MQTT, and `MessageNotifier`'s notification for that chat replaces
+/// this one (same per-chat id): never two for one message (`PushPlan`).
+/// The token, push key and child are never logged.
 class PeelMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         PushRegistrar.onNewToken(applicationContext, token)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
+        val app = applicationContext
         val engine = PushRegistrar.activeEngine()
-        if (engine != null) {
-            // An open account: reconnect and catch up if the connection is
-            // not already up; what arrives is notified by `MessageNotifier`.
-            if (!engine.isConnected) engine.resume()
-            return
+        val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        val plan = PushPlan.decide(engineOpen = engine != null, connected = engine?.isConnected == true, foreground = foreground)
+        if (plan.reconnect) engine?.resume()
+        if (!plan.postResolved) return
+        val data = message.data
+        val content = runCatching {
+            PushNames.resolve(encryptedChild(data), PushKeyStore.existing(app), PushNameStore.forContext(app).read())
+        }.getOrDefault(PushContent.GENERIC)
+        // The server's own title/body only matter for the generic fallback.
+        val shown = if (content.route == null && content.body == PushContent.GENERIC_BODY) {
+            PushContent(data["title"]?.takeIf { it.isNotBlank() } ?: content.title, data["body"]?.takeIf { it.isNotBlank() } ?: content.body, null)
+        } else {
+            content
         }
-        // The system already shows a push that carries a `notification`
-        // block while the app is in the background.
-        if (message.notification == null) Notifications.showGeneric(applicationContext)
+        Notifications.showPush(app, shown)
     }
 
     internal companion object {

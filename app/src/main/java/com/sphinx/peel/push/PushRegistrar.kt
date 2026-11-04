@@ -6,6 +6,7 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.sphinx.peel.BuildConfig
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.storage.Storage
 
 /// Keeps this install's FCM token and registers it with the account's
 /// server, the way `Apps/iOS/Peel/PushRegistration.swift`'s `PushCoordinator`
@@ -15,9 +16,8 @@ import com.sphinx.peel.engine.Engine
 /// ([onNewToken]) and after each (re)connect; the same token is not sent
 /// twice per engine. The token and the push key are never logged.
 ///
-/// Not ported: iOS's `appId`/`pushEnvironment` arguments
-/// (`setPushTokenForApp`): the bundled sphinxrs bindings only have
-/// `setPushToken` — see docs/phases/16-push-and-reliability.md.
+/// Registers under this app's own id (`PushApp`), not the official app's;
+/// it also keeps the sealed chat-name directory current (`PushNameSync`).
 ///
 /// Off, and a no-op, without a Firebase config (`google-services.json`: no
 /// `FirebaseApp`) or with `BuildConfig.PUSH_REGISTER_WITH_HUB` false.
@@ -28,6 +28,7 @@ object PushRegistrar {
 
     @Volatile private var engine: Engine? = null
     @Volatile private var registered: String? = null
+    @Volatile private var nameSync: PushNameSync? = null
 
     /// Whether Firebase is configured in this build.
     fun available(context: Context): Boolean =
@@ -35,12 +36,17 @@ object PushRegistrar {
 
     /// An account is open (after login or unlock): remember its engine,
     /// fetch the token, and register on every connection it makes.
-    fun accountOpened(context: Context, engine: Engine) {
+    fun accountOpened(context: Context, engine: Engine, storage: Storage) {
         val app = context.applicationContext
         this.engine = engine
         registered = null
         if (!available(app)) return
-        engine.onConnected = { registerIfReady(app, engine) }
+        val sync = PushNameSync(engine, storage, PushNameStore.forContext(app)).also { it.start() }
+        nameSync = sync
+        engine.onConnected = {
+            sync.kick()
+            registerIfReady(app, engine)
+        }
         PushKeyStore.loadOrCreate(app)
         runCatching {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { token -> onNewToken(app, token) }
@@ -53,6 +59,8 @@ object PushRegistrar {
 
     fun accountClosed() {
         engine?.onConnected = null
+        nameSync?.stop()
+        nameSync = null
         engine = null
         registered = null
     }

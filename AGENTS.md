@@ -38,7 +38,10 @@ sections for code that isn't written yet.
     - `onboarding/`, `lock/`, `home/` — new account or restore, the PIN
       lock screen, a placeholder account screen (no chat list yet).
   - `push/` — FCM (`PushRegistrar`, `PeelMessagingService`), `Notifications`
-    (channels, deep-link intents), `MessageNotifier`, `PushKeyStore`.
+    (channels, deep-link intents), `MessageNotifier`, `PushKeyStore`,
+    `PushApp` (own hub app id), `PushNames`/`PushNameStore`/`PushNameSync`
+    (iOS-style chat naming of data-only pushes). Firebase `google-services.json`
+    goes in `app/` (git-ignored).
     `call/CallService` is the call foreground service; `engine/ConnectionWatcher`
     reconnects on network change/app start. `docs/phases/16-push-and-reliability.md`.
   - `MainActivity.kt` — routes between those three screens.

@@ -3,6 +3,7 @@ package com.sphinx.peel.engine
 import android.os.SystemClock
 import android.util.Log
 import com.sphinx.peel.account.Account
+import com.sphinx.peel.push.PushApp
 import com.sphinx.peel.storage.ContactRow
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
@@ -53,7 +54,7 @@ import uniffi.sphinxrs.rootSignMs as coreRootSignMs
 import uniffi.sphinxrs.send as coreSend
 import uniffi.sphinxrs.signBase64 as coreSignBase64
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
-import uniffi.sphinxrs.setPushToken as coreSetPushToken
+import uniffi.sphinxrs.setPushTokenForApp as coreSetPushTokenForApp
 import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 
 /// Drives one account against the Sphinx core: the engine foundation
@@ -1160,8 +1161,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     val isConnected: Boolean get() = connectionStateFlow.value == ConnectionState.Connected
 
     /// Registers the FCM token with the server through the core
-    /// (`setPushToken`), as iOS' `Engine.registerPushToken` does through
-    /// `setPushTokenForApp`. Sends nothing, and answers false, unless
+    /// (`setPushTokenForApp`, as iOS' `Engine.registerPushToken`), under this
+    /// app's own id (`PushApp.APP_ID`, never the official app's "sphinx") in
+    /// the "production" environment (FCM has no sandbox). Sends nothing, and answers false, unless
     /// connected, with a valid push key and a token.
     fun registerPushToken(token: String, pushKey: String, done: (Boolean) -> Unit = {}) {
         scope.launch {
@@ -1169,7 +1171,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 if (transport == null || token.isEmpty() || pushKey.length != 64) {
                     false
                 } else {
-                    run { time, state -> coreSetPushToken(seed, time, state, token, pushKey) }
+                    run { time, state -> coreSetPushTokenForApp(seed, time, state, token, pushKey, PushApp.APP_ID, PushApp.ENVIRONMENT) }
                     true
                 }
             } catch (e: Exception) {
@@ -1372,6 +1374,22 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// cached for `contactHint`'s isPerson check.
     private fun refreshPersonKeys() {
         personKeys = parseContactPubkeys(coreListContacts(StateCodec.encode(state))).toSet()
+    }
+
+    /// Each contact's child index, the core's `my_idx` (what a push seals,
+    /// `decryptChildIndex` opens): pubkey -> index, for `PushNameSync`. Entries
+    /// without a readable `my_idx` are left out. The value may arrive as a
+    /// JSON number or a string.
+    fun contactChildIndexes(): Map<String, ULong> {
+        val array = JSONArray(coreListContacts(StateCodec.encode(state)))
+        val result = mutableMapOf<String, ULong>()
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val pubkey = obj.optString("pubkey").takeIf { it.isNotEmpty() } ?: continue
+            val index = obj.opt("my_idx")?.toString()?.toULongOrNull() ?: continue
+            result[pubkey] = index
+        }
+        return result
     }
 
     @Volatile private var personKeys: Set<String> = emptySet()

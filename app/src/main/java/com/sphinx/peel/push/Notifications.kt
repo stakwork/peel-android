@@ -37,6 +37,7 @@ object Notifications {
     const val EXTRA_OPEN_PAYMENTS = "com.sphinx.peel.extra.PAYMENTS"
     const val EXTRA_JOIN_CALL = "com.sphinx.peel.extra.JOIN_CALL"
 
+    private val GENERIC_ID = "generic".hashCode()
     const val CALL_NOTIFICATION_ID = 7001
     const val ONGOING_CALL_NOTIFICATION_ID = 7002
 
@@ -74,6 +75,9 @@ object Notifications {
 
     /// A message notification, one per chat (a newer one replaces it).
     fun showMessage(context: Context, chat: String, title: String, text: String) {
+        // The real notification replaces a push's per-chat one (same id); a
+        // push that could not name its chat posted the generic one: drop it.
+        NotificationManagerCompat.from(context).cancel(GENERIC_ID)
         post(context, chat.hashCode(), builder(context, NotificationKind.MESSAGES, title, text)
             .setContentIntent(openIntent(context, chat = chat))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -110,8 +114,17 @@ object Notifications {
     /// The notification a push shows when its payload carries nothing but
     /// an encrypted child index: iOS' generic line, "You have new messages".
     fun showGeneric(context: Context, body: String = "You have new messages") {
-        post(context, "generic".hashCode(), builder(context, NotificationKind.MESSAGES, "Peel", body)
-            .setContentIntent(openIntent(context))
+        showPush(context, PushContent(PushContent.TITLE, body, null))
+    }
+
+    /// A push's own notification: the chat's id (and a tap into it) when the
+    /// push could be resolved to a chat, so the real MQTT notification for
+    /// that chat ([showMessage]) replaces it; else the one generic id.
+    fun showPush(context: Context, content: PushContent) {
+        val chat = content.route?.chat
+        post(context, chat?.hashCode() ?: GENERIC_ID, builder(context, NotificationKind.MESSAGES, content.title, content.body)
+            .setContentIntent(if (chat != null) openIntent(context, chat = chat) else openIntent(context))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .build())
     }
 
@@ -138,6 +151,7 @@ object Notifications {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
 
+    @android.annotation.SuppressLint("MissingPermission") // `permitted` checks POST_NOTIFICATIONS just below
     private fun post(context: Context, id: Int, notification: Notification) {
         if (!permitted(context)) return
         createChannels(context)
