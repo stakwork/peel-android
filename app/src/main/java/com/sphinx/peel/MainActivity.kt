@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -27,6 +29,9 @@ import com.sphinx.peel.ui.lock.LockScreen
 import com.sphinx.peel.ui.onboarding.OnboardingScreen
 import com.sphinx.peel.ui.onboarding.RestoringAccountScreen
 import com.sphinx.peel.ui.theme.PeelTheme
+import com.sphinx.peel.ui.toast.LocalToast
+import com.sphinx.peel.ui.toast.ToastHost
+import com.sphinx.peel.ui.toast.rememberToastState
 
 /// A FragmentActivity (still a ComponentActivity, `setContent` works) because
 /// BiometricPrompt needs one.
@@ -44,8 +49,12 @@ class MainActivity : FragmentActivity() {
                 // bars too (edge-to-edge is mandatory from API 35); only the
                 // content inside is pushed clear of them.
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    val toast = rememberToastState()
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        PeelApp(secretStore, storage)
+                        CompositionLocalProvider(LocalToast provides toast) {
+                            PeelApp(secretStore, storage)
+                        }
+                        ToastHost(toast, Modifier.align(Alignment.BottomCenter))
                     }
                 }
             }
