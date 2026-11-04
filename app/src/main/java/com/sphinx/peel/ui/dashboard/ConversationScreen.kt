@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -1315,13 +1316,26 @@ private fun dayHeading(timestamp: Long): String {
 
 @Composable
 private fun DayDivider(timestamp: Long) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.Center) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Theme.colors.divider.copy(alpha = 0.25f))
+            .padding(vertical = 8.dp, horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
         Text(
             dayHeading(timestamp),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.secondaryText,
+            modifier = Modifier
+                .padding(horizontal = 10.dp)
+                .border(0.5.dp, Theme.colors.divider, RoundedCornerShape(50))
+                .background(Theme.colors.background, RoundedCornerShape(50))
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         )
+        HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
     }
 }
 
