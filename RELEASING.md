@@ -24,6 +24,11 @@ Add these under **Settings > Secrets and variables > Actions**:
 | `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
 | `ANDROID_KEY_ALIAS` | Key alias (e.g. `peel`) |
 | `ANDROID_KEY_PASSWORD` | Key password |
+| `GOOGLE_SERVICES_JSON` | Contents of the Firebase project's `google-services.json` (optional — see below) |
+
+### 3. Push notifications (optional)
+
+`GOOGLE_SERVICES_JSON` enables FCM push in the release APK. Without it, the release still builds and installs fine — it just has no push, same as a local build with no `app/google-services.json` (see `app/build.gradle.kts`). The workflow writes the secret's value to `app/google-services.json` before building and passes `-Ppeel.push.registerWithHub=true`, so a release built with this secret set registers its FCM token with the hub (`docs/phases/19-push-and-reliability.md`).
 
 ## Cutting a release
 

@@ -50,7 +50,7 @@ sections for code that isn't written yet.
     Retry/Discard (`docs/phases/19-chat-actions-send-retry.md`); UI in
     `ui/dashboard/ChatRowActions.kt` and `UndeliveredLine.kt`.
   - `engine/Invite*.kt`, `ContactCode.kt`, `InviterFlow.kt`, `Invites.kt` and `account/Signup.kt` — invites and
-    contacts (`docs/phases/20-invites.md`): a new account only signs up with an invite; `addContact`,
+    contacts (`docs/phases/21-invites.md`): a new account only signs up with an invite; `addContact`,
     `makeInvite`, `cancelInvite`; `run(ordered = true)` publishes in PeelCore's `publishPlan` order.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
@@ -60,6 +60,13 @@ sections for code that isn't written yet.
       `PhoneControls.swift`/`PinPad.swift`.
     - `onboarding/`, `lock/`, `home/` — new account or restore, the PIN
       lock screen, a placeholder account screen (no chat list yet).
+  - `push/` — FCM (`PushRegistrar`, `PeelMessagingService`), `Notifications`
+    (channels, deep-link intents), `MessageNotifier`, `PushKeyStore`,
+    `PushApp` (own hub app id), `PushNames`/`PushNameStore`/`PushNameSync`
+    (iOS-style chat naming of data-only pushes). Firebase `google-services.json`
+    goes in `app/` (git-ignored).
+    `call/CallService` is the call foreground service; `engine/ConnectionWatcher`
+    reconnects on network change/app start. `docs/phases/20-push-and-reliability.md`.
   - `MainActivity.kt` — routes between those three screens.
 - `sphinxrs/` — generated UniFFI Kotlin bindings to the Rust core
   (`uniffi.sphinxrs`) plus the native `libsphinxrs.so`. Do not hand-edit;

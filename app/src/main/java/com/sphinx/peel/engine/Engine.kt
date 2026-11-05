@@ -5,6 +5,7 @@ import android.util.Log
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.PinTimeout
 import com.sphinx.peel.storage.CONTACT_KEY_MESSAGE_TYPE
+import com.sphinx.peel.push.PushApp
 import com.sphinx.peel.storage.ContactRow
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -56,6 +58,7 @@ import uniffi.sphinxrs.rootSignMs as coreRootSignMs
 import uniffi.sphinxrs.send as coreSend
 import uniffi.sphinxrs.signBase64 as coreSignBase64
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
+import uniffi.sphinxrs.setPushTokenForApp as coreSetPushTokenForApp
 import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 
 /// Drives one account against the Sphinx core: the engine foundation
@@ -149,6 +152,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     private var started = false
     /// A restore is paging right now: a second `start`/`resume` must not run another.
     @Volatile private var restoreRunning = false
+
+    /// Called after each successful (re)connect, once registered and caught
+    /// up — where `PushRegistrar` registers the push token (iOS:
+    /// `PushCoordinator.connected()`).
+    @Volatile var onConnected: (() -> Unit)? = null
+
+    /// Called with each message the live listener receives (not sent ones),
+    /// for `MessageNotifier`.
+    @Volatile var onIncoming: ((List<MessageRow>) -> Unit)? = null
 
     private val connectionStateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = connectionStateFlow.asStateFlow()
@@ -494,6 +506,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 storeMessages(handled)
                 if (handled.msgs.isNotEmpty()) {
                     Log.d("PeelHistory", "${handled.msgs.size} msgs: core handle+commit ${handledAt - startedAt}ms, store ${SystemClock.elapsedRealtime() - handledAt}ms")
+                    onIncoming?.let { notify ->
+                        val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe }
+                        if (rows.isNotEmpty()) runCatching { notify(rows) }
+                    }
                 }
                 inboundResults.emit(handled)
             }
@@ -505,7 +521,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// nothing, so without publishing them the other side never gets this account's key.
     /// Only for a live key exchange: never while a restore replays history (PeelCore
     /// publishes every handled result; this port does so only where it is needed, see
-    /// docs/phases/20-invites.md). Under the lock, like the commit it follows. A failure
+    /// docs/phases/21-invites.md). Under the lock, like the commit it follows. A failure
     /// is logged, not thrown: it must not end the listener.
     private suspend fun answerKeyExchange(result: RunReturn) {
         if (restoreProgressFlow.value.restoring) return
@@ -1581,7 +1597,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         keepConnected = true
         scope.launch {
             backfillContactsIfNeeded()
-            if (!connectAndRegister()) return@launch
+            if (!connectAndRegister()) {
+                // The first connect failed: keep trying with backoff instead of staying offline.
+                if (keepConnected && reconnectJob?.isActive != true) reconnectJob = scope.launch { reconnectLoop() }
+                return@launch
+            }
             afterConnect()
             refreshTribeNames()
             runCatching { syncPreferences() }
@@ -1728,6 +1748,50 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // The open chat's own sends, now that this connection can answer
         // (a foreground or a reconnect with a chat on screen).
         openChat?.let { runCatching { checkOwnMessageStatus(it) } }
+        // Connected and caught up: `PushRegistrar` registers the push token here.
+        onConnected?.let { runCatching { it() } }
+    }
+
+    /// The device came online or changed network (`ConnectionWatcher`): a
+    /// connection that lived through a network change is usually dead
+    /// though nothing has said so yet, so this reconnects, now. Not while
+    /// a connect is already running.
+    fun networkChanged() {
+        if (connectionStateFlow.value == ConnectionState.Connecting) return
+        resume()
+    }
+
+    /// Keeps no connection from here on (a deliberate sign-out).
+    fun stop() {
+        keepConnected = false
+        reconnectJob?.cancel()
+    }
+
+    /// Whether the broker connection is up and registered right now (what a
+    /// push checks before deciding to reconnect); [isConnected] only says a
+    /// transport exists.
+    val isOnline: Boolean get() = connectionStateFlow.value == ConnectionState.Connected
+
+    /// Registers the FCM token with the server through the core
+    /// (`setPushTokenForApp`, as iOS' `Engine.registerPushToken`), under this
+    /// app's own id (`PushApp.APP_ID`, never the official app's "sphinx") in
+    /// the "production" environment (FCM has no sandbox). Sends nothing, and
+    /// answers false, unless connected, with a valid push key and a token.
+    fun registerPushToken(token: String, pushKey: String, done: (Boolean) -> Unit = {}) {
+        scope.launch {
+            val ok = try {
+                if (transport == null || token.isEmpty() || pushKey.length != 64) {
+                    false
+                } else {
+                    run { time, state -> coreSetPushTokenForApp(seed, time, state, token, pushKey, PushApp.APP_ID, PushApp.ENVIRONMENT) }
+                    true
+                }
+            } catch (e: Exception) {
+                Log.w("Engine", "push registration failed: ${e.javaClass.simpleName}")
+                false
+            }
+            done(ok)
+        }
     }
 
     /// Each known tribe's real name and photo, from its own registry —
@@ -1887,6 +1951,22 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// cached for `contactHint`'s isPerson check.
     private fun refreshPersonKeys() {
         personKeys = parseContactPubkeys(coreListContacts(StateCodec.encode(state))).toSet()
+    }
+
+    /// Each contact's child index, the core's `my_idx` (what a push seals,
+    /// `decryptChildIndex` opens): pubkey -> index, for `PushNameSync`. Entries
+    /// without a readable `my_idx` are left out. The value may arrive as a
+    /// JSON number or a string.
+    fun contactChildIndexes(): Map<String, ULong> {
+        val array = JSONArray(coreListContacts(StateCodec.encode(state)))
+        val result = mutableMapOf<String, ULong>()
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val pubkey = obj.optString("pubkey").takeIf { it.isNotEmpty() } ?: continue
+            val index = obj.opt("my_idx")?.toString()?.toULongOrNull() ?: continue
+            result[pubkey] = index
+        }
+        return result
     }
 
     @Volatile private var personKeys: Set<String> = emptySet()

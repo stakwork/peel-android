@@ -1,7 +1,15 @@
 package com.sphinx.peel
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import com.sphinx.peel.engine.ConnectionWatcher
+import com.sphinx.peel.push.MessageNotifier
+import com.sphinx.peel.push.Notifications
+import com.sphinx.peel.push.PushRegistrar
+import com.sphinx.peel.ui.dashboard.DeepLink
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -18,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -43,9 +52,16 @@ class MainActivity : FragmentActivity() {
     /// onboarding's invite step takes it (open question: the scheme is the official apps').
     private var inviteLink by mutableStateOf<String?>(null)
 
+    /// What a tapped notification asked for, until `MainTabs` has opened it.
+    private var deepLink by mutableStateOf<DeepLink?>(null)
+
+    private val askNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        deepLink = DeepLink.from(intent)
         takeInviteLink(intent)
     }
 
@@ -61,6 +77,12 @@ class MainActivity : FragmentActivity() {
         // No chat contents in the Recents thumbnail (API 33+). Screens that show
         // a secret are additionally FLAG_SECURE (`SecureWindow`).
         if (android.os.Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
+        Notifications.createChannels(applicationContext)
+        // Android 13+: asked once, here, as iOS asks once when an account opens.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Notifications.permitted(this)) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        deepLink = DeepLink.from(intent)
         val secretStore = FileSecretStore(applicationContext)
         val storage = Storage(applicationContext)
         setContent {
@@ -72,7 +94,7 @@ class MainActivity : FragmentActivity() {
                     val toast = rememberToastState()
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                         CompositionLocalProvider(LocalToast provides toast) {
-                            PeelApp(secretStore, storage, inviteLink) { inviteLink = null }
+                            PeelApp(secretStore, storage, inviteLink, { inviteLink = null }, deepLink) { deepLink = null }
                         }
                         ToastHost(toast, Modifier.align(Alignment.BottomCenter))
                     }
@@ -100,11 +122,19 @@ private sealed class Screen {
 /// `Engine.start()` is never called twice for the same account and its
 /// connection survives moving between these screens.
 @Composable
-private fun PeelApp(secretStore: SecretStore, storage: Storage, inviteLink: String?, onInviteLinkUsed: () -> Unit) {
+private fun PeelApp(
+    secretStore: SecretStore, storage: Storage, inviteLink: String?, onInviteLinkUsed: () -> Unit,
+    deepLink: DeepLink?, onDeepLinkHandled: () -> Unit,
+) {
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
 
+    // The engine keeps running behind the lock, so its connection watcher,
+    // push registration and notifications do too (one composition spot, so
+    // Home <-> Relock does not restart them).
+    val kept = (screen as? Screen.Home)?.engine ?: (screen as? Screen.Relock)?.engine
+    if (kept != null) KeepConnected(kept, storage)
     when (val current = screen) {
         Screen.Onboarding -> OnboardingScreen(secretStore, storage, inviteLink, onInviteLinkUsed) { engine ->
             screen = if (engine.restoreProgress.value.restoring) Screen.Restoring(engine) else Screen.Home(engine)
@@ -113,34 +143,32 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage, inviteLink: Stri
         is Screen.Relock -> LockScreen(secretStore, storage, existing = current.engine) { engine -> screen = Screen.Home(engine) }
         is Screen.Restoring -> RestoringAccountScreen(current.engine) { screen = Screen.Home(current.engine) }
         is Screen.Home -> {
-            ResumeOnForeground(current.engine)
             RelockWhenIdle(current.engine) { screen = Screen.Relock(current.engine) }
             BiometricHousekeeping(current.engine, secretStore)
             StadeumHousekeeping(current.engine)
             InviterNotice(current.engine)
-            MainTabs(current.engine, storage, secretStore) { screen = Screen.Onboarding }
+            MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { screen = Screen.Onboarding }
         }
     }
 }
 
-/// Calls `Engine.resume()` each time the app returns to the foreground —
-/// PeelCore's own reconnect-on-foreground plus `cameOnline`'s catch-up,
-/// triggered the Android way. Skips the very first `ON_RESUME`: the
-/// lifecycle is already resumed when this observer is added (right after
-/// `start()` just ran, making this screen reachable at all), so Android
-/// replays that event into it immediately, and `resume()` would only
-/// race `start()`'s own first connection.
+/// Everything that keeps an open account reachable: reconnect on network
+/// change and when the app comes to the front (`ConnectionWatcher`), the
+/// push token registered with the server (`PushRegistrar`) and the
+/// notifications for what arrives in the background (`MessageNotifier`).
+/// The engine itself reconnects with backoff after a drop.
 @Composable
-private fun ResumeOnForeground(engine: Engine) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(engine, lifecycleOwner) {
-        var first = true
-        val observer = LifecycleEventObserver { _, event ->
-            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
-            if (first) first = false else engine.resume()
+private fun KeepConnected(engine: Engine, storage: Storage) {
+    val context = LocalContext.current.applicationContext
+    DisposableEffect(engine) {
+        val watcher = ConnectionWatcher(context, engine).also { it.start() }
+        val notifier = MessageNotifier(context, storage, engine).also { it.attach() }
+        PushRegistrar.accountOpened(context, engine, storage)
+        onDispose {
+            watcher.stop()
+            notifier.detach()
+            PushRegistrar.accountClosed()
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 }
 

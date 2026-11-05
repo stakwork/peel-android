@@ -3,6 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Push needs the Firebase project's own google-services.json (app/, never
+// committed). Without it the plugin is not applied and the build still
+// works; the app then has no FCM and runs on its MQTT connection alone.
+val hasGoogleServices = file("google-services.json").exists()
+if (hasGoogleServices) apply(plugin = "com.google.gms.google-services")
+
 // Read a value from a Gradle property (-PNAME=...) or the environment; blank = unset.
 fun propOrEnv(name: String): String? =
     (providers.gradleProperty(name).orNull ?: System.getenv(name))?.takeIf { it.isNotBlank() }
@@ -25,6 +31,13 @@ android {
         targetSdk = 36
         versionCode = propOrEnv("VERSION_CODE")?.toInt() ?: 1
         versionName = propOrEnv("VERSION_NAME") ?: "1.0.0"
+        // PUSH_REGISTER_WITH_HUB: whether the app registers its FCM token with
+        // the hub (the server keeps one token per app id). Release builds: off
+        // unless -Ppeel.push.registerWithHub=true. Debug builds: on when
+        // google-services.json exists. -P always overrides.
+        buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", "false")
+        // Own app id on the hub (NOT applicationId, which equals the iOS bundle id).
+        buildConfigField("String", "PUSH_APP_ID", "\"com.sphinx.peel.android\"")
     }
 
     signingConfigs {
@@ -39,7 +52,14 @@ android {
     }
 
     buildTypes {
+        // Per build type (not per requested task), so `build`, `assemble`, IDE
+        // and bundle builds all get the right value. -P always overrides.
+        val registerOverride = (project.findProperty("peel.push.registerWithHub") as String?)?.toBoolean()
+        debug {
+            buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", (registerOverride ?: hasGoogleServices).toString())
+        }
         release {
+            buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", (registerOverride ?: false).toString())
             // Release ships arm64-v8a only: x86_64 is only for emulators, and the
             // JNA aar's other ABIs are dropped too. Debug stays unfiltered so debug
             // builds still run on x86_64 emulators. (A library's abiFilters, e.g. in
@@ -96,7 +116,12 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.process)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
     implementation(libs.androidx.activity.compose)
+    // Newer than what firebase-messaging pulls in transitively (lint: InvalidFragmentVersionForActivityResult).
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)

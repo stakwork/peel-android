@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.Stadeum
@@ -428,15 +429,17 @@ private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onLo
     ) {
         ConversationAvatar(conversation, size = 44.dp)
         Spacer(Modifier.width(12.dp))
-        Text(
-            conversation.name,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (unread > 0) Theme.colors.text else Theme.colors.secondaryText,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                conversation.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (unread > 0) Theme.colors.text else Theme.colors.secondaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            conversation.previewLine?.let { PreviewLine(it, unread = unread > 0) }
+        }
         if (onCall) {
             Spacer(Modifier.width(8.dp))
             Icon(Icons.Filled.Call, contentDescription = "On a call", tint = Theme.colors.confirmed, modifier = Modifier.size(18.dp))
@@ -462,6 +465,27 @@ private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onLo
                 }
             }
         }
+    }
+}
+
+/// A chat's last message under its name on one line (PeelCore's
+/// `PreviewLine`): muted and regular when read; primary text, semibold,
+/// with an accent dot in front when unread.
+@Composable
+private fun PreviewLine(line: String, unread: Boolean) {
+    Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (unread) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(Theme.colors.accent))
+            Spacer(Modifier.width(5.dp))
+        }
+        Text(
+            line,
+            fontSize = 12.sp,
+            fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (unread) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.8f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

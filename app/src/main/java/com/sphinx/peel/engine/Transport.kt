@@ -96,6 +96,9 @@ class Transport(
 
     suspend fun connect() {
         client.connectWith()
+            // The MQTT keep-alive: a PINGREQ every 30 seconds, and the
+            // client drops the connection (-> onLost) when none is answered.
+            .keepAlive(KEEP_ALIVE_SECONDS)
             .simpleAuth()
             .username(username)
             .password(password.toByteArray(Charsets.UTF_8))
@@ -138,3 +141,5 @@ private suspend fun <T> CompletableFuture<T>.await(): T = suspendCancellableCoro
     }
     continuation.invokeOnCancellation { cancel(true) }
 }
+
+private const val KEEP_ALIVE_SECONDS = 30

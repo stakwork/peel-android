@@ -14,6 +14,8 @@ import com.sphinx.peel.engine.InviteRules
 import com.sphinx.peel.engine.InvoiceRecord
 import com.sphinx.peel.engine.Mentions
 import com.sphinx.peel.engine.PaymentRecord
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 
 /// `engine/Attachment.kt`'s own `ATTACHMENT_MESSAGE_TYPE`/
@@ -81,6 +83,14 @@ data class ConversationRow(
     /// still can't distinguish them (no mention tracking to pick a
     /// mentions-only count out of `unread`).
     val muteLevel: Int = 0,
+    /// The newest message as the preview line reads it (`previewType` null
+    /// when there is none): see `ConversationPreview`. Kept apart from
+    /// `lastContent` since it also takes deleted messages and invoices.
+    val previewType: Int? = null,
+    val previewBody: String? = null,
+    val previewDeleted: Boolean = false,
+    val previewFromMe: Boolean? = null,
+    val previewSender: String? = null,
     /// Unread messages that mention this account (tribes only), filled in
     /// by [Storage.conversations] only for a chat on "mentions only" —
     /// what that level shows instead of `unread` (`ChatReadState.shownUnread`).
@@ -91,6 +101,10 @@ data class ConversationRow(
     /// once someone else has written in it). Null when there is none.
     val newestIncoming: Long? = null,
 ) {
+    /// One line for the row, null for a chat with nothing yet.
+    val previewLine: String? get() =
+        com.sphinx.peel.engine.ConversationPreview.line(previewType, previewBody, previewDeleted, previewFromMe, isTribe, previewSender)
+
     /// The alias, or the chat's own key trimmed to 12 characters — same
     /// fallback as `Conversation.name`.
     val name: String get() = alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
@@ -490,6 +504,9 @@ class Storage(context: Context, account: String = "default") {
     /// messages" started this time (PeelCore's own `AppModel.newMessages`,
     /// captured the same way at open).
     fun lastRead(chat: String): Long? = readChatState(helper.readableDatabase, chat)?.lastRead
+
+    /// `chatState.muteLevel` for `chat`: 0 all, 1 mentions only, 2 muted.
+    fun muteLevel(chat: String): Int = readChatState(helper.readableDatabase, chat)?.muteLevel ?: 0
 
     /// Read markers set here while offline, not yet sent — PeelCore's
     /// `pendingReads`. What `Engine.fetchReadsAndMutes`'s
@@ -1050,6 +1067,7 @@ class Storage(context: Context, account: String = "default") {
             put("escrowMsat", existing?.escrowMsat ?: 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
     }
 
     /// A tribe's real name and photo, from its own registry
@@ -1072,6 +1090,7 @@ class Storage(context: Context, account: String = "default") {
             put("escrowMsat", escrowMsat)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
     }
 
     /// One contact or tribe, for whatever needs more than
@@ -1101,6 +1120,7 @@ class Storage(context: Context, account: String = "default") {
                     put("escrowMsat", existing?.escrowMsat ?: 0)
                 }
                 db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
             }
             db.setTransactionSuccessful()
         } finally {
@@ -1140,8 +1160,16 @@ class Storage(context: Context, account: String = "default") {
                         ))),
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0),
                 (SELECT MAX(m.serverIndex) FROM message m
-                    WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.deleted = 0 AND m.type IN $COUNTED_TYPES)
+                    WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.deleted = 0 AND m.type IN $COUNTED_TYPES),
+                p.type, p.body, p.deleted, p.fromMe, p.sender
             FROM contact c
+            LEFT JOIN message p ON p.id = (
+                SELECT id FROM message
+                WHERE chat = c.pubkey
+                    AND type IN (0, 2, 5, 6, 32)
+                    AND (deleted = 1 OR type != 0 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                ORDER BY timestamp DESC, id DESC LIMIT 1
+            )
             LEFT JOIN message l ON l.id = (
                 SELECT id FROM message
                 WHERE chat = c.pubkey AND deleted = 0
@@ -1167,6 +1195,11 @@ class Storage(context: Context, account: String = "default") {
                         unread = cursor.getLong(7),
                         muteLevel = cursor.getInt(8),
                         newestIncoming = if (cursor.isNull(9)) null else cursor.getLong(9),
+                        previewType = if (cursor.isNull(10)) null else cursor.getInt(10),
+                        previewBody = cursor.getString(11),
+                        previewDeleted = !cursor.isNull(12) && cursor.getInt(12) != 0,
+                        previewFromMe = if (cursor.isNull(13)) null else cursor.getInt(13) != 0,
+                        previewSender = cursor.getString(14),
                     ),
                 )
             }
@@ -1252,6 +1285,12 @@ class Storage(context: Context, account: String = "default") {
             )
         }
     }
+
+    private val contactsVersionFlow = MutableStateFlow(0)
+
+    /// Bumps whenever a `contact` row is written (name, tribe info, ready):
+    /// what `push/PushNameSync` watches to refresh the push name directory.
+    val contactsVersion: StateFlow<Int> = contactsVersionFlow
 
     // MARK: - Money (invoices and the server's payment history)
 

@@ -10,6 +10,17 @@
          runtime, same as the mic above — RECORD_AUDIO already covers a
          call's own microphone, this is the one call-specific addition. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Push and notifications (push/): POST_NOTIFICATIONS is a runtime
+         permission from Android 13; the full-screen intent is for a call
+         someone starts. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- The call foreground service (call/CallService): a microphone (and,
+         with the camera granted, camera) service type, each with its own
+         permission from Android 14. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Network policy: usesCleartextTraffic/networkSecurityConfig only govern
@@ -40,7 +51,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!-- An invite link, sphinx.chat://?action=i&d=… (the official apps' scheme; Peel's own is
-                 not decided, docs/phases/20-invites.md). Only fills in the onboarding's invite step:
+                 not decided, docs/phases/21-invites.md). Only fills in the onboarding's invite step:
                  nothing is joined or paid by opening a link. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -49,6 +60,22 @@
                 <data android:scheme="sphinx.chat" />
             </intent-filter>
         </activity>
+
+        <!-- FCM: onNewToken re-registers the token, onMessageReceived is the
+             push. Inert without a Firebase config (google-services.json). -->
+        <service
+            android:name=".push.PeelMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Keeps a running call alive in the background. -->
+        <service
+            android:name=".call.CallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera" />
 
         <!-- Hands a downloaded attachment to whatever app the person
              picks to open it with (video/audio/PDF/file — an image
