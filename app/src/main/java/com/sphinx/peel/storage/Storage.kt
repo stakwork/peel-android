@@ -506,6 +506,14 @@ class Storage(context: Context, account: String = "default") {
     /// shows. Not paged yet: fine for how little history a real account
     /// here has per chat so far, revisit once a busy tribe makes "load
     /// more" worth building.
+    /// Messages that may announce a call (a call message, or text holding a
+    /// call room link) since [sinceMs], newest first — PeelCore's
+    /// `Storage.recentCallMessages`.
+    fun recentCallMessages(sinceMs: Long): List<MessageRow> = readMessages(
+        "timestamp >= ? AND deleted = 0 AND (type = 32 OR (type = 0 AND instr(body, 'sphinx.call.') > 0))",
+        arrayOf(sinceMs.toString()), "timestamp DESC, id DESC",
+    ).take(500)
+
     fun messages(chat: String): List<MessageRow> = readMessages("chat = ?", arrayOf(chat), "timestamp ASC, id ASC")
 
     /// The newest `limit` messages that mention this account's own tribe

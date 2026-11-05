@@ -56,6 +56,8 @@ import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.storage.ConversationRow
+import com.sphinx.peel.ui.call.rememberLiveCallCounts
+import androidx.compose.material.icons.filled.Call
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.AgentTag
@@ -117,6 +119,7 @@ private fun ChatListBody(
     var allTribes by remember { mutableStateOf(false) }
     var allDirect by remember { mutableStateOf(false) }
     val restoreProgress by engine.restoreProgress.collectAsState()
+    val liveCalls = rememberLiveCallCounts(engine, storage)
 
     // No reactive query layer yet (no Room, no Flow-backed DB) to push a
     // row the moment a live message lands — re-reads on every restore
@@ -177,7 +180,7 @@ private fun ChatListBody(
                 if (sections.unread.isNotEmpty()) {
                     item { SectionHeader("Unread", expanded = true, onToggle = null) }
                     items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
-                        ChatRow(conversation) { onOpenChat(conversation.chat) }
+                        ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
                     }
                     item { Spacer(Modifier.height(16.dp)) }
                 }
@@ -189,7 +192,7 @@ private fun ChatListBody(
                     item { SectionHeader("Tribes", expanded = tribesOpen || searching, onToggle = toggleTribes) }
                     if (tribesOpen || searching) {
                         items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
-                            ChatRow(conversation) { onOpenChat(conversation.chat) }
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
                         }
                         sections.allTribesCount?.let { count ->
                             item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
@@ -210,7 +213,7 @@ private fun ChatListBody(
                             item(key = "agent") { AgentChatRow(agent.shownUnread) { onOpenChat(engine.agentPubkey) } }
                         }
                         items(sections.direct, key = { "direct-${it.chat}" }) { conversation ->
-                            ChatRow(conversation) { onOpenChat(conversation.chat) }
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
                         }
                         sections.allDirectCount?.let { count ->
                             item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
@@ -398,7 +401,7 @@ private fun SectionHeader(title: String, expanded: Boolean, onToggle: (() -> Uni
 }
 
 @Composable
-private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
+private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onClick: () -> Unit) {
     val unread = conversation.shownUnread
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
@@ -415,6 +418,10 @@ private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        if (onCall) {
+            Spacer(Modifier.width(8.dp))
+            Icon(Icons.Filled.Call, contentDescription = "On a call", tint = Theme.colors.confirmed, modifier = Modifier.size(18.dp))
+        }
         if (unread > 0) {
             Spacer(Modifier.width(8.dp))
             UnreadBadge(unread)

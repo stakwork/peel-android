@@ -8,6 +8,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -1360,12 +1362,11 @@ private fun MessageRowView(
 /// banner to spend it on yet.
 @Composable
 private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> Unit) {
-    var peopleHere by remember(link.room) { mutableStateOf<Int?>(null) }
+    var presence by remember(link.room) { mutableStateOf<CallPresence>(CallPresence.Unknown) }
     LaunchedEffect(link.room) {
-        engine.callPresence(link).collect { presence ->
-            peopleHere = (presence as? CallPresence.Live)?.people?.size
-        }
+        engine.callPresence(link).collect { presence = it }
     }
+    val people = presence.people().orEmpty()
     Row(
         Modifier
             .fillMaxWidth()
@@ -1374,22 +1375,48 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            if (link.audioOnly) Icons.Filled.Call else Icons.Filled.Videocam,
-            contentDescription = null, tint = Theme.colors.secondaryText,
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
-            val count = peopleHere
-            if (count != null && count > 0) {
-                Text(
-                    if (count == 1) "1 person here now" else "$count people here now",
-                    style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText,
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (link.audioOnly) Icons.Filled.Call else Icons.Filled.Videocam,
+                    contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp),
                 )
+                Spacer(Modifier.width(8.dp))
+                Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+            }
+            when {
+                people.isNotEmpty() -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.width((26 + (minOf(people.size, 3) - 1) * 19).dp).height(26.dp)) {
+                        people.take(3).forEachIndexed { i, person ->
+                            Avatar(
+                                name = person.nickname.ifEmpty { "Guest" },
+                                url = person.avatarUrl,
+                                size = 22.dp,
+                                hue = PersonHue.of(person.identity),
+                                modifier = Modifier
+                                    .offset(x = (i * 19).dp)
+                                    .align(Alignment.CenterStart)
+                                    .border(2.dp, Theme.colors.fieldFill, CircleShape),
+                            )
+                        }
+                    }
+                    if (people.size > 3) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("+${people.size - 3}", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(Theme.colors.confirmed))
+                    Spacer(Modifier.width(6.dp))
+                    Text("${people.size} on the call", style = MaterialTheme.typography.bodySmall, color = Theme.colors.text)
+                }
+                presence is CallPresence.Live ->
+                    Text("No one on the call", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                presence is CallPresence.Ended ->
+                    Text("Call ended", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                else -> {}
             }
         }
-        TextButton(onClick = { onJoinCall(link) }) { Text("Join") }
+        OutlinedButton(onClick = { onJoinCall(link) }) { Text("Join") }
     }
 }
 
