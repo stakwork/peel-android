@@ -71,8 +71,8 @@ import kotlinx.coroutines.coroutineScope
 /// Search, a source filter (with several workspaces), Refresh, long-press to
 /// copy a share link. Not ported: pull-to-refresh (Refresh does it), the
 /// Mac-only own-strut apps, the lucide icon table (a generic glyph instead).
-/// There is no Stadeum pairing on Android yet (`Stadeum`), so today `live`
-/// is empty and the row that opens this screen is hidden.
+/// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
+/// this screen follows a connect or disconnect without a restart.
 @Composable
 fun AppsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live

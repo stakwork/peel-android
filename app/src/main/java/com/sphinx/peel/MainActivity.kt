@@ -96,6 +96,7 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage) {
             ResumeOnForeground(current.engine)
             RelockWhenIdle(current.engine) { screen = Screen.Relock(current.engine) }
             BiometricHousekeeping(current.engine, secretStore)
+            StadeumHousekeeping(current.engine)
             MainTabs(current.engine, storage, secretStore) { screen = Screen.Onboarding }
         }
     }
@@ -160,5 +161,31 @@ private fun BiometricHousekeeping(engine: Engine, secretStore: SecretStore) {
     androidx.compose.runtime.LaunchedEffect(engine) {
         engine.syncsBiometrics = com.sphinx.peel.ui.lock.BiometricUnlock.available(context)
         if (engine.biometricWish() == false && secretStore.biometricEnrolled) secretStore.disableBiometric()
+    }
+}
+
+/// Opens the Stadeum pairing kept for this account while it is on screen
+/// (renewed at once and then hourly), renews it when due on coming back to
+/// the front, and lets it go when the account closes or locks (iOS opens it
+/// at every unlock).
+@Composable
+private fun StadeumHousekeeping(engine: Engine) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(engine, lifecycleOwner) {
+        val model = com.sphinx.peel.engine.Stadeum.model
+        model.sphinxProof = { runCatching { engine.sphinxProof() }.getOrNull() }
+        model.open(com.sphinx.peel.account.KeystoreHiveStore(context.applicationContext))
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            if (first) first = false else model.cameToFront()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            model.close()
+            model.sphinxProof = null
+        }
     }
 }
