@@ -101,4 +101,10 @@ enum class Setting(val key: String) {
     /// (`SecretStore.biometricEnrolled`), never set by a sync.
     BIOMETRIC_ENABLED("biometricEnabled"),
     BIOMETRIC_ENABLED_UPDATED_AT("biometricEnabledUpdatedAt"),
+
+    /// Peel's `peel.auto_download_media` ("1"/"0" here; PeelCore's
+    /// `autoDownloadMedia`): whether chat images and videos download on
+    /// their own. Unset = on. Synced like the other preferences.
+    AUTO_DOWNLOAD_MEDIA("autoDownloadMedia"),
+    AUTO_DOWNLOAD_MEDIA_UPDATED_AT("autoDownloadMediaUpdatedAt"),
 }

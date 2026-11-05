@@ -24,7 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -43,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -50,7 +54,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.storage.ConversationRow
+import com.sphinx.peel.ui.call.rememberLiveCallCounts
+import androidx.compose.material.icons.filled.Call
+import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.AgentTag
 import com.sphinx.peel.ui.components.ConversationAvatar
@@ -60,11 +68,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+/// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
+/// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
+enum class DashboardRoute { APPS, THREADS, MENTIONS }
+
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
 /// the large title with the connection bolt, then `ChatListBody` for
 /// everything else.
 @Composable
-fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
+fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenRoute: (DashboardRoute) -> Unit = {}, onOpenChat: (String) -> Unit = {}) {
     val connection by engine.connectionState.collectAsState()
 
     Column(modifier.fillMaxSize()) {
@@ -81,7 +93,7 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
             )
             ConnectionBolt(connected = connection == ConnectionState.Connected)
         }
-        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenChat = onOpenChat)
+        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenRoute = onOpenRoute, onOpenChat = onOpenChat)
     }
 }
 
@@ -96,14 +108,18 @@ private fun ChatListBody(
     storage: Storage,
     query: String,
     modifier: Modifier = Modifier,
+    onOpenRoute: (DashboardRoute) -> Unit = {},
     onOpenChat: (String) -> Unit = {},
 ) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
+    var unreadMentions by remember { mutableStateOf(0L) }
+    var unreadThreads by remember { mutableStateOf(0L) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
     var allTribes by remember { mutableStateOf(false) }
     var allDirect by remember { mutableStateOf(false) }
     val restoreProgress by engine.restoreProgress.collectAsState()
+    val liveCalls = rememberLiveCallCounts(engine, storage)
 
     // No reactive query layer yet (no Room, no Flow-backed DB) to push a
     // row the moment a live message lands — re-reads on every restore
@@ -111,6 +127,10 @@ private fun ChatListBody(
     // the honest fallback for anything that arrives outside a restore.
     suspend fun reload() {
         conversations = withContext(Dispatchers.Default) { storage.conversations() }
+        unreadMentions = withContext(Dispatchers.Default) {
+            storage.unreadMentions(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You")
+        }
+        unreadThreads = withContext(Dispatchers.Default) { storage.unreadThreadCount().toLong() }
     }
     LaunchedEffect(restoreProgress) { reload() }
     LaunchedEffect(Unit) {
@@ -145,10 +165,22 @@ private fun ChatListBody(
             NoSearchResults(query)
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
+                // Not while searching. Threads counts threads with new
+                // replies, Mentions the unread mentions; Apps stays 0 and
+                // shows only with a live Stadeum workspace or a development
+                // talk home, as on iOS (`Stadeum` is observable: the row
+                // appears as soon as You › Stadeum pairs).
+                if (!searching) {
+                    if (Stadeum.showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
+                    item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
+                    item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
+                    item { Spacer(Modifier.height(16.dp)) }
+                }
+
                 if (sections.unread.isNotEmpty()) {
                     item { SectionHeader("Unread", expanded = true, onToggle = null) }
                     items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
-                        ChatRow(conversation) { onOpenChat(conversation.chat) }
+                        ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
                     }
                     item { Spacer(Modifier.height(16.dp)) }
                 }
@@ -160,7 +192,7 @@ private fun ChatListBody(
                     item { SectionHeader("Tribes", expanded = tribesOpen || searching, onToggle = toggleTribes) }
                     if (tribesOpen || searching) {
                         items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
-                            ChatRow(conversation) { onOpenChat(conversation.chat) }
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
                         }
                         sections.allTribesCount?.let { count ->
                             item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
@@ -181,7 +213,7 @@ private fun ChatListBody(
                             item(key = "agent") { AgentChatRow(agent.shownUnread) { onOpenChat(engine.agentPubkey) } }
                         }
                         items(sections.direct, key = { "direct-${it.chat}" }) { conversation ->
-                            ChatRow(conversation) { onOpenChat(conversation.chat) }
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
                         }
                         sections.allDirectCount?.let { count ->
                             item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
@@ -369,7 +401,7 @@ private fun SectionHeader(title: String, expanded: Boolean, onToggle: (() -> Uni
 }
 
 @Composable
-private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
+private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onClick: () -> Unit) {
     val unread = conversation.shownUnread
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
@@ -386,6 +418,10 @@ private fun ChatRow(conversation: ConversationRow, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        if (onCall) {
+            Spacer(Modifier.width(8.dp))
+            Icon(Icons.Filled.Call, contentDescription = "On a call", tint = Theme.colors.confirmed, modifier = Modifier.size(18.dp))
+        }
         if (unread > 0) {
             Spacer(Modifier.width(8.dp))
             UnreadBadge(unread)
@@ -471,5 +507,26 @@ private fun ActionRow(title: String, onClick: () -> Unit) {
         Icon(Icons.Filled.Add, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(12.dp))
         Text(title, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+    }
+}
+
+/// "Apps", "Threads", "Mentions" — PeelCore's `NavRow`. A count above zero
+/// shows a badge and turns the title semibold, primary colour.
+@Composable
+private fun NavRow(icon: ImageVector, title: String, count: Long, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = if (count > 0) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (count > 0) Theme.colors.text else Theme.colors.secondaryText,
+            modifier = Modifier.weight(1f),
+        )
+        if (count > 0) UnreadBadge(count)
     }
 }

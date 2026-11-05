@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -69,6 +70,8 @@ import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.PaymentRules
 import com.sphinx.peel.engine.Sats
+import com.sphinx.peel.engine.Stadeum
+import com.sphinx.peel.engine.StadeumModel
 import com.sphinx.peel.engine.paymentConfirmationMsat
 import com.sphinx.peel.engine.setPaymentConfirmation
 import com.sphinx.peel.storage.Setting
@@ -101,7 +104,6 @@ private enum class YouRoute { WORDS, CHANGE_PIN, BIOMETRIC_SETUP }
 /// own screen is the PIN check `beginBiometric` needs before enrolling it.
 ///
 /// Not ported (see `docs/phases/11-profile-preferences.md`):
-///  - Stadeum section (stakwork @hive, Disconnect): left for later.
 ///  - "Auto download media": Android has no auto-download yet; the row is
 ///    in the code, commented out, with a TODO.
 @Composable
@@ -217,8 +219,9 @@ private fun YouMain(
             Spacer(Modifier.height(24.dp))
         }
 
-        // Stadeum section (stakwork @hive, Disconnect) intentionally skipped:
-        // not ported yet, see docs/phases/11-profile-preferences.md.
+        item { SectionHeader("Stadeum") }
+        item { StadeumSection(Stadeum.model) }
+        item { Spacer(Modifier.height(24.dp)) }
 
         item { SectionHeader("Account") }
         item {
@@ -255,23 +258,18 @@ private fun YouMain(
                     onClick = { editingConfirmation = true },
                 )
                 AccountDivider()
-                // TODO(auto-download): Android has no attachment
-                // auto-download yet (iOS: on by default). Enable this row,
-                // and `Setting.AUTO_DOWNLOAD_MEDIA("autoDownloadMedia")`,
-                // once it exists:
-                //
-                // var autoDownload by remember { mutableStateOf(storage.value(Setting.AUTO_DOWNLOAD_MEDIA) != "0") }
-                // Row(
-                //     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
-                //     verticalAlignment = Alignment.CenterVertically,
-                // ) {
-                //     Text("Auto download media", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
-                //     Switch(checked = autoDownload, onCheckedChange = {
-                //         autoDownload = it
-                //         storage.apply(Storage.Commit(settings = mapOf(Setting.AUTO_DOWNLOAD_MEDIA to if (it) "1" else "0")))
-                //     })
-                // }
-                // AccountDivider()
+                var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Auto download media", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Switch(checked = autoDownload, onCheckedChange = {
+                        autoDownload = it
+                        engine.setAutoDownloadsMedia(it)
+                    })
+                }
+                AccountDivider()
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -368,12 +366,19 @@ private fun YouMain(
             title = { Text("Boost amount") },
             text = {
                 Column {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         for (preset in listOf(10L, 50L, 100L, 500L, 1_000L)) {
-                            TextButton(onClick = { draft = preset.toString(); askedFor = null; error = null }) { Text("$preset") }
+                            TextButton(
+                                onClick = { draft = preset.toString(); askedFor = null; error = null },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(0.dp),
+                            ) {
+                                Text("$preset", maxLines = 1, softWrap = false, textAlign = TextAlign.Center)
+                            }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         BasicTextField(
                             value = draft,
                             onValueChange = { draft = it.filter(Char::isDigit) },
@@ -481,6 +486,8 @@ private fun YouMain(
                     confirmingForget = false
                     scope.launch {
                         engine.cancel()
+                        // The Stadeum pairing goes with the account.
+                        Stadeum.model.disconnect()
                         // Both stores, not just the mnemonic: otherwise the
                         // next account made on this device would start from
                         // this one's coreState (Storage.kt, `deleteAccount`).
@@ -905,4 +912,88 @@ private fun BiometricSetupScreen(engine: Engine, secretStore: SecretStore, onBac
             modifier = Modifier.fillMaxWidth().padding(top = 60.dp),
         )
     }
+}
+
+/// You › Stadeum (iOS `StadeumSection`): Connect Stadeum (a code to approve
+/// there, its page opened in the browser), each workspace paired, Connect
+/// again once Stadeum no longer knows this phone, and Disconnect.
+@Composable
+private fun StadeumSection(model: StadeumModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val status = model.status
+    val link = model.link
+    val problem = model.problem
+    fun connect() = model.connect(android.os.Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android")
+    fun open(url: String) {
+        runCatching {
+            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+    // The approval page opens by itself once a code is ready; Open Stadeum opens it again.
+    val pairing = (status as? StadeumModel.Status.Pairing)?.pairing
+    LaunchedEffect(pairing?.userCode) { pairing?.let { open(it.verificationUriComplete) } }
+
+    Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+        when (status) {
+            StadeumModel.Status.Off -> {
+                StadeumNote("Open what your workspaces' assistants make for you, and their apps, here on this phone.")
+                if (model.reconnectHint) {
+                    StadeumNote("Your account is back, but not its Stadeum connection. Connect Stadeum again.", Theme.colors.attention)
+                }
+                AccountDivider()
+                StadeumButton("Connect Stadeum", Theme.colors.accent, ::connect)
+            }
+            is StadeumModel.Status.Pairing -> {
+                StadeumNote("Approve this phone in Stadeum. Check the code matches:")
+                Text(
+                    status.pairing.userCode, fontSize = 28.sp, fontWeight = FontWeight.SemiBold,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = Theme.colors.text,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                AccountDivider()
+                StadeumButton("Open Stadeum", Theme.colors.accent) { open(status.pairing.verificationUriComplete) }
+                AccountDivider()
+                StadeumButton("Cancel", Theme.colors.secondaryText) { model.cancelPairing() }
+            }
+            StadeumModel.Status.Connected, StadeumModel.Status.NeedsPairing -> {
+                if (status == StadeumModel.Status.NeedsPairing) {
+                    StadeumNote("Stadeum no longer knows this phone. Connect it again to open your workspaces' work here.", Theme.colors.attention)
+                    StadeumButton("Connect again", Theme.colors.accent, ::connect)
+                    AccountDivider()
+                }
+                link?.peers?.forEach { peer ->
+                    AccountRow(label = peer.name, value = "@" + peer.id)
+                    AccountDivider()
+                }
+                link?.errors?.forEach { error ->
+                    AccountRow(label = error.name, value = error.reason)
+                    AccountDivider()
+                }
+                if (model.identified && status == StadeumModel.Status.Connected) {
+                    StadeumNote(Stadeum.IDENTIFIED_LINE)
+                    AccountDivider()
+                }
+                StadeumButton("Disconnect", Theme.colors.destructive) { model.disconnect() }
+            }
+        }
+    }
+    if (problem != null) {
+        Text(
+            problem, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.attention,
+            modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun StadeumNote(text: String, color: Color = Theme.colors.secondaryText) {
+    Text(text, style = MaterialTheme.typography.bodyMedium, color = color, modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp))
+}
+
+@Composable
+private fun StadeumButton(label: String, color: Color, onClick: () -> Unit) {
+    Text(
+        label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = color,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 16.dp),
+    )
 }

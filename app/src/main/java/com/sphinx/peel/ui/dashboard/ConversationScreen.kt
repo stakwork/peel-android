@@ -2,10 +2,13 @@ package com.sphinx.peel.ui.dashboard
 
 import android.content.Intent
 import android.webkit.MimeTypeMap
+import com.sphinx.peel.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -22,15 +25,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Add
@@ -57,6 +63,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -74,16 +81,29 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
+import com.sphinx.peel.engine.attachmentKind
 import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.declaredAmountMsat
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.DELETE_MESSAGE_TYPE
 import com.sphinx.peel.engine.DIRECT_PAYMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
 import com.sphinx.peel.ui.payments.ChatMoneyAction
@@ -98,6 +118,9 @@ import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AudioPlayer
 import com.sphinx.peel.ui.components.VideoAttachment
+import com.sphinx.peel.ui.components.MediaAspectCache
+import com.sphinx.peel.ui.components.mediaBubble
+import com.sphinx.peel.ui.components.readImageSize
 import com.sphinx.peel.ui.components.ZoomableImageDialog
 import com.sphinx.peel.ui.components.readMediaDurationMs
 import com.sphinx.peel.ui.components.AvatarShape
@@ -108,6 +131,7 @@ import com.sphinx.peel.ui.components.formatDuration
 import com.sphinx.peel.ui.components.prepareImageForSending
 import com.sphinx.peel.ui.components.VoiceRecorder
 import com.sphinx.peel.ui.theme.Theme
+import com.sphinx.peel.engine.MessageMarkup
 import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -130,13 +154,24 @@ fun ConversationScreen(
     chat: String,
     onBack: () -> Unit,
     onJoinCall: (chat: String, title: String, link: CallLink, camera: Boolean) -> Unit,
+    /// A message to scroll to and flash once its chat has loaded — what the
+    /// Mentions list opens (`AppModel.focus(on:)`). `focusThreadUuid` is that
+    /// message's thread root, when it has one: the thread opens instead.
+    focusMessageUuid: String? = null,
+    focusThreadUuid: String? = null,
+    /// A thread's root uuid to open straight into (the Threads list) —
+    /// closing the thread shows the chat as usual.
+    initialThreadRoot: String? = null,
 ) {
     val isAgent = chat == engine.agentPubkey
     var conversation by remember(chat) { mutableStateOf<com.sphinx.peel.storage.ConversationRow?>(null) }
     var messages by remember(chat) { mutableStateOf(emptyList<MessageRow>()) }
     var draft by remember(chat) { mutableStateOf("") }
     var replyTo by remember(chat) { mutableStateOf<MessageRow?>(null) }
-    var openThreadRoot by remember(chat) { mutableStateOf<String?>(null) }
+    var openThreadRoot by remember(chat, initialThreadRoot, focusThreadUuid) { mutableStateOf<String?>(focusThreadUuid ?: initialThreadRoot) }
+    // Cleared once the scroll has happened, so the 3s reload never repeats it.
+    var pendingFocus by remember(chat) { mutableStateOf(focusMessageUuid) }
+    val highlight = remember(chat) { MessageHighlight() }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
     val scope = rememberCoroutineScope()
@@ -176,6 +211,14 @@ fun ConversationScreen(
         engine.markRead(chat)
     }
     LaunchedEffect(chat, restoreProgress) { reload() }
+    // Entering a chat: ask the server what became of its unconfirmed sends,
+    // so their bolts settle (PeelCore's `AppModel.selectedChat` didSet). The
+    // engine also asks on foreground, reconnect and history pages via `openChat`.
+    DisposableEffect(chat) {
+        engine.openChat = chat
+        onDispose { if (engine.openChat == chat) engine.openChat = null }
+    }
+    LaunchedEffect(chat) { engine.checkOwnMessageStatus(chat) }
     LaunchedEffect(chat) {
         while (true) {
             delay(3_000)
@@ -186,6 +229,11 @@ fun ConversationScreen(
     val isTribe = conversation?.isTribe ?: false
     val title = if (isAgent) "Peel" else (conversation?.name ?: chat.take(12))
     val myAlias = storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
+    val myPhotoUrl = storage.value(com.sphinx.peel.storage.Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() }
+    val mentionMembers = remember(messages, conversation, isTribe, isAgent, myPhotoUrl) {
+        val peer = conversation?.takeIf { !isTribe && !isAgent }?.let { MentionMember(it.alias ?: title, it.photoUrl, it.chat) }
+        chatMentionMembers(messages, myAlias, myPhotoUrl, isTribe, peer)
+    }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     var sendingLabel by remember(chat) { mutableStateOf<String?>(null) }
@@ -343,12 +391,20 @@ fun ConversationScreen(
         }
     }
 
+    val listState = rememberLazyListState()
+    // Hidden until the first load is positioned at the bottom (no
+    // visible scroll); afterwards only follow a new message when the
+    // user is already at the bottom or sent it themselves.
+    var positioned by remember(chat) { mutableStateOf(false) }
+    var previousLast by remember(chat) { mutableStateOf(-1) }
+
     val openRoot = openThreadRoot
     if (openRoot != null) {
         ThreadScreen(
-            engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, audioPlayer = audioPlayer,
+            engine = engine, chat = chat, isTribe = isTribe, isAgent = isAgent, myAlias = myAlias, myPhotoUrl = myPhotoUrl, audioPlayer = audioPlayer,
             chatName = title, threadRootUuid = openRoot, messages = messages,
             onBack = { openThreadRoot = null },
+            focusUuid = pendingFocus, onFocusConsumed = { pendingFocus = null },
             onSent = { scope.launch { reload() } },
             onJoinCall = { link -> onJoinCall(chat, title, link, false) },
         )
@@ -402,7 +458,7 @@ fun ConversationScreen(
         // Boosts are never a row of their own (PeelCore's own `BoostLineView`
         // shows them as a chip under the message they boost, by its own
         // `replyUuid`) - summed once per `messages` change, not per row.
-        val boosts = remember(messages) { boostSummaries(messages) }
+        val boosts = remember(messages, myAlias, myPhotoUrl, isTribe) { boostSummaries(messages, myAlias, myPhotoUrl, isTribe) }
         // Nor is a thread's own reply ever shown inline, once it's really
         // a thread - PeelCore's own `rows(...)` collapses every message
         // that carries a `threadUuid` behind its root's "N replies" row,
@@ -417,39 +473,68 @@ fun ConversationScreen(
         // surviving message, not the root itself - so a thread that just
         // got a reply jumps to where that reply would sit, same as an
         // active chat bumping to the bottom.
-        val threads = remember(messages, isTribe, myAlias) { if (isTribe) threadSummaries(messages, myAlias) else emptyMap() }
+        val threads = remember(messages, isTribe, myAlias, myPhotoUrl) { if (isTribe) threadSummaries(messages, myAlias, myPhotoUrl) else emptyMap() }
         val displayedMessages = remember(messages, threads) {
-            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
+            messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type != DELETE_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
 
         // Only our own first crossing into "new" gets the line - PeelCore's
         // own `rows(...)` clears `newAfter` the moment one row claims it.
         val newMessageIndex = remember(displayedMessages, newAfterIndex) {
-            newAfterIndex?.let { after ->
-                displayedMessages.indexOfFirst { !it.fromMe && it.type != BOOST_MESSAGE_TYPE && (it.serverIndex ?: -1L) > after }
-                    .takeIf { it >= 0 }
-            }
+            newMessagesIndex(displayedMessages, newAfterIndex, BOOST_MESSAGE_TYPE)
         }
 
-        val listState = rememberLazyListState()
-        // Hidden until the first load is positioned at the bottom (no
-        // visible scroll); afterwards only follow a new message when the
-        // user is already at the bottom or sent it themselves.
-        var positioned by remember(chat) { mutableStateOf(false) }
-        var previousLast by remember(chat) { mutableStateOf(-1) }
-        LaunchedEffect(displayedMessages.size) {
+        // Re-keyed on MediaAspectCache.version too: a handful of
+        // attachments at the bottom, freshly opened, each resolve their
+        // real height a little after the first scroll lands (the file
+        // read is async) - without re-settling, every one of those
+        // resizes left the list that much further short of the true
+        // bottom, never caught up on its own.
+        LaunchedEffect(displayedMessages.size, MediaAspectCache.version) {
             val last = displayedMessages.size - 1
             if (last < 0) return@LaunchedEffect
             if (!positioned) {
-                listState.scrollToItem(last)
-                positioned = true
+                // A pending focus positions the list itself, below.
+                if (pendingFocus == null) {
+                    listState.scrollToItem(last)
+                    positioned = true
+                }
             } else {
                 val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
-                if (last > previousLast && (atBottom || displayedMessages[last].fromMe)) listState.animateScrollToItem(last)
+                if (last > previousLast && (atBottom || displayedMessages[last].fromMe)) {
+                    listState.animateScrollToItem(last)
+                } else if (last == previousLast && atBottom) {
+                    // Not a new message, already at the bottom: an
+                    // attachment's height just settled, re-snap rather
+                    // than animate.
+                    listState.scrollToItem(last)
+                }
             }
             previousLast = last
         }
+        // Scroll the focus target to the middle and flash it, once messages
+        // have loaded; not found (older than anything stored, or hidden),
+        // the chat just opens at the newest.
+        val focusTarget = pendingFocus
+        LaunchedEffect(focusTarget, messages.isNotEmpty()) {
+            if (focusTarget == null || messages.isEmpty()) return@LaunchedEffect
+            val index = displayedMessages.indexOfFirst { it.uuid == focusTarget }
+            if (index >= 0) {
+                highlight.show(focusTarget)
+                positioned = true
+                listState.animateScrollToCenter(index)
+                previousLast = displayedMessages.size - 1
+                pendingFocus = null
+                scope.launch { highlight.fade() }
+            } else {
+                if (displayedMessages.isNotEmpty()) listState.scrollToItem(displayedMessages.size - 1)
+                positioned = true
+                previousLast = displayedMessages.size - 1
+                pendingFocus = null
+            }
+        }
+        KeepAtBottomOnKeyboard(listState, displayedMessages.size - 1)
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
@@ -473,7 +558,7 @@ fun ConversationScreen(
                     ((next.timestamp ?: 0L) - (row.timestamp ?: 0L) > 5 * 60 * 1000L)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias, myPhotoUrl = myPhotoUrl,
                     replyUuid = replyUuid, parent = parent, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts,
                     threadSummary = row.uuid?.let { threads[it] },
@@ -483,6 +568,7 @@ fun ConversationScreen(
                     onJoinCall = { link -> onJoinCall(chat, title, link, false) },
                     onDelete = { deleteMessage(row) },
                     onMoneyError = { error = it },
+                    highlight = highlight.alphaFor(row.uuid),
                 )
             }
         }
@@ -499,8 +585,9 @@ fun ConversationScreen(
         Composer(
             text = draft,
             onTextChange = { draft = it },
+            members = mentionMembers,
             placeholder = if (isAgent) "Ask Peel" else "Message $title",
-            replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to previewContent(target) },
+            replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to MessageMarkup.plainText(previewContent(target)) },
             onCancelReply = { replyTo = null },
             onPickPhoto = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onTakePhoto = {
@@ -528,6 +615,8 @@ fun ConversationScreen(
                 draft = ""
                 replyTo = null
                 error = null
+                // Sending reads the chat: "New messages" has done its job.
+                newAfterIndex = null
                 scope.launch {
                     try {
                         engine.sendMessage(chat, toSend, isTribe, replyUuid, inThread)
@@ -563,6 +652,7 @@ private fun ThreadScreen(
     isTribe: Boolean,
     isAgent: Boolean,
     myAlias: String,
+    myPhotoUrl: String?,
     audioPlayer: AudioPlayer,
     chatName: String,
     threadRootUuid: String,
@@ -570,7 +660,10 @@ private fun ThreadScreen(
     onBack: () -> Unit,
     onSent: () -> Unit,
     onJoinCall: (CallLink) -> Unit,
+    focusUuid: String? = null,
+    onFocusConsumed: () -> Unit = {},
 ) {
+    val highlight = remember(threadRootUuid) { MessageHighlight() }
     var draft by remember(threadRootUuid) { mutableStateOf("") }
     var error by remember(threadRootUuid) { mutableStateOf<String?>(null) }
     var sendingLabel by remember(threadRootUuid) { mutableStateOf<String?>(null) }
@@ -578,6 +671,7 @@ private fun ThreadScreen(
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    val mentionMembers = remember(messages, myAlias, myPhotoUrl, isTribe) { chatMentionMembers(messages, myAlias, myPhotoUrl, isTribe, null) }
     val root = messages.firstOrNull { it.uuid == threadRootUuid }
     val replies = remember(messages, threadRootUuid) {
         messages.filter { it.threadUuid == threadRootUuid }.sortedBy { it.timestamp ?: 0L }
@@ -683,7 +777,7 @@ private fun ThreadScreen(
     // Boosts show and can be sent inside a thread too - a boostable
     // message doesn't stop being one just because it's shown here
     // rather than the main list.
-    val boosts = remember(messages) { boostSummaries(messages) }
+    val boosts = remember(messages, myAlias, myPhotoUrl, isTribe) { boostSummaries(messages, myAlias, myPhotoUrl, isTribe) }
 
     fun sendBoost(target: MessageRow) {
         val targetUuid = target.uuid ?: return
@@ -728,18 +822,44 @@ private fun ThreadScreen(
         val listState = rememberLazyListState()
         var positioned by remember(threadRootUuid) { mutableStateOf(false) }
         var previousLast by remember(threadRootUuid) { mutableStateOf(-1) }
-        LaunchedEffect(replies.size) {
+        LaunchedEffect(replies.size, MediaAspectCache.version) {
             val last = replies.size
             if (replies.isEmpty()) return@LaunchedEffect
             if (!positioned) {
-                listState.scrollToItem(last)
-                positioned = true
+                // A pending focus positions the list itself, below.
+                if (focusUuid == null) {
+                    listState.scrollToItem(last)
+                    positioned = true
+                }
             } else {
                 val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousLast
-                if (last > previousLast && (atBottom || replies[last - 1].fromMe)) listState.animateScrollToItem(last)
+                if (last > previousLast && (atBottom || replies[last - 1].fromMe)) {
+                    listState.animateScrollToItem(last)
+                } else if (last == previousLast && atBottom) {
+                    listState.scrollToItem(last)
+                }
             }
             previousLast = last
         }
+        // The root is item 0, replies follow it.
+        LaunchedEffect(focusUuid, messages.isNotEmpty()) {
+            if (focusUuid == null || messages.isEmpty()) return@LaunchedEffect
+            val index = if (focusUuid == threadRootUuid) 0 else replies.indexOfFirst { it.uuid == focusUuid }.let { if (it >= 0) it + 1 else -1 }
+            if (index >= 0) {
+                highlight.show(focusUuid)
+                positioned = true
+                listState.animateScrollToCenter(index)
+                previousLast = replies.size
+                onFocusConsumed()
+                scope.launch { highlight.fade() }
+            } else {
+                listState.scrollToItem(replies.size)
+                positioned = true
+                previousLast = replies.size
+                onFocusConsumed()
+            }
+        }
+        KeepAtBottomOnKeyboard(listState, replies.size)
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
@@ -754,13 +874,14 @@ private fun ThreadScreen(
                     // collapsed row in the *main* list, not itself, inside
                     // the thread sheet that's already open because of it.
                     MessageRowView(
-                        row = root, startsRun = true, endsRun = replies.firstOrNull()?.let { runSenderKey(root) != runSenderKey(it) } ?: true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                        row = root, startsRun = true, endsRun = replies.firstOrNull()?.let { runSenderKey(root) != runSenderKey(it) } ?: true, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias, myPhotoUrl = myPhotoUrl,
                         replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                         boosts = rootBoosts, threadSummary = null, deleteReplyCount = replies.size,
                         onOpenThread = {}, onReply = {},
                         onBoost = { sendBoost(root) }.takeIf { canBoost(root, rootBoosts) },
                         onJoinCall = onJoinCall,
                         onDelete = { deleteMessage(root) },
+                        highlight = highlight.alphaFor(root.uuid),
                     )
                     HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                 }
@@ -781,12 +902,13 @@ private fun ThreadScreen(
                 val endsRun = next == null || runSenderKey(row) != runSenderKey(next)
                 val rowBoosts = row.uuid?.let { boosts[it] }
                 MessageRowView(
-                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias,
+                    row = row, startsRun = startsRun, endsRun = endsRun, isAgent = isAgent, isTribe = isTribe, myAlias = myAlias, myPhotoUrl = myPhotoUrl,
                     replyUuid = null, parent = null, engine = engine, audioPlayer = audioPlayer,
                     boosts = rowBoosts, threadSummary = null, onOpenThread = {}, onReply = {},
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                     onJoinCall = onJoinCall,
                     onDelete = { deleteMessage(row) },
+                    highlight = highlight.alphaFor(row.uuid),
                 )
             }
         }
@@ -803,6 +925,7 @@ private fun ThreadScreen(
         Composer(
             text = draft,
             onTextChange = { draft = it },
+            members = mentionMembers,
             placeholder = "Reply",
             replyTarget = null,
             onCancelReply = {},
@@ -861,17 +984,17 @@ private fun senderAlias(row: MessageRow): String = senderJson(row)?.optString("a
 /// carry the tribe's own shared pubkey as `sender.pubkey`, not the
 /// member's — keying on it here would make two different members land
 /// on the same colour.
-private fun senderDisplay(row: MessageRow, myAlias: String, isTribe: Boolean): Triple<String, String?, String> {
+internal fun senderDisplay(row: MessageRow, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Triple<String, String?, String> {
     val sender = senderJson(row)
     val name = if (row.fromMe) myAlias else senderAlias(row)
-    val photoUrl = if (row.fromMe) null else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
+    val photoUrl = if (row.fromMe) myPhotoUrl else sender?.optString("photo_url")?.takeIf { it.isNotEmpty() }
     val hueKey = if (isTribe && !row.fromMe) name else (sender?.optString("pubkey")?.takeIf { it.isNotEmpty() } ?: row.chat)
     return Triple(name, photoUrl, hueKey)
 }
 
 /// A message's own text, from `body`'s `content` field — the same body
 /// `Engine.sendMessage` writes, and the one `mapMessage` stores as is.
-private fun previewContent(row: MessageRow): String =
+internal fun previewContent(row: MessageRow): String =
     row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
 /// Whether `row` counts toward a thread at all — PeelCore's own
@@ -901,13 +1024,19 @@ private const val VOICE_CANCEL_DISTANCE_DP = 80
 /// `docs/money-parity.md`). PeelCore's `shownInChats` leaves them out too.
 private val HIDDEN_MONEY_TYPES = setOf(3, 7, 8, 9)
 
-private data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean)
+/// One distinct boost sender, as `senderDisplay` describes them.
+internal data class BoostSender(val name: String, val photoUrl: String?, val hueKey: String)
+
+internal data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean, val senders: List<BoostSender> = emptyList())
 
 /// Every boost in `messages`, summed per message it boosts — PeelCore's
 /// `BoostSummary`, trimmed: no pending/unsettled/failed tracking — a
 /// boost is a single send-or-fail message, same as a text send, not
 /// something with its own multi-step delivery state to track.
-private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary> {
+///
+/// `senders` lists each distinct booster (by `hueKey`/name), first-seen
+/// order, for the avatars at the chip's right end.
+internal fun boostSummaries(messages: List<MessageRow>, myAlias: String, myPhotoUrl: String?, isTribe: Boolean): Map<String, BoostSummary> {
     val byTarget = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         if (row.type != BOOST_MESSAGE_TYPE) continue
@@ -915,7 +1044,11 @@ private fun boostSummaries(messages: List<MessageRow>): Map<String, BoostSummary
         byTarget.getOrPut(target) { mutableListOf() }.add(row)
     }
     return byTarget.mapValues { (_, boosts) ->
-        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe })
+        BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe },
+            senders = boosts
+                .map { senderDisplay(it, myAlias, myPhotoUrl, isTribe).let { (name, photoUrl, hueKey) -> BoostSender(name, photoUrl, hueKey) } }
+                .distinctBy { it.hueKey to it.name },
+        )
     }
 }
 
@@ -949,14 +1082,27 @@ private fun canDelete(row: MessageRow, replyCount: Int): Boolean {
     return replyCount < 2
 }
 
-/// The first `http(s)://` link in plain text — a plain scan, not
-/// PeelCore's own full markup parser (`MessageMarkup.firstLink`, built
-/// for a renderer that understands `[text](url)` and the rest of actual
-/// markdown; this port's own message text is always drawn plain, so a
-/// bare URL is the only kind of "link in the text" that can appear at
-/// all).
-private val linkRegex = Regex("""https?://[^\s]+""")
-private fun firstLink(text: String): String? = linkRegex.find(text)?.value?.trimEnd('.', ',', ')', ']', '!', '?')
+/// The people in this chat who can be `@mentioned`: everyone whose message
+/// carries a sender here (this port keeps no tribe member table), plus the
+/// DM `peer` when known. Never the account itself.
+private fun chatMentionMembers(
+    messages: List<MessageRow>,
+    myAlias: String,
+    myPhotoUrl: String?,
+    isTribe: Boolean,
+    peer: MentionMember?,
+): List<MentionMember> {
+    val byName = linkedMapOf<String, MentionMember>()
+    peer?.let { byName[it.name] = it }
+    for (row in messages) {
+        if (row.fromMe || senderJson(row) == null) continue
+        val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe)
+        if (name == "Someone" || name == myAlias) continue
+        val existing = byName[name]
+        if (existing == null || (existing.photoUrl == null && photoUrl != null)) byName[name] = MentionMember(name, photoUrl, hueKey)
+    }
+    return byName.values.toList()
+}
 
 /// The thread a reply to `row` belongs in — PeelCore's own `threadRoot`
 /// (`threadUuid ?? replyUuid ?? uuid`): a message already in a thread
@@ -992,7 +1138,7 @@ private data class ThreadSummaryData(
 /// isTribe` only), so callers pass an empty map for a DM instead of
 /// calling this — which is also why `senderDisplay` is always called
 /// with `isTribe = true` here, never `false`.
-private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<String, ThreadSummaryData> {
+private fun threadSummaries(messages: List<MessageRow>, myAlias: String, myPhotoUrl: String?): Map<String, ThreadSummaryData> {
     val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         val root = row.threadUuid ?: continue
@@ -1006,7 +1152,7 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
         val participants = mutableListOf<ThreadParticipant>()
         val seen = mutableSetOf<String>()
         for (row in replies.sortedByDescending { it.timestamp ?: 0L }) {
-            val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe = true)
+            val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe = true)
             if (seen.add(if (row.fromMe) "me" else hueKey)) {
                 participants.add(ThreadParticipant(name, photoUrl, hueKey))
                 if (participants.size == 3) break
@@ -1014,8 +1160,8 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String): Map<St
         }
         val last = replies.maxByOrNull { it.timestamp ?: 0L }
         val lastReply = last?.let {
-            val (name, _, hueKey) = senderDisplay(it, myAlias, isTribe = true)
-            val text = previewContent(it).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
+            val (name, _, hueKey) = senderDisplay(it, myAlias, myPhotoUrl, isTribe = true)
+            val text = MessageMarkup.plainText(previewContent(it)).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
             ThreadLastReply(name, hueKey, text)
         }
         ThreadSummaryData(
@@ -1047,6 +1193,7 @@ private fun MessageRowView(
     isAgent: Boolean,
     isTribe: Boolean,
     myAlias: String,
+    myPhotoUrl: String?,
     replyUuid: String?,
     parent: MessageRow?,
     engine: Engine,
@@ -1060,8 +1207,10 @@ private fun MessageRowView(
     onDelete: (() -> Unit)? = null,
     onMoneyError: (String) -> Unit = {},
     deleteReplyCount: Int = threadSummary?.replyCount ?: 0,
+    /// Alpha of the focus flash drawn behind the row; 0 for none.
+    highlight: Float = 0f,
 ) {
-    val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, isTribe)
+    val (name, photoUrl, hueKey) = senderDisplay(row, myAlias, myPhotoUrl, isTribe)
     val content = previewContent(row)
     // A call message (type 32), or - the Mac app's own convention, no
     // `call::` wrapper there - plain text that is only a call link.
@@ -1082,6 +1231,7 @@ private fun MessageRowView(
         Row(
             Modifier
                 .fillMaxWidth()
+                .then(if (highlight > 0f) Modifier.background(Theme.colors.accent.copy(alpha = highlight)) else Modifier)
                 .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
                 .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null && !row.deleted) menuOpen = true })
                 .padding(top = if (startsRun) 8.dp else 1.dp, bottom = if (endsRun) 2.dp else 7.dp),
@@ -1143,10 +1293,14 @@ private fun MessageRowView(
             } else if (!row.deleted && callLink != null) {
                 CallBlock(callLink, engine, onJoinCall)
             } else if (!row.deleted && (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE)) {
-                Text(
+                // Markdown as the iOS app reads it; an @mention of this
+                // account (or @all) lights up. None in the agent chat.
+                val mentionAliases = remember(myAlias, isAgent) {
+                    if (isAgent) emptySet() else com.sphinx.peel.engine.Mentions.ownAliases(myAlias)
+                }
+                com.sphinx.peel.ui.components.MessageText(
                     content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Theme.colors.text,
+                    myAliases = mentionAliases,
                     modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
                 )
             }
@@ -1168,7 +1322,7 @@ private fun MessageRowView(
         // deletable content) — PeelCore's own `MessageMenu`. Opens only
         // for a content row with a uuid at all (the `combinedClickable`
         // above), so nothing here needs to re-check that.
-        val linkToCopy = callLink?.url ?: firstLink(content)
+        val linkToCopy = callLink?.url ?: MessageMarkup.firstLink(content)
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("Reply") }, onClick = { menuOpen = false; onReply() })
             if (onBoost != null) {
@@ -1210,12 +1364,11 @@ private fun MessageRowView(
 /// banner to spend it on yet.
 @Composable
 private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> Unit) {
-    var peopleHere by remember(link.room) { mutableStateOf<Int?>(null) }
+    var presence by remember(link.room) { mutableStateOf<CallPresence>(CallPresence.Unknown) }
     LaunchedEffect(link.room) {
-        engine.callPresence(link).collect { presence ->
-            peopleHere = (presence as? CallPresence.Live)?.people?.size
-        }
+        engine.callPresence(link).collect { presence = it }
     }
+    val people = presence.people().orEmpty()
     Row(
         Modifier
             .fillMaxWidth()
@@ -1224,22 +1377,48 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            if (link.audioOnly) Icons.Filled.Call else Icons.Filled.Videocam,
-            contentDescription = null, tint = Theme.colors.secondaryText,
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
-            val count = peopleHere
-            if (count != null && count > 0) {
-                Text(
-                    if (count == 1) "1 person here now" else "$count people here now",
-                    style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText,
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (link.audioOnly) Icons.Filled.Call else Icons.Filled.Videocam,
+                    contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp),
                 )
+                Spacer(Modifier.width(8.dp))
+                Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+            }
+            when {
+                people.isNotEmpty() -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.width((26 + (minOf(people.size, 3) - 1) * 19).dp).height(26.dp)) {
+                        people.take(3).forEachIndexed { i, person ->
+                            Avatar(
+                                name = person.nickname.ifEmpty { "Guest" },
+                                url = person.avatarUrl,
+                                size = 22.dp,
+                                hue = PersonHue.of(person.identity),
+                                modifier = Modifier
+                                    .offset(x = (i * 19).dp)
+                                    .align(Alignment.CenterStart)
+                                    .border(2.dp, Theme.colors.fieldFill, CircleShape),
+                            )
+                        }
+                    }
+                    if (people.size > 3) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("+${people.size - 3}", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(Theme.colors.confirmed))
+                    Spacer(Modifier.width(6.dp))
+                    Text("${people.size} on the call", style = MaterialTheme.typography.bodySmall, color = Theme.colors.text)
+                }
+                presence is CallPresence.Live ->
+                    Text("No one on the call", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                presence is CallPresence.Ended ->
+                    Text("Call ended", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                else -> {}
             }
         }
-        TextButton(onClick = { onJoinCall(link) }) { Text("Join") }
+        OutlinedButton(onClick = { onJoinCall(link) }) { Text("Join") }
     }
 }
 
@@ -1315,13 +1494,26 @@ private fun dayHeading(timestamp: Long): String {
 
 @Composable
 private fun DayDivider(timestamp: Long) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.Center) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Theme.colors.divider.copy(alpha = 0.25f))
+            .padding(vertical = 8.dp, horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
         Text(
             dayHeading(timestamp),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.secondaryText,
+            modifier = Modifier
+                .padding(horizontal = 10.dp)
+                .border(0.5.dp, Theme.colors.divider, RoundedCornerShape(50))
+                .background(Theme.colors.background, RoundedCornerShape(50))
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         )
+        HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
     }
 }
 
@@ -1332,18 +1524,20 @@ private fun NewMessagesDivider() {
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
         Text(
-            "New messages",
+            stringResource(R.string.new_messages),
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Bold,
             color = Theme.colors.accent,
-            modifier = Modifier.padding(horizontal = 8.dp),
+            modifier = Modifier.padding(start = 10.dp),
         )
-        HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
     }
 }
 
 private sealed class AttachmentState {
     data object Loading : AttachmentState()
+    /// An image or video not fetched unasked (Auto download media off, or a
+    /// video over the size cap): a tile with a download button instead.
+    data object AwaitsDownload : AttachmentState()
     data class Failed(val message: String) : AttachmentState()
     data class Loaded(val attachment: DownloadedAttachment) : AttachmentState()
 }
@@ -1358,14 +1552,44 @@ private sealed class AttachmentState {
 @Composable
 private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPlayer) {
     var state by remember(row.id, row.uuid) { mutableStateOf<AttachmentState>(AttachmentState.Loading) }
-    LaunchedEffect(row.id, row.uuid) {
+    val scope = rememberCoroutineScope()
+    val declaredKind = remember(row.body) {
+        attachmentKind(com.sphinx.peel.engine.AttachmentFields.decode(row.body)?.mediaType)
+    }
+    val isPicture = declaredKind == AttachmentKind.IMAGE || declaredKind == AttachmentKind.VIDEO
+    val autoDownload = engine.autoDownloadsMedia()
+    // PeelCore's `AppModel.autoDownload`: with the setting off, images and
+    // videos only come from the cache; voice and the rest keep downloading.
+    // Videos and recordings over the cap are held for a tap.
+    LaunchedEffect(row.id, row.uuid, autoDownload) {
+        if (state is AttachmentState.Loaded) return@LaunchedEffect
+        val cachedOnly = !autoDownload && isPicture
+        val capped = declaredKind == AttachmentKind.VIDEO || declaredKind == AttachmentKind.AUDIO
         state = try {
-            AttachmentState.Loaded(engine.downloadAttachment(row))
+            AttachmentState.Loaded(
+                engine.downloadAttachment(row, cachedOnly = cachedOnly, upTo = if (!cachedOnly && capped) Engine.AUTO_DOWNLOAD_LIMIT else null),
+            )
+        } catch (_: com.sphinx.peel.engine.AttachmentNotCached) {
+            AttachmentState.AwaitsDownload
+        } catch (_: com.sphinx.peel.engine.AttachmentHeld) {
+            AttachmentState.AwaitsDownload
         } catch (e: Exception) {
-            AttachmentState.Failed(e.message ?: "Could not load this attachment.")
+            if (cachedOnly) AttachmentState.AwaitsDownload else AttachmentState.Failed(e.message ?: "Could not load this attachment.")
         }
     }
+    val startDownload = {
+        state = AttachmentState.Loading
+        scope.launch {
+            state = try {
+                AttachmentState.Loaded(engine.downloadAttachment(row))
+            } catch (e: Exception) {
+                AttachmentState.Failed(e.message ?: "Could not load this attachment.")
+            }
+        }
+        Unit
+    }
     when (val current = state) {
+        is AttachmentState.AwaitsDownload -> DownloadMediaTile(declaredKind, startDownload)
         is AttachmentState.Loading -> AttachmentPlaceholder {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Theme.colors.secondaryText)
         }
@@ -1375,6 +1599,35 @@ private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPl
             Text(current.message, style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
         }
         is AttachmentState.Loaded -> AttachmentContent(current.attachment, audioPlayer)
+    }
+}
+
+/// The stand-in for an image or video that was not downloaded unasked:
+/// a rounded dark card, a circled download arrow and "Download image" / "Download video".
+@Composable
+private fun DownloadMediaTile(kind: AttachmentKind, onClick: () -> Unit) {
+    val label = when (kind) {
+        AttachmentKind.VIDEO -> "Download video"
+        AttachmentKind.IMAGE -> "Download image"
+        else -> "Download"
+    }
+    Column(
+        Modifier
+            .mediaBubble(4f / 3f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF2A2A2E))
+            .clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.size(48.dp).border(2.dp, Color.White, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.ArrowDownward, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = Color.White)
     }
 }
 
@@ -1397,13 +1650,24 @@ private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: Aud
     if (attachment.kind == AttachmentKind.IMAGE) {
         var zoomed by remember(attachment.file) { mutableStateOf(false) }
         if (zoomed) ZoomableImageDialog(attachment.file) { zoomed = false }
+        // Cached aspect first (a row scrolled past before, this session):
+        // no placeholder-then-resize at all. Otherwise 4:3 until the real
+        // one is read, same as before, but only once per file ever.
+        val path = attachment.file.path
+        var aspect by remember(path) { mutableStateOf(MediaAspectCache.get(path) ?: (4f / 3f)) }
+        LaunchedEffect(path) {
+            if (MediaAspectCache.get(path) != null) return@LaunchedEffect
+            val size = readImageSize(attachment.file) ?: return@LaunchedEffect
+            val a = size.first.toFloat() / size.second
+            MediaAspectCache.put(path, a)
+            aspect = a
+        }
         AsyncImage(
             model = attachment.file,
             contentDescription = attachment.fileName ?: "Image",
-            contentScale = ContentScale.Fit,
+            contentScale = ContentScale.Crop,
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 240.dp)
+                .mediaBubble(aspect)
                 .clip(RoundedCornerShape(10.dp))
                 .background(Theme.colors.fieldFill)
                 .clickable { zoomed = true },
@@ -1584,7 +1848,7 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
     ) {
         Text(name, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = PersonHue.of(hueKey).fill)
         Text(
-            if (parent.deleted) "Message deleted" else previewContent(parent),
+            if (parent.deleted) "Message deleted" else MessageMarkup.plainText(previewContent(parent)),
             style = MaterialTheme.typography.labelSmall,
             color = Theme.colors.secondaryText,
             maxLines = 1,
@@ -1597,7 +1861,9 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
 /// lit (the accent colour) when this device's own history has a boost on
 /// it, plain otherwise. No pending/failed states: this port never sends
 /// a new boost yet, so everything shown here already reached its final
-/// state before this device ever saw it.
+/// state before this device ever saw it. Ends with the booster's small
+/// circular avatar (up to 3, overlapping, each ringed in `fieldFill`
+/// when there are several distinct boosters), as on iOS.
 @Composable
 private fun BoostChip(boosts: BoostSummary) {
     Row(
@@ -1610,11 +1876,29 @@ private fun BoostChip(boosts: BoostSummary) {
         Icon(Icons.Filled.Bolt, contentDescription = null, tint = Theme.colors.attention, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(4.dp))
         Text(
-            "${formattedSats(boosts.totalMsat)} sats",
+            buildAnnotatedString {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(formattedSats(boosts.totalMsat)) }
+                append(" sats")
+            },
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
             color = if (boosts.boostedByMe) Theme.colors.accent else Theme.colors.text,
         )
+        if (boosts.senders.isNotEmpty()) {
+            Spacer(Modifier.width(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy((-4).dp)) {
+                for (sender in boosts.senders.take(3)) {
+                    Box(Modifier.clip(CircleShape).background(Theme.colors.fieldFill).padding(1.dp)) {
+                        Avatar(
+                            name = sender.name.ifBlank { "?" },
+                            url = sender.photoUrl,
+                            size = 16.dp,
+                            hue = PersonHue.of(sender.hueKey),
+                            shape = AvatarShape.CIRCLE,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1636,8 +1920,61 @@ private fun AgentTag() {
     )
 }
 
+/// The card of `@mention` matches floating above the composer's capsule —
+/// rounded, scrollable, capped at about four and a half rows.
+@Composable
+private fun MentionPopup(suggestions: List<MentionMember>, onPick: (MentionMember) -> Unit) {
+    val gapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx() }
+    val above = remember(gapPx) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize,
+            ) = IntOffset(anchorBounds.left, (anchorBounds.top - popupContentSize.height - gapPx).coerceAtLeast(0))
+        }
+    }
+    Popup(popupPositionProvider = above) {
+        LazyColumn(
+            Modifier
+                .width(280.dp)
+                .heightIn(max = 216.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Theme.colors.fieldFill),
+        ) {
+            items(suggestions, key = { it.name }) { member ->
+                Row(
+                    Modifier.fillMaxWidth().height(48.dp).clickable { onPick(member) }.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(name = member.name, url = member.photoUrl, size = 28.dp, hue = PersonHue.of(member.hueKey), shape = AvatarShape.CIRCLE)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        member.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Theme.colors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        mentionHandle(member.name),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Theme.colors.secondaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /// The capsule text field, attach menu, mic and send button —
-/// PeelCore's `PhoneComposer`, trimmed: no `@` mentions, no sats bolt.
+/// PeelCore's `PhoneComposer`, trimmed: no sats bolt.
+/// Typing `@` shows `members` matching what's typed in a card above the
+/// capsule; tapping one swaps the `@query` for `@Handle ` (PeelCore's
+/// `MentionQuery`).
 /// `replyTarget` (name, preview) shows PeelCore's `ReplyingTo` above the
 /// capsule, with its own dismiss; long-pressing a row sets it. Shared by
 /// the main screen and `ThreadScreen` alike, each supplying its own
@@ -1648,6 +1985,7 @@ private fun Composer(
     text: String,
     onTextChange: (String) -> Unit,
     placeholder: String,
+    members: List<MentionMember> = emptyList(),
     replyTarget: Pair<String, String>?,
     onCancelReply: () -> Unit,
     onPickPhoto: () -> Unit,
@@ -1701,6 +2039,11 @@ private fun Composer(
         }
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             var attachMenuOpen by remember { mutableStateOf(false) }
+            // The field's selection lives here (the cursor decides which
+            // `@word` is being typed); `text` stays the source of truth, so
+            // an outside reset (cleared after send) replaces this too.
+            var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+            if (field.text != text) field = TextFieldValue(text, TextRange(text.length))
             Box {
                 IconButton(onClick = { attachMenuOpen = true }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Add, contentDescription = "Attach", tint = Theme.colors.secondaryText)
@@ -1747,9 +2090,21 @@ private fun Composer(
                     if (text.isEmpty()) {
                         Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
                     }
+                    val word = if (field.selection.collapsed) mentionWord(field.text, field.selection.end) else null
+                    val suggestions = if (word != null) mentionSuggestions(members, word.query) else emptyList()
+                    if (word != null && suggestions.isNotEmpty()) {
+                        MentionPopup(suggestions) { member ->
+                            val (newText, cursor) = insertMention(field.text, word, member)
+                            field = TextFieldValue(newText, TextRange(cursor))
+                            onTextChange(newText)
+                        }
+                    }
                     BasicTextField(
-                        value = text,
-                        onValueChange = onTextChange,
+                        value = field,
+                        onValueChange = {
+                            field = it
+                            if (it.text != text) onTextChange(it.text)
+                        },
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(Theme.colors.accent),
                         modifier = Modifier.fillMaxWidth(),

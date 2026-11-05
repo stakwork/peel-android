@@ -74,9 +74,10 @@ class MediaCryptoTest {
     }
 
     @Test
-    fun `newKey is 32 letters and digits`() {
+    fun `newKey is 64 lowercase hex chars and round-trips`() {
         val key = MediaCrypto.newKey()
-        assertEquals(32, key.length)
-        assertTrue(key.all { it.isLetterOrDigit() })
+        assertTrue(Regex("^[0-9a-f]{64}$").matches(key))
+        val plain = "round trip".toByteArray()
+        assertArrayEquals(plain, MediaCrypto.decrypt(MediaCrypto.encrypt(plain, key), key))
     }
 }

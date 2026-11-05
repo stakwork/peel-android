@@ -18,11 +18,13 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
@@ -37,6 +39,9 @@ import com.sphinx.peel.ui.lock.LockScreen
 import com.sphinx.peel.ui.onboarding.OnboardingScreen
 import com.sphinx.peel.ui.onboarding.RestoringAccountScreen
 import com.sphinx.peel.ui.theme.PeelTheme
+import com.sphinx.peel.ui.toast.LocalToast
+import com.sphinx.peel.ui.toast.ToastHost
+import com.sphinx.peel.ui.toast.rememberToastState
 
 /// A FragmentActivity (still a ComponentActivity, `setContent` works) because
 /// BiometricPrompt needs one.
@@ -72,8 +77,12 @@ class MainActivity : FragmentActivity() {
                 // bars too (edge-to-edge is mandatory from API 35); only the
                 // content inside is pushed clear of them.
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    val toast = rememberToastState()
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        PeelApp(secretStore, storage, deepLink) { deepLink = null }
+                        CompositionLocalProvider(LocalToast provides toast) {
+                            PeelApp(secretStore, storage, deepLink) { deepLink = null }
+                        }
+                        ToastHost(toast, Modifier.align(Alignment.BottomCenter))
                     }
                 }
             }
@@ -115,6 +124,7 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage, deepLink: DeepLi
             KeepConnected(current.engine, storage)
             RelockWhenIdle(current.engine) { screen = Screen.Relock(current.engine) }
             BiometricHousekeeping(current.engine, secretStore)
+            StadeumHousekeeping(current.engine)
             MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { screen = Screen.Onboarding }
         }
     }
@@ -178,5 +188,31 @@ private fun BiometricHousekeeping(engine: Engine, secretStore: SecretStore) {
     androidx.compose.runtime.LaunchedEffect(engine) {
         engine.syncsBiometrics = com.sphinx.peel.ui.lock.BiometricUnlock.available(context)
         if (engine.biometricWish() == false && secretStore.biometricEnrolled) secretStore.disableBiometric()
+    }
+}
+
+/// Opens the Stadeum pairing kept for this account while it is on screen
+/// (renewed at once and then hourly), renews it when due on coming back to
+/// the front, and lets it go when the account closes or locks (iOS opens it
+/// at every unlock).
+@Composable
+private fun StadeumHousekeeping(engine: Engine) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(engine, lifecycleOwner) {
+        val model = com.sphinx.peel.engine.Stadeum.model
+        model.sphinxProof = { runCatching { engine.sphinxProof() }.getOrNull() }
+        model.open(com.sphinx.peel.account.KeystoreHiveStore(context.applicationContext))
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            if (first) first = false else model.cameToFront()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            model.close()
+            model.sphinxProof = null
+        }
     }
 }

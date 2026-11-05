@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bolt
@@ -49,6 +50,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sphinx.peel.engine.ConnectionState
@@ -80,7 +82,7 @@ private const val PAGE = 50
 /// server for what is new, as does a connection or a balance change. A row
 /// opens its detail. Sats only: neither the iPhone nor the Mac shows fiat.
 @Composable
-fun PaymentsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier) {
+fun PaymentsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
     var page by remember { mutableStateOf<PaymentsPage>(PaymentsPage.List) }
     BackHandler(enabled = page != PaymentsPage.List) { page = PaymentsPage.List }
     Box(modifier.fillMaxSize()) {
@@ -92,7 +94,7 @@ fun PaymentsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifi
             is PaymentsPage.Send -> SendScreen(
                 engine, storage, prefill = current.prefill, onBack = { page = PaymentsPage.List }, onReceive = { page = PaymentsPage.Receive },
             )
-            is PaymentsPage.Detail -> PaymentDetailScreen(engine, storage, current.id, onBack = { page = PaymentsPage.List })
+            is PaymentsPage.Detail -> PaymentDetailScreen(storage, current.id, onBack = { page = PaymentsPage.List }, onOpenChat = onOpenChat)
         }
     }
 }
@@ -117,7 +119,7 @@ private fun PaymentsList(
 
     suspend fun reload() {
         items = withContext(Dispatchers.Default) {
-            PaymentItem.build(storage.payments(limit), storage.invoices(), storage::messageByPaymentHash)
+            PaymentItem.build(storage.payments(limit), storage.invoices(), contactOf = storage::contact, messageOf = storage::messageByPaymentHash)
         }
     }
     suspend fun refresh() {
@@ -172,7 +174,7 @@ private fun PaymentsList(
                     )
                 }
                 items(dayItems, key = { it.id }) { item ->
-                    PaymentRow(item, storage, Modifier.clickable { onOpen(item.id) })
+                    PaymentRow(item, Modifier.clickable { onOpen(item.id) })
                     if (item.id == items.last().id && hasMore && connected) {
                         LaunchedEffect(item.id, limit) {
                             loadingOlder = true
@@ -232,110 +234,60 @@ private fun BalanceHeader(balanceMsat: Long?, onReceive: () -> Unit, onSend: () 
     }
 }
 
-/// One payment: the bolt on a soft orange circle (a clock while it waits),
-/// who or what, the note under it, and the signed amount over the time.
-/// Received is green with "+"; pending grey, failed struck through, never red.
+/// One payment (iOS `PaymentRow`): the bolt on a soft amber circle (a clock
+/// while it waits), who or what, the line under it, the signed amount over
+/// the time, and a chevron. Received is green with "+"; pending grey, failed
+/// struck through, never red.
 @Composable
-private fun PaymentRow(item: PaymentItem, storage: Storage, modifier: Modifier = Modifier) {
-    val title = remember(item.id) { titleOf(item, storage) }
+private fun PaymentRow(item: PaymentItem, modifier: Modifier = Modifier) {
+    val waiting = item.status == PaymentItem.Status.PENDING
     val faded = item.status != PaymentItem.Status.COMPLETE
     Row(modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier.size(36.dp).clip(CircleShape)
-                .background((if (item.status == PaymentItem.Status.PENDING) Theme.colors.secondaryText else Theme.colors.attention).copy(alpha = 0.14f)),
+                .background(if (waiting) Theme.colors.fieldFill else Theme.colors.attention.copy(alpha = 0.14f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                if (item.status == PaymentItem.Status.PENDING) Icons.Filled.Schedule else Icons.Filled.Bolt, null,
-                Modifier.size(18.dp), tint = if (item.status == PaymentItem.Status.PENDING) Theme.colors.secondaryText else Theme.colors.attention,
+                if (waiting) Icons.Filled.Schedule else Icons.Filled.Bolt, null,
+                Modifier.size(18.dp), tint = if (waiting) Theme.colors.secondaryText else Theme.colors.attention,
             )
         }
         Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f).alpha(if (faded) 0.6f else 1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, maxLines = 1,
+        Column(Modifier.weight(1f)) {
+            Text(item.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
+                color = if (waiting) Theme.colors.secondaryText else Theme.colors.text, maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 textDecoration = if (item.status == PaymentItem.Status.FAILED) TextDecoration.LineThrough else null)
-            statusLine(item)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1) }
+            Text(item.subtitle, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End) {
             Text(
                 Sats.signed(item.amountMsat, item.incoming),
                 style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
-                color = if (item.incoming && item.status == PaymentItem.Status.COMPLETE) Theme.colors.confirmed else Theme.colors.text,
+                color = if (faded) Theme.colors.secondaryText else if (item.incoming) Theme.colors.confirmed else Theme.colors.text,
                 textDecoration = if (item.status == PaymentItem.Status.FAILED) TextDecoration.LineThrough else null,
-                modifier = Modifier.alpha(if (faded) 0.6f else 1f),
             )
-            Text(timeOf(item.ts), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+            Text(item.timeWithStatus(timeOf(item.ts)), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
         }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Theme.colors.secondaryText, modifier = Modifier.size(20.dp))
     }
     HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(start = 68.dp))
 }
 
-private fun statusLine(item: PaymentItem): String? = when (item.status) {
-    PaymentItem.Status.PENDING -> "Waiting"
-    PaymentItem.Status.FAILED -> item.error?.let { "Failed ($it)" } ?: "Failed"
-    PaymentItem.Status.COMPLETE -> item.note
-}
-
-private fun nameOf(item: PaymentItem, storage: Storage): String? {
-    val chat = item.chat ?: return null
-    val contact = storage.contact(chat)
-    return contact?.alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
-}
-
-/// What a row says it is, as the iPhone words it: who, and what kind.
-internal fun titleOf(item: PaymentItem, storage: Storage): String {
-    val name = nameOf(item, storage)
-    val inc = item.incoming
-    return when (item.kind) {
-        PaymentItem.Kind.BOOST -> if (inc) "Boost from ${name ?: "someone"}" else "You boosted${name?.let { " in $it" } ?: ""}"
-        PaymentItem.Kind.PAYMENT -> if (inc) "${name ?: "Someone"} paid you" else "You paid ${name ?: "a contact"}"
-        PaymentItem.Kind.INVOICE -> if (inc) "Invoice paid${name?.let { " by $it" } ?: ""}" else "Paid an invoice${name?.let { " from $it" } ?: ""}"
-        PaymentItem.Kind.KEYSEND -> if (inc) "Received" else "Sent"
-        PaymentItem.Kind.MESSAGE_FEE -> "Message${name?.let { " in $it" } ?: ""}"
-    }
-}
-
 private fun timeOf(ts: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(ts))
 
+/// iOS `Formatting.dayHeading`: "Today", "Yesterday", else "Monday 3 November".
 private fun dayHeading(dayMs: Long): String {
     val now = java.util.Calendar.getInstance()
     val day = java.util.Calendar.getInstance().apply { timeInMillis = dayMs }
-    val sameYear = now.get(java.util.Calendar.YEAR) == day.get(java.util.Calendar.YEAR)
-    val diff = now.get(java.util.Calendar.DAY_OF_YEAR) - day.get(java.util.Calendar.DAY_OF_YEAR)
-    return when {
-        sameYear && diff == 0 -> "Today"
-        sameYear && diff == 1 -> "Yesterday"
-        else -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(dayMs))
-    }
-}
-
-/// A payment's detail (the iPhone's `PaymentDetailScreen`): the amount, who,
-/// when, its note, its state and the payment hash.
-@Composable
-private fun PaymentDetailScreen(engine: Engine, storage: Storage, id: String, onBack: () -> Unit) {
-    val item = remember(id) {
-        PaymentItem.build(storage.payments(Int.MAX_VALUE), storage.invoices(), storage::messageByPaymentHash).firstOrNull { it.id == id }
-    }
-    PageFrame("Payment", onBack) {
-        if (item == null) {
-            Text("This payment isn't here any more.", color = Theme.colors.secondaryText)
-            return@PageFrame
-        }
-        Text(
-            Sats.signed(item.amountMsat, item.incoming) + " sats", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Theme.colors.text,
-            textDecoration = if (item.status == PaymentItem.Status.FAILED) TextDecoration.LineThrough else null,
-        )
-        Text(titleOf(item, storage), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
-        Spacer(Modifier.height(16.dp))
-        Fact("Status", when (item.status) {
-            PaymentItem.Status.COMPLETE -> if (item.incoming) "Received" else "Sent"
-            PaymentItem.Status.PENDING -> "Waiting for the server"
-            PaymentItem.Status.FAILED -> "Failed${item.error?.let { " ($it)" } ?: ""}. Nothing was sent."
-        })
-        Fact("When", DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(item.ts)))
-        nameOf(item, storage)?.let { Fact(if (item.incoming) "From" else "To", it) }
-        item.note?.let { Fact("Note", it) }
-        Fact("Payment hash", item.rhash)
+    fun ymd(c: java.util.Calendar) = c.get(java.util.Calendar.YEAR) * 1000 + c.get(java.util.Calendar.DAY_OF_YEAR)
+    val yesterday = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.DAY_OF_YEAR, -1) }
+    return when (ymd(day)) {
+        ymd(now) -> "Today"
+        ymd(yesterday) -> "Yesterday"
+        else -> java.text.SimpleDateFormat("EEEE d MMMM", java.util.Locale.getDefault()).format(Date(dayMs))
     }
 }
 

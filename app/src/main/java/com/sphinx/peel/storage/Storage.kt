@@ -1,10 +1,13 @@
 package com.sphinx.peel.storage
 
+import com.sphinx.peel.engine.MONEY_SEND_TYPES
+import com.sphinx.peel.engine.SendStatus
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.sphinx.peel.engine.InvoiceRecord
+import com.sphinx.peel.engine.Mentions
 import com.sphinx.peel.engine.PaymentRecord
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,6 +85,34 @@ data class ConversationRow(
     val shownUnread: Long get() = if (muted) 0 else unread
 }
 
+/// One row of the Threads list — PeelCore's `ThreadSummary` as
+/// `Storage.threads()` builds it: a thread's original message, how many
+/// replies it has, when it last moved, how many of them are new, and its
+/// newest reply. See `Storage.threads()` for which threads make the list.
+data class ThreadListItem(
+    val conversation: ConversationRow,
+    /// The thread's original message (the root every reply names by uuid).
+    val root: MessageRow,
+    /// Replies with words, not counting the original.
+    val count: Int,
+    val lastTimestamp: Long,
+    /// Replies from others past the chat's read marker.
+    val unread: Long,
+    val latest: MessageRow,
+    /// Up to the last 3 distinct senders, most recent first.
+    val participants: List<MessageRow>,
+)
+
+/// Content type 0 is text, 6 an attachment (`engine/Attachment.kt`'s
+/// `ATTACHMENT_MESSAGE_TYPE`); same rule as the conversation screen's
+/// `isThreadContent` — PeelCore's `type IN contentSQL AND noWords = 0`.
+private fun isThreadContentRow(row: MessageRow): Boolean {
+    if (row.deleted || (row.type != 0 && row.type != 6)) return false
+    if (row.type == 6) return true
+    val content = row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
+    return content.isNotBlank()
+}
+
 /// What a message's own JSON `body` names as its reply/thread target —
 /// shared by `Storage.insertMessages` (deriving `message.replyUuid`/
 /// `threadUuid` for a row being written) and `Storage.v6` (backfilling
@@ -93,6 +124,10 @@ private fun extractReplyUuid(body: String?): String? =
 
 private fun extractThreadUuid(body: String?): String? =
     body?.let { runCatching { JSONObject(it).optString("threadUuid") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
+/// A message's own text, from `body`'s `content` field.
+private fun messageContent(body: String?): String =
+    body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
 
 /// A row's own claimed sender alias, from its raw `sender` JSON — used
 /// only by `Storage.applyDeletes`'s own authorization check (matching a
@@ -476,7 +511,44 @@ class Storage(context: Context, account: String = "default") {
     /// shows. Not paged yet: fine for how little history a real account
     /// here has per chat so far, revisit once a busy tribe makes "load
     /// more" worth building.
+    /// Messages that may announce a call (a call message, or text holding a
+    /// call room link) since [sinceMs], newest first — PeelCore's
+    /// `Storage.recentCallMessages`.
+    fun recentCallMessages(sinceMs: Long): List<MessageRow> = readMessages(
+        "timestamp >= ? AND deleted = 0 AND (type = 32 OR (type = 0 AND instr(body, 'sphinx.call.') > 0))",
+        arrayOf(sinceMs.toString()), "timestamp DESC, id DESC",
+    ).take(500)
+
     fun messages(chat: String): List<MessageRow> = readMessages("chat = ?", arrayOf(chat), "timestamp ASC, id ASC")
+
+    /// The newest `limit` messages that mention this account's own tribe
+    /// alias, newest first — PeelCore's `Storage.mentions()`. There is no
+    /// `mentionsMe` column here: a SQL prefilter (someone else's, not deleted,
+    /// in a tribe, text containing an `@`) picks the candidates and
+    /// `Mentions.mentions` decides in Kotlin. "@all" is not a mention for
+    /// this list, only the alias itself.
+    fun mentions(myAlias: String, limit: Int = 200): List<MessageRow> = mentionRows(myAlias).take(limit)
+
+    /// Mentions past their chat's read marker, over every tribe — PeelCore's
+    /// `unreadMentions`, the count on the Dashboard's Mentions row. A chat
+    /// with no marker counts them all; a message with no server index yet
+    /// never does.
+    fun unreadMentions(myAlias: String): Long {
+        val lastReads = HashMap<String, Long>()
+        return mentionRows(myAlias).count { row ->
+            val index = row.serverIndex ?: return@count false
+            index > lastReads.getOrPut(row.chat) { lastRead(row.chat) ?: -1L }
+        }.toLong()
+    }
+
+    private fun mentionRows(myAlias: String): List<MessageRow> {
+        val aliases = setOf(Mentions.tribeAlias(myAlias))
+        return readMessages(
+            "fromMe = 0 AND deleted = 0 AND type IN (0, $attachmentMessageType) AND body LIKE '%@%' " +
+                "AND chat IN (SELECT pubkey FROM contact WHERE isTribe = 1)",
+            emptyArray(), "timestamp DESC, id DESC",
+        ).filter { row -> Mentions.mentions(messageContent(row.body), aliases) }
+    }
 
     private fun readMessages(selection: String, args: Array<String>, orderBy: String): List<MessageRow> {
         val rows = mutableListOf<MessageRow>()
@@ -637,18 +709,66 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
-    /// What the mixer said about a tag this account sent under, just now
-    /// (`RunReturn.sentStatus`) — `FAILED` as it comes; anything else
-    /// (`COMPLETE`, the one other status this reads) counts as delivered
-    /// the same way the message's own echo already would, so this mostly
-    /// only matters for a send whose echo never arrives. A tag that
-    /// never names a stored row (a payment, or a type this device sends
-    /// nothing of yet) is a no-op.
-    fun markSendStatus(tag: String, delivered: Boolean) {
-        helper.writableDatabase.execSQL(
-            "UPDATE message SET status = ? WHERE tag = ? AND status = 'PENDING'",
-            arrayOf(if (delivered) "DELIVERED" else "FAILED", tag),
+    /// What the mixer said about a tag this account sent under, whether
+    /// live (`RunReturn.sentStatus`) or in a `getTags` reply — PeelCore's
+    /// `Storage.applyStatus`, the one forward-only rule: no status or
+    /// `PENDING` becomes `DELIVERED`, `UNSETTLED` (money sends only) or
+    /// `FAILED`; `UNSETTLED` becomes `DELIVERED` or `FAILED`; `FAILED`
+    /// becomes `DELIVERED` (the server had it after all); `DELIVERED` never
+    /// changes. A tag naming no stored row is a no-op. Returns whether a
+    /// message row moved.
+    fun markSendStatus(tag: String, status: SendStatus): Boolean {
+        val from = status.movesFrom
+        if (from.isEmpty()) return false
+        val fromSql = from.joinToString(",") { "'$it'" }
+        val onlyMoney = if (status == SendStatus.UNSETTLED) {
+            "AND type IN (${MONEY_SEND_TYPES.joinToString(",")})"
+        } else ""
+        val db = helper.writableDatabase
+        db.execSQL(
+            "UPDATE message SET status = ? WHERE tag = ? AND fromMe = 1 AND (status IS NULL OR status IN ($fromSql)) $onlyMoney",
+            arrayOf(status.raw, tag),
         )
+        return db.compileStatement("SELECT changes()").simpleQueryForLong() > 0
+    }
+
+    /// Delivered-or-failed shorthand kept for the live `sentStatus` call sites.
+    fun markSendStatus(tag: String, delivered: Boolean) {
+        markSendStatus(tag, if (delivered) SendStatus.DELIVERED else SendStatus.FAILED)
+    }
+
+    /// The tags of this chat's own messages the server has not confirmed or
+    /// refused (no status, or `PENDING`), newest first, at most 200 —
+    /// PeelCore's `unconfirmedTags(in:)`, what `Engine.checkOwnMessageStatus`
+    /// asks about when a chat is open.
+    fun unconfirmedTags(chat: String): List<String> =
+        helper.readableDatabase.query(
+            "message", arrayOf("tag"),
+            "chat = ? AND fromMe = 1 AND deleted = 0 AND tag IS NOT NULL AND (status IS NULL OR status = 'PENDING')",
+            arrayOf(chat), null, null, "id DESC", "200",
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+
+    /// Every send of ours the server has not confirmed or refused, for
+    /// `Engine.checkPendingSends` — PeelCore's `pendingSendTags(textBefore:)`
+    /// trimmed to this port's tables: our messages still `PENDING` that
+    /// either may have paid (sats, a payment or boost) or are older than
+    /// [textBefore] (ms), newest first, at most 200; our messages with no
+    /// status at all (restored history, another device's), at most 200; and
+    /// the invoices we pay still `PENDING`, at most 200. Invites have no
+    /// table here yet.
+    fun pendingSendTags(textBefore: Long): List<String> {
+        val moneyTypes = MONEY_SEND_TYPES.joinToString(",")
+        val sql = """
+            SELECT tag FROM (SELECT tag FROM message WHERE fromMe = 1 AND status = 'PENDING' AND tag IS NOT NULL
+                AND (COALESCE(msat, 0) > 0 OR type IN ($moneyTypes) OR COALESCE(timestamp, 0) < ?)
+                ORDER BY id DESC LIMIT 200)
+            UNION ALL SELECT tag FROM (SELECT tag FROM message WHERE fromMe = 1 AND status IS NULL AND tag IS NOT NULL
+                ORDER BY id DESC LIMIT 200)
+            UNION ALL SELECT tag FROM (SELECT tag FROM invoice WHERE incoming = 0 AND status = 'PENDING' AND tag IS NOT NULL
+                ORDER BY createdAt DESC LIMIT 200)
+        """.trimIndent()
+        return helper.readableDatabase.rawQuery(sql, arrayOf(textBefore.toString()))
+            .use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }.distinct()
     }
 
     /// A contact's alias/photo, from the newest message naming them so
@@ -766,9 +886,13 @@ class Storage(context: Context, account: String = "default") {
     }
 
     /// The dashboard's rows: every ready contact or tribe, with its newest
-    /// message if it has one, newest chat first. A chat with no message
-    /// yet (just key-exchanged, say) sorts last — SQLite treats `NULL` as
-    /// lowest, which is what a `DESC` newest-first order wants here.
+    /// "last message" if it has one, newest chat first — PeelCore's
+    /// `conversationsSQL`. Only text/attachment (0, 6) and undeleted
+    /// payment/call (5, 32) messages with visible words count (noWords is
+    /// approximated by a non-blank body), newest `timestamp DESC, id DESC`;
+    /// joins, boosts and control messages never move a chat. Order is
+    /// `lastTimestamp IS NULL, lastTimestamp DESC, alias`: chats without
+    /// such a message last, ties broken by plain alias ascending.
     ///
     /// A boost only counts toward unread if it targets one of *this
     /// account's own* messages (someone boosting a third party's message
@@ -781,9 +905,9 @@ class Storage(context: Context, account: String = "default") {
             """
             SELECT
                 c.pubkey, c.alias, c.photoUrl, c.isTribe,
-                (SELECT body FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
-                (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
-                (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
+                l.body,
+                l.timestamp,
+                l.fromMe,
                 (SELECT COUNT(*) FROM message m
                     WHERE m.chat = c.pubkey AND m.fromMe = 0
                         AND m.type IN (0, 5, 6, 2, 32, 29)
@@ -793,8 +917,15 @@ class Storage(context: Context, account: String = "default") {
                         ))),
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0)
             FROM contact c
+            LEFT JOIN message l ON l.id = (
+                SELECT id FROM message
+                WHERE chat = c.pubkey AND deleted = 0
+                    AND type IN (0, 5, 6, 32)
+                    AND (type = 6 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                ORDER BY timestamp DESC, id DESC LIMIT 1
+            )
             WHERE c.ready = 1
-            ORDER BY (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1) DESC
+            ORDER BY l.timestamp IS NULL, l.timestamp DESC, c.alias
             """.trimIndent(),
             null,
         ).use { cursor ->
@@ -816,6 +947,58 @@ class Storage(context: Context, account: String = "default") {
         }
         return rows
     }
+
+    /// The Threads list — PeelCore's `Storage.threads()`: threads (replies
+    /// carrying a `threadUuid`, content with words only) in chats the
+    /// dashboard lists, whose original message is stored. A tribe thread
+    /// needs 2+ replies, a direct one shows from its first. Only threads
+    /// this account took part in (it wrote a reply, or the original).
+    /// Newest activity first, then newest original; at most 200.
+    fun threads(): List<ThreadListItem> {
+        val conversations = conversations().associateBy { it.chat }
+        if (conversations.isEmpty()) return emptyList()
+        val all = readMessages("threadUuid IS NOT NULL", emptyArray(), "timestamp ASC, id ASC")
+            .filter { it.chat in conversations && isThreadContentRow(it) }
+        if (all.isEmpty()) return emptyList()
+        val byThread = all.groupBy { it.chat to it.threadUuid!! }
+        val items = mutableListOf<ThreadListItem>()
+        for ((key, replies) in byThread) {
+            val (chat, rootUuid) = key
+            val conversation = conversations.getValue(chat)
+            if (conversation.isTribe && replies.size < 2) continue
+            val root = readMessages("chat = ? AND uuid = ?", arrayOf(chat, rootUuid), "id ASC").firstOrNull() ?: continue
+            if (replies.none { it.fromMe } && !root.fromMe) continue
+            val newestFirst = replies.sortedWith(compareByDescending<MessageRow> { it.timestamp ?: 0L }.thenByDescending { it.id })
+            val lastRead = readChatState(helper.readableDatabase, chat)?.lastRead ?: -1L
+            val participants = mutableListOf<MessageRow>()
+            val seen = mutableSetOf<String>()
+            for (row in newestFirst) {
+                val who = if (row.fromMe) "me" else (aliasOf(row.sender) ?: row.sender ?: "")
+                if (seen.add(who)) {
+                    participants.add(row)
+                    if (participants.size == 3) break
+                }
+            }
+            items.add(
+                ThreadListItem(
+                    conversation = conversation,
+                    root = root,
+                    count = replies.size,
+                    lastTimestamp = replies.maxOf { it.timestamp ?: 0L },
+                    unread = replies.count { !it.fromMe && (it.serverIndex ?: Long.MIN_VALUE) > lastRead }.toLong(),
+                    latest = newestFirst.first(),
+                    participants = participants,
+                ),
+            )
+        }
+        return items
+            .sortedWith(compareByDescending<ThreadListItem> { it.lastTimestamp }.thenByDescending { it.root.id })
+            .take(200)
+    }
+
+    /// Threads with something new — the dashboard Threads row's badge
+    /// (`AppModel.unreadThreads`).
+    fun unreadThreadCount(): Int = threads().count { it.unread > 0 }
 
     private fun readContact(db: SQLiteDatabase, pubkey: String): ContactRow? {
         db.query(

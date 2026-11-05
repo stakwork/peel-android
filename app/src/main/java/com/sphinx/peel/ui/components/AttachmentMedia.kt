@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.components
 
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.widget.MediaController
 import android.widget.VideoView
@@ -10,7 +11,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.aspectRatio
@@ -38,6 +40,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,6 +51,33 @@ import coil3.compose.AsyncImage
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/// An attachment's aspect ratio, by file path, once known: scrolling a
+/// chat recomposes a media row fresh every time it re-enters the lazy
+/// list's window, which otherwise meant re-reading the file and, once
+/// that finished, resizing the bubble again — each one a layout change
+/// the list doesn't re-anchor to, so the scroll position drifted off the
+/// bottom a little further with every attachment that scrolled past.
+/// Cached once per file for this process's lifetime, a row that has been
+/// seen before renders at its real height from its very first frame, no
+/// placeholder-then-resize at all. Never persisted: the file's own
+/// decode is cheap enough that there's no reason to survive a restart.
+object MediaAspectCache {
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Float>()
+
+    /// Bumped on every newly learned aspect ratio, so a screen already
+    /// positioned at the bottom can re-settle there as each of a fresh
+    /// batch of attachments resolves its real height, without every row
+    /// needing its own callback up to the list for it.
+    var version by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
+
+    fun get(path: String): Float? = cache[path]
+    fun put(path: String, aspect: Float) {
+        cache[path] = aspect
+        version++
+    }
+}
 
 /// A video's first frame and length, read once off the main thread.
 /// Null fields when the file can't be read (the row then shows a plain
@@ -69,6 +99,28 @@ private fun readVideoInfo(file: File): VideoInfo {
     }
 }
 
+/// An image's pixel size from its header only (no decode); null if unreadable.
+suspend fun readImageSize(file: File): Pair<Int, Int>? = withContext(Dispatchers.IO) {
+    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    runCatching { BitmapFactory.decodeFile(file.absolutePath, opts) }
+    if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
+}
+
+/// Sizes a media bubble: always 70% of the screen width, so a large photo
+/// or video never fills the whole row — bare "width: fill" for every
+/// attachment reads as a wall of media, not a chat. Fixed the moment the
+/// row composes, not the asset's own size: that only arrives once the
+/// file's been read (async), and sizing the bubble to it meant every media
+/// row visibly resized the instant it loaded, jumping the scroll position
+/// along with it. Height from the aspect ratio and bounded by the screen
+/// height.
+@Composable
+fun Modifier.mediaBubble(aspect: Float): Modifier {
+    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.75f).dp
+    val width = (LocalConfiguration.current.screenWidthDp * 0.7f).dp
+    return this.width(width).heightIn(max = maxHeight).aspectRatio(aspect)
+}
+
 /// A voice message's length, so the row can say "0:00 / 0:06" before play.
 suspend fun readMediaDurationMs(file: File): Int = withContext(Dispatchers.IO) { readVideoInfo(file).durationMs }
 
@@ -80,12 +132,23 @@ fun VideoAttachment(file: File) {
     val info by produceVideoInfo(file)
     var playing by remember(file) { mutableStateOf(false) }
     var fullscreen by remember(file) { mutableStateOf(false) }
-    val aspect = info?.aspect ?: (16f / 9f)
+    // The aspect alone, from the cache when there is one — decoupled from
+    // `info` (the frame/duration, which still has to load fresh every
+    // time) so a previously-seen video's bubble is never sized by the
+    // placeholder 16:9 even for the one frame before `info` answers.
+    val path = file.path
+    var aspect by remember(path) { mutableStateOf(MediaAspectCache.get(path) ?: (16f / 9f)) }
+    LaunchedEffect(info?.aspect) {
+        val a = info?.aspect ?: return@LaunchedEffect
+        if (MediaAspectCache.get(path) == null) {
+            MediaAspectCache.put(path, a)
+            aspect = a
+        }
+    }
 
     Box(
         Modifier
-            .fillMaxWidth()
-            .aspectRatio(aspect.coerceIn(0.6f, 2f))
+            .mediaBubble(aspect)
             .clip(RoundedCornerShape(10.dp))
             .background(Color.Black),
     ) {
@@ -93,7 +156,7 @@ fun VideoAttachment(file: File) {
             InlineVideo(file, Modifier.fillMaxSize(), controls = false, onEnd = { playing = false })
         } else {
             info?.frame?.let {
-                Image(it, contentDescription = "Video", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                Image(it, contentDescription = "Video", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
             Box(
                 Modifier
