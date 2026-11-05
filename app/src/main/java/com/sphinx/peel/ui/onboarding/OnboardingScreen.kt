@@ -42,6 +42,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.SecretStore
+import com.sphinx.peel.account.Signup
+import com.sphinx.peel.engine.InviteLink
+import com.sphinx.peel.engine.SignupRules
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
@@ -56,6 +59,8 @@ private enum class Path { NEW_ACCOUNT, RESTORE }
 
 private sealed class Step {
     object Welcome : Step()
+    object Invite : Step()
+    object Name : Step()
     object EnterWords : Step()
     object SetPin : Step()
     object ConfirmPin : Step()
@@ -63,16 +68,26 @@ private sealed class Step {
     object CheckWords : Step()
 }
 
-/// New account (PIN, the twelve words) or restore (the words, PIN), as
-/// PeelCore's Onboarding.swift asks them. There is still no "invite" step
-/// (Android has no invite flow yet). Once the PIN is confirmed, this
-/// builds the account's one `Engine` and calls `start()` — connecting,
-/// and for a restored account, paging through its contacts and messages
-/// in the background — then, for a restore, hands the engine to
-/// `onAccountReady` right away so the caller can show the restoring
-/// screen; a new account instead continues on to show its words first.
+/// New account (invite, name, PIN, the twelve words) or restore (the words,
+/// PIN), as PeelCore's Onboarding.swift asks them. An invite is the only way
+/// to a new account: there is no sign-up on the default server. Once the PIN
+/// is confirmed, a restore builds the account's one `Engine` and calls
+/// `start()` — connecting, and paging through its contacts and messages in the
+/// background — and hands the engine to `onAccountReady` right away so the
+/// caller can show the restoring screen; a new account instead signs up with
+/// its invite (`Signup.create`: stores the invite, connects, registers) and
+/// continues on to show its words first.
+///
+/// `inviteLink` is what a `sphinx.chat://` link the app was opened with held:
+/// it fills the invite step in (`onInviteLinkUsed` is called once it has).
 @Composable
-fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady: (engine: Engine) -> Unit) {
+fun OnboardingScreen(
+    secretStore: SecretStore,
+    storage: Storage,
+    inviteLink: String? = null,
+    onInviteLinkUsed: () -> Unit = {},
+    onAccountReady: (engine: Engine) -> Unit,
+) {
     com.sphinx.peel.ui.SecureWindow()
     var path by remember { mutableStateOf(Path.NEW_ACCOUNT) }
     var step by remember { mutableStateOf<Step>(Step.Welcome) }
@@ -85,13 +100,30 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
     var check by remember { mutableStateOf(WordCheck()) }
     var working by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
+    var inviteText by remember { mutableStateOf("") }
+    var invite by remember { mutableStateOf<com.sphinx.peel.engine.Invite?>(null) }
+    var name by remember { mutableStateOf("") }
+    // The server has not confirmed the register (yet): said on the words screen.
+    var unconfirmed by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    androidx.compose.runtime.LaunchedEffect(inviteLink) {
+        if (inviteLink != null && (step is Step.Welcome || step is Step.Invite)) {
+            inviteText = inviteLink
+            path = Path.NEW_ACCOUNT
+            problem = null
+            step = Step.Invite
+            onInviteLinkUsed()
+        }
+    }
 
     fun back() {
         problem = null
         step = when (step) {
-            Step.EnterWords -> Step.Welcome
-            Step.SetPin -> if (path == Path.RESTORE) Step.EnterWords else Step.Welcome
+            Step.Invite, Step.EnterWords -> Step.Welcome
+            Step.Name -> Step.Invite
+            Step.SetPin -> if (path == Path.RESTORE) Step.EnterWords else Step.Name
             Step.ConfirmPin -> {
                 pin = ""
                 confirmation = ""
@@ -118,14 +150,12 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             try {
                 when (path) {
                     Path.NEW_ACCOUNT -> {
-                        val generated = Account.generateMnemonic()
-                        val created = withContext(Dispatchers.Default) {
-                            secretStore.save(generated, pin)
-                            Engine(generated, storage).also { it.start() }
-                        }
-                        engine = created
-                        mnemonic = generated
-                        shownWords = Account.wordsIn(generated)
+                        val toJoin = invite ?: throw com.sphinx.peel.engine.InviteProblem.NOT_AN_INVITE
+                        val created = Signup.create(secretStore, storage, toJoin, name, pin)
+                        engine = created.engine
+                        mnemonic = created.mnemonic
+                        unconfirmed = !created.confirmed
+                        shownWords = Account.wordsIn(created.mnemonic)
                         check = WordCheck()
                         step = Step.ShowWords
                     }
@@ -158,6 +188,12 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             } catch (e: Exception) {
                 problem = e.message ?: "Could not save the account."
                 confirmation = ""
+                // A signup that ended with no account (no connection, the broker refusing): back to the
+                // invite, which is still filled in; the PIN is asked again after it.
+                if (path == Path.NEW_ACCOUNT) {
+                    pin = ""
+                    step = Step.Invite
+                }
             }
             working = false
         }
@@ -175,7 +211,11 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             // on this port since Phase 1 (`Setting.kt`) but never once
             // written until now.
             storage.apply(Storage.Commit(settings = mapOf(Setting.WORDS_CONFIRMED to "1")))
-            engine?.let(onAccountReady)
+            engine?.let {
+                // An unconfirmed signup registers again, with its stored invite, as it connects.
+                if (!it.isRegistered) it.resume()
+                onAccountReady(it)
+            }
         } else {
             problem = "Word${if (wrong.size > 1) "s" else ""} ${wrong.joinToString(", ") { "${it + 1}" }} ${if (wrong.size > 1) "don't" else "doesn't"} match."
             check = WordCheck()
@@ -185,9 +225,69 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
     when (step) {
         Step.Welcome -> Welcome(
             problem = problem,
-            onNewAccount = { path = Path.NEW_ACCOUNT; problem = null; step = Step.SetPin },
+            onNewAccount = { path = Path.NEW_ACCOUNT; problem = null; step = Step.Invite },
             onRestore = { path = Path.RESTORE; problem = null; step = Step.EnterWords },
         )
+        Step.Invite -> if (scanning) {
+            com.sphinx.peel.ui.payments.CodeScanner(
+                prompt = "Point the camera at the invite's QR code.",
+                accept = { text ->
+                    // Whatever it holds is untrusted text: only an invite is taken.
+                    val ok = runCatching { InviteLink.parse(text) }.isSuccess
+                    if (ok) { inviteText = text; scanning = false; null } else "That code isn't a Sphinx invite."
+                },
+                onCancel = { scanning = false },
+            )
+        } else StepScaffold(
+            title = "Paste your invite",
+            detail = "The link or code someone sent you.",
+            problem = problem,
+            actionLabel = "Continue",
+            actionEnabled = inviteText.isNotBlank() && !working,
+            working = working,
+            stepNumber = 1,
+            totalSteps = 4,
+            onBack = ::back,
+            onAction = {
+                // The core reads it (a native call): off the main thread.
+                working = true
+                scope.launch {
+                    try {
+                        invite = withContext(Dispatchers.Default) { InviteLink.parse(inviteText) }
+                        problem = null
+                        step = Step.Name
+                    } catch (e: Exception) {
+                        problem = e.message ?: "That doesn't look like a Sphinx invite."
+                    }
+                    working = false
+                }
+            },
+        ) {
+            InviteField(
+                text = inviteText,
+                onTextChange = { inviteText = it.take(com.sphinx.peel.engine.InviteLink.MAX_LENGTH + 1) },
+                onScan = { scanning = true },
+            )
+        }
+        Step.Name -> StepScaffold(
+            title = "What should people call you?",
+            detail = invite?.inviterAlias?.let { "$it invited you." },
+            problem = problem,
+            actionLabel = "Continue",
+            actionEnabled = name.isNotBlank(),
+            stepNumber = 2,
+            totalSteps = 4,
+            onBack = ::back,
+            onAction = { problem = null; step = Step.SetPin },
+        ) {
+            androidx.compose.material3.OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(MAX_NAME_LENGTH) },
+                label = { Text("Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         Step.EnterWords -> StepScaffold(
             title = "Restore with recovery words",
             detail = "Type them in order, or paste all twelve.",
@@ -213,8 +313,8 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             title = "Set a PIN",
             problem = problem,
             hideAction = true,
-            stepNumber = if (path == Path.RESTORE) 2 else 1,
-            totalSteps = 2,
+            stepNumber = if (path == Path.RESTORE) 2 else 3,
+            totalSteps = if (path == Path.RESTORE) 2 else 4,
             onBack = ::back,
         ) {
             PinBoxes(
@@ -229,8 +329,8 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             problem = problem,
             hideAction = true,
             working = working,
-            stepNumber = if (path == Path.RESTORE) 2 else 1,
-            totalSteps = 2,
+            stepNumber = if (path == Path.RESTORE) 2 else 3,
+            totalSteps = if (path == Path.RESTORE) 2 else 4,
             onBack = ::back,
         ) {
             PinBoxes(
@@ -252,12 +352,16 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             detail = "Anyone with these words controls your account.",
             problem = problem,
             actionLabel = "I've written them down",
-            stepNumber = 2,
-            totalSteps = 2,
+            stepNumber = 4,
+            totalSteps = 4,
             onAction = { step = Step.CheckWords },
         ) {
             NumberedWords(places = shownWords.indices.toList()) { index ->
                 Text(shownWords[index], color = Theme.colors.text)
+            }
+            if (unconfirmed) {
+                // Signed up, the server's answer not yet in (PeelCore's Onboarding says the same).
+                Text(SignupRules.NOT_CONFIRMED, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium)
             }
         }
         Step.CheckWords -> StepScaffold(
@@ -266,11 +370,34 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
             problem = problem,
             actionLabel = "Open Peel",
             actionEnabled = check.isFilled,
-            stepNumber = 2,
-            totalSteps = 2,
+            stepNumber = 4,
+            totalSteps = 4,
             onAction = { checkWords() },
         ) {
             WordCheckBoxes(check = check, onSubmit = { if (check.isFilled) checkWords() })
+        }
+    }
+}
+
+private const val MAX_NAME_LENGTH = 100
+
+/// The invite's text box, with Paste and Scan beside it. The text is a secret of sorts (anyone
+/// holding the link can use the invite): never logged, and the screen is `SecureWindow`.
+@Composable
+private fun InviteField(text: String, onTextChange: (String) -> Unit, onScan: () -> Unit) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.material3.OutlinedTextField(
+            value = text,
+            onValueChange = onTextChange,
+            label = { Text("sphinx.chat://?action=i&d=…") },
+            minLines = 2,
+            maxLines = 5,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { clipboard.getText()?.text?.let(onTextChange) }) { Text("Paste") }
+            OutlinedButton(onClick = onScan) { Text("Scan QR") }
         }
     }
 }
@@ -296,12 +423,14 @@ private fun Welcome(problem: String?, onNewAccount: () -> Unit, onRestore: () ->
         }
         Spacer(Modifier.height(36.dp))
         Button(onClick = onNewAccount, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText)) {
-            Text("Create a new account")
+            Text("Join with an invite")
         }
         Spacer(Modifier.height(10.dp))
         OutlinedButton(onClick = onRestore, modifier = Modifier.fillMaxWidth()) {
             Text("Restore with recovery words")
         }
+        Spacer(Modifier.height(12.dp))
+        Text("No invite? Ask a friend who uses Peel.", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
     }
 }
 

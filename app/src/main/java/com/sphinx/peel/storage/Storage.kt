@@ -9,6 +9,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.sphinx.peel.engine.InviteRecord
+import com.sphinx.peel.engine.InviteRules
 import com.sphinx.peel.engine.InvoiceRecord
 import com.sphinx.peel.engine.Mentions
 import com.sphinx.peel.engine.PaymentRecord
@@ -24,6 +26,9 @@ import org.json.JSONObject
 /// know a message's type by its number at all.
 private const val attachmentMessageType = 6
 private const val deleteMessageType = 17
+
+/// The first message of a key exchange: someone adding this account (PeelCore's `MessageType.contactKey`).
+const val CONTACT_KEY_MESSAGE_TYPE = 10
 
 /// One contact as `message`/`contact` know it: a pubkey, and whatever name
 /// and photo its own messages have revealed so far (names and photos are
@@ -709,6 +714,11 @@ class Storage(context: Context, account: String = "default") {
                     put("threadUuid", extractThreadUuid(row.body))
                 }
                 val inserted = db.insertWithOnConflict("message", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+                // Someone who joined with one of our invites adds us with its code
+                // (a key exchange, type 10, whose sender names it): the invite is used.
+                if (inserted != -1L && row.type == CONTACT_KEY_MESSAGE_TYPE && !row.fromMe) {
+                    inviteCodeOf(row.sender)?.let { markInviteUsed(db, it, row.chat) }
+                }
                 if (inserted == -1L && row.uuid != null) {
                     db.execSQL(
                         "UPDATE message SET status = 'DELIVERED' WHERE uuid = ? AND status = 'PENDING'",
@@ -812,7 +822,92 @@ class Storage(context: Context, account: String = "default") {
             "UPDATE message SET status = ? WHERE tag = ? AND fromMe = 1 AND (status IS NULL OR status IN ($fromSql)) $onlyMoney",
             arrayOf(status.raw, tag),
         )
-        return db.compileStatement("SELECT changes()").simpleQueryForLong() > 0
+        val moved = db.compileStatement("SELECT changes()").simpleQueryForLong() > 0
+        // The invite this payment funds follows it (PeelCore's `applyStatus`).
+        InviteRules.forFunding(status)?.let { next ->
+            val fromInvite = InviteRules.fundingMovesFrom(status).joinToString(",") { "'${it.raw}'" }
+            if (fromInvite.isNotEmpty()) {
+                db.execSQL(
+                    "UPDATE invite SET status = ? WHERE tag = ? AND status IN ($fromInvite)",
+                    arrayOf(next.raw, tag),
+                )
+            }
+        }
+        return moved
+    }
+
+    // MARK: - Invites
+
+    /// An invite made here, written before its payment is published.
+    fun insertInvite(invite: InviteRecord) {
+        helper.writableDatabase.insertWithOnConflict(
+            "invite", null,
+            ContentValues().apply {
+                put("code", invite.code)
+                put("link", invite.link)
+                put("amountMsat", invite.amountMsat)
+                put("nickname", invite.nickname)
+                put("message", invite.message)
+                put("tag", invite.tag)
+                put("status", invite.status.raw)
+                put("createdAt", invite.createdAt)
+                put("usedBy", invite.usedBy)
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    /// Every invite made here, newest first.
+    fun invites(): List<InviteRecord> =
+        helper.readableDatabase.query("invite", null, null, null, null, null, "createdAt DESC")
+            .use { c -> buildList { while (c.moveToNext()) readInvite(c)?.let(::add) } }
+
+    fun invite(code: String): InviteRecord? =
+        helper.readableDatabase.query("invite", null, "code = ?", arrayOf(code.lowercase()), null, null, null)
+            .use { c -> if (c.moveToFirst()) readInvite(c) else null }
+
+    private fun readInvite(c: android.database.Cursor): InviteRecord? {
+        val status = InviteRecord.Status.fromRaw(c.getString(c.getColumnIndexOrThrow("status"))) ?: return null
+        fun text(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getString(it) }
+        return InviteRecord(
+            code = c.getString(c.getColumnIndexOrThrow("code")),
+            link = c.getString(c.getColumnIndexOrThrow("link")),
+            amountMsat = c.getLong(c.getColumnIndexOrThrow("amountMsat")),
+            nickname = text("nickname"),
+            message = text("message"),
+            tag = text("tag"),
+            status = status,
+            createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")),
+            usedBy = text("usedBy"),
+        )
+    }
+
+    /// Moves an invite from one of `from` to `to`; false when it was in none.
+    fun setInviteStatus(code: String, to: InviteRecord.Status, from: List<InviteRecord.Status>): Boolean {
+        val db = helper.writableDatabase
+        val marks = from.joinToString(",") { "?" }
+        // `executeUpdateDelete` counts on the connection that ran it: `changes()` run
+        // afterwards could land on another pooled connection (WAL).
+        val statement = db.compileStatement("UPDATE invite SET status = ? WHERE code = ? AND status IN ($marks)")
+        statement.bindAllArgsAsStrings((listOf(to.raw, code.lowercase()) + from.map { it.raw }).toTypedArray())
+        return statement.use { it.executeUpdateDelete() } > 0
+    }
+
+    /// Whoever joined with `code` added this account: its invite is used, if it was still waiting.
+    fun markInviteUsed(code: String, by: String) = markInviteUsed(helper.writableDatabase, code, by)
+
+    private fun markInviteUsed(db: SQLiteDatabase, code: String, by: String) {
+        val pending = InviteRecord.PENDING_STATUSES.map { it.raw }
+        db.execSQL(
+            "UPDATE invite SET status = ?, usedBy = ? WHERE code = ? AND status IN (${pending.joinToString(",") { "?" }})",
+            (listOf(InviteRecord.Status.USED.raw, by, code.lowercase()) + pending).toTypedArray(),
+        )
+    }
+
+    /// The invite code a type-10 message's sender JSON carries (`code`), if any.
+    private fun inviteCodeOf(sender: String?): String? {
+        val json = sender ?: return null
+        return runCatching { org.json.JSONObject(json).optString("code") }.getOrNull()?.takeIf { it.isNotEmpty() }
     }
 
     /// Delivered-or-failed shorthand kept for the live `sentStatus` call sites.
@@ -900,8 +995,8 @@ class Storage(context: Context, account: String = "default") {
     /// either may have paid (sats, a payment or boost) or are older than
     /// [textBefore] (ms), newest first, at most 200; our messages with no
     /// status at all (restored history, another device's), at most 200; and
-    /// the invoices we pay still `PENDING`, at most 200. Invites have no
-    /// table here yet.
+    /// the invoices we pay still `PENDING`, at most 200; and the invites
+    /// still `sending` (their funding payment's tag), at most 200.
     fun pendingSendTags(textBefore: Long): List<String> {
         val moneyTypes = MONEY_SEND_TYPES.joinToString(",")
         val sql = """
@@ -911,6 +1006,8 @@ class Storage(context: Context, account: String = "default") {
             UNION ALL SELECT tag FROM (SELECT tag FROM message WHERE fromMe = 1 AND status IS NULL AND tag IS NOT NULL
                 ORDER BY id DESC LIMIT 200)
             UNION ALL SELECT tag FROM (SELECT tag FROM invoice WHERE incoming = 0 AND status = 'PENDING' AND tag IS NOT NULL
+                ORDER BY createdAt DESC LIMIT 200)
+            UNION ALL SELECT tag FROM (SELECT tag FROM invite WHERE status = 'sending' AND tag IS NOT NULL
                 ORDER BY createdAt DESC LIMIT 200)
         """.trimIndent()
         return helper.readableDatabase.rawQuery(sql, arrayOf(textBefore.toString()))
@@ -1394,6 +1491,7 @@ class Storage(context: Context, account: String = "default") {
             v8(db)
             v9(db)
             v10(db)
+            v11(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -1409,6 +1507,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 8) v8(db)
             if (oldVersion < 9) v9(db)
             if (oldVersion < 10) v10(db)
+            if (oldVersion < 11) v11(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -1616,8 +1715,30 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("ALTER TABLE message ADD COLUMN autoResentAt INTEGER")
         }
 
+        // `invite`: invites made here with sats (PeelCore's v16). The core keeps no
+        // record of them and the server only the code; `tag` is the funding
+        // payment's, which the server confirms; `status` as `InviteRecord.Status`.
+        private fun v11(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE invite (
+                    code TEXT PRIMARY KEY NOT NULL,
+                    link TEXT NOT NULL,
+                    amountMsat INTEGER NOT NULL,
+                    nickname TEXT,
+                    message TEXT,
+                    tag TEXT,
+                    status TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    usedBy TEXT
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX invite_tag ON invite(tag) WHERE tag IS NOT NULL")
+        }
+
         companion object {
-            const val VERSION = 10
+            const val VERSION = 11
         }
     }
 }

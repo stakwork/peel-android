@@ -49,6 +49,9 @@ sections for code that isn't written yet.
     retry/auto-resend rules; JVM-tested) back the chat-list actions and failed-send
     Retry/Discard (`docs/phases/19-chat-actions-send-retry.md`); UI in
     `ui/dashboard/ChatRowActions.kt` and `UndeliveredLine.kt`.
+  - `engine/Invite*.kt`, `ContactCode.kt`, `InviterFlow.kt`, `Invites.kt` and `account/Signup.kt` — invites and
+    contacts (`docs/phases/21-invites.md`): a new account only signs up with an invite; `addContact`,
+    `makeInvite`, `cancelInvite`; `run(ordered = true)` publishes in PeelCore's `publishPlan` order.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

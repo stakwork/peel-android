@@ -49,14 +49,38 @@ import java.util.concurrent.atomic.AtomicBoolean
 /// in the manifest already, for calls); refused, it says so and points at paste.
 @Composable
 fun InvoiceScanner(onFound: (String) -> Unit, onCancel: () -> Unit) {
+    CodeScanner(
+        prompt = "Point the camera at an invoice's QR code.",
+        refused = "Peel can't use the camera. Allow it in Settings, or paste the invoice.",
+        accept = { text ->
+            when (val input = PaymentInput.parse(text)) {
+                is PaymentInput.Bolt11 -> { onFound(input.bolt11); null }
+                is PaymentInput.Unsupported -> "That's ${input.kind}, which Peel can't pay. Scan an invoice."
+                PaymentInput.Unknown -> "That code isn't an invoice."
+            }
+        },
+        onCancel = onCancel,
+    )
+}
+
+/// The camera, looking for a QR code `accept` takes: it returns null once it took the code
+/// (the scan then stops, so one scan is one result), or a word for the person about why not.
+/// Shared by the invoice scan and the invite and contact-code scans.
+@Composable
+fun CodeScanner(
+    prompt: String,
+    accept: (String) -> String?,
+    onCancel: () -> Unit,
+    refused: String = "Peel can't use the camera. Allow it in Settings, or paste instead.",
+) {
     val context = LocalContext.current
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
-    var refused by remember { mutableStateOf(false) }
+    var denied by remember { mutableStateOf(false) }
     val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
-        refused = !it
+        denied = !it
     }
     LaunchedEffect(Unit) { if (!granted) request.launch(Manifest.permission.CAMERA) }
 
@@ -64,11 +88,9 @@ fun InvoiceScanner(onFound: (String) -> Unit, onCancel: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (granted) {
             CameraPreview { text ->
-                when (val input = PaymentInput.parse(text)) {
-                    is PaymentInput.Bolt11 -> { onFound(input.bolt11); true }
-                    is PaymentInput.Unsupported -> { note = "That's ${input.kind}, which Peel can't pay. Scan an invoice."; false }
-                    PaymentInput.Unknown -> { note = "That code isn't an invoice."; false }
-                }
+                val problem = accept(text)
+                note = problem
+                problem == null
             }
         }
         Column(
@@ -77,9 +99,9 @@ fun InvoiceScanner(onFound: (String) -> Unit, onCancel: () -> Unit) {
         ) {
             Text(
                 when {
-                    refused -> "Peel can't use the camera. Allow it in Settings, or paste the invoice."
+                    denied -> refused
                     !granted -> "Waiting for camera access…"
-                    else -> note ?: "Point the camera at an invoice's QR code."
+                    else -> note ?: prompt
                 },
                 color = Color.White,
                 style = MaterialTheme.typography.bodyMedium,

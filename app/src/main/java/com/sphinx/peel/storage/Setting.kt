@@ -107,4 +107,17 @@ enum class Setting(val key: String) {
     /// their own. Unset = on. Synced like the other preferences.
     AUTO_DOWNLOAD_MEDIA("autoDownloadMedia"),
     AUTO_DOWNLOAD_MEDIA_UPDATED_AT("autoDownloadMediaUpdatedAt"),
+
+    /// The invite a new account signed up with (`Invite.toJson`): kept from
+    /// before the first connect until the account is online and its inviter
+    /// is added (`Engine.addInviterIfPending`); "" (or absent) once that has
+    /// started. While the account is not registered it is also what a
+    /// connect registers with again (the register may have been lost).
+    INVITE("invite"),
+
+    /// "1" for an account that signed up on the server its invite named:
+    /// `Setting.SERVER` is then the one to reconnect to, not the public
+    /// config's default (`Engine.connectAndRegister`). Other accounts
+    /// (a restore) keep resolving the default each time, as before.
+    SERVER_PINNED("serverPinned"),
 }

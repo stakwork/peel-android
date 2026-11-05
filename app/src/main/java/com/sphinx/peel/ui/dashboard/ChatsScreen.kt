@@ -72,7 +72,7 @@ import kotlinx.coroutines.withContext
 
 /// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
 /// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
-enum class DashboardRoute { APPS, THREADS, MENTIONS }
+enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITES }
 
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
 /// the large title with the connection bolt, then `ChatListBody` for
@@ -164,7 +164,7 @@ private fun ChatListBody(
 
     Box(modifier) {
         if (conversations.isEmpty() && !searching) {
-            EmptyChats(restoring = restoreProgress.restoring)
+            EmptyChats(restoring = restoreProgress.restoring, onOpenRoute = onOpenRoute)
         } else if (noMatches) {
             NoSearchResults(query)
         } else {
@@ -233,8 +233,8 @@ private fun ChatListBody(
                             item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
                         }
                         if (!searching) {
-                            item { ActionRow("Add contact") { /* not wired yet */ } }
-                            item { ActionRow("Invite someone") { /* not wired yet */ } }
+                            item { ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
+                            item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) } }
                         }
                     }
                 }
@@ -344,7 +344,7 @@ private fun EmptySearch() {
 }
 
 @Composable
-private fun EmptyChats(restoring: Boolean) {
+private fun EmptyChats(restoring: Boolean, onOpenRoute: (DashboardRoute) -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -365,6 +365,12 @@ private fun EmptyChats(restoring: Boolean) {
             style = MaterialTheme.typography.bodyMedium,
             color = Theme.colors.secondaryText,
         )
+        if (!restoring) {
+            // Nobody to talk to yet: the two ways to get someone here must not hide behind a chat.
+            Spacer(Modifier.height(16.dp))
+            ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) }
+            ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) }
+        }
     }
 }
 
@@ -534,7 +540,8 @@ private fun ShowAllRow(count: Int, noun: String, expanded: Boolean, onToggle: ()
 }
 
 /// "Join a tribe", "Add contact" and the rest — PeelCore's `ActionRow`.
-/// Present, same place as the real app, not wired to anything yet.
+/// "Add contact" and "Invite someone" open their screens; "Join a tribe" and "Create a tribe" are
+/// present, same place as the real app, not wired to anything yet.
 @Composable
 private fun ActionRow(title: String, onClick: () -> Unit) {
     Row(

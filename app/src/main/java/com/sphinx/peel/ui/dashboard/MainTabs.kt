@@ -251,6 +251,12 @@ fun MainTabs(
                         openThreadRoot = root
                         openChat = threadChat
                     })
+                    DashboardRoute.ADD_CONTACT -> com.sphinx.peel.ui.contacts.AddContactScreen(
+                        engine,
+                        onBack = back,
+                        onOpenChat = { contactChat -> openRoute = null; openChat = contactChat },
+                    )
+                    DashboardRoute.INVITES -> com.sphinx.peel.ui.invites.InvitesScreen(engine, storage, onBack = back)
                     DashboardRoute.MENTIONS -> MentionsScreen(
                         storage,
                         onBack = back,
