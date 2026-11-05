@@ -12,6 +12,8 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.sphinx.peel.engine.InvoiceRecord
 import com.sphinx.peel.engine.Mentions
 import com.sphinx.peel.engine.PaymentRecord
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 
 /// `engine/Attachment.kt`'s own `ATTACHMENT_MESSAGE_TYPE`/
@@ -498,6 +500,9 @@ class Storage(context: Context, account: String = "default") {
     /// captured the same way at open).
     fun lastRead(chat: String): Long? = readChatState(helper.readableDatabase, chat)?.lastRead
 
+    /// `chatState.muteLevel` for `chat`: 0 all, 1 mentions only, 2 muted.
+    fun muteLevel(chat: String): Int = readChatState(helper.readableDatabase, chat)?.muteLevel ?: 0
+
     /// Read markers set here while offline, not yet sent — PeelCore's
     /// `pendingReads`. What `Engine.fetchReadsAndMutes`'s
     /// `publishPendingReads` resends once a connection answers `getReads`.
@@ -965,6 +970,7 @@ class Storage(context: Context, account: String = "default") {
             put("escrowMsat", existing?.escrowMsat ?: 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
     }
 
     /// A tribe's real name and photo, from its own registry
@@ -987,6 +993,7 @@ class Storage(context: Context, account: String = "default") {
             put("escrowMsat", escrowMsat)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
     }
 
     /// One contact or tribe, for whatever needs more than
@@ -1016,6 +1023,7 @@ class Storage(context: Context, account: String = "default") {
                     put("escrowMsat", existing?.escrowMsat ?: 0)
                 }
                 db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        contactsVersionFlow.value += 1
             }
             db.setTransactionSuccessful()
         } finally {
@@ -1180,6 +1188,12 @@ class Storage(context: Context, account: String = "default") {
             )
         }
     }
+
+    private val contactsVersionFlow = MutableStateFlow(0)
+
+    /// Bumps whenever a `contact` row is written (name, tribe info, ready):
+    /// what `push/PushNameSync` watches to refresh the push name directory.
+    val contactsVersion: StateFlow<Int> = contactsVersionFlow
 
     // MARK: - Money (invoices and the server's payment history)
 

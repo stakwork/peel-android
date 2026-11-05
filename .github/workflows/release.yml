@@ -56,6 +56,16 @@ jobs:
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/peel-release.jks"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/peel-release.jks" >> "$GITHUB_ENV"
 
+      - name: Write Firebase config for push
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            echo "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret not set; this release APK ships without push notifications."
+          fi
+
       - name: Derive version from tag
         env:
           TAG: ${{ github.event.release.tag_name }}
@@ -79,7 +89,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --stacktrace -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
+        run: ./gradlew assembleRelease --stacktrace -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE" -Ppeel.push.registerWithHub=true
 
       # - name: Build AAB
       #   env:

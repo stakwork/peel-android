@@ -136,6 +136,7 @@ private fun YouMain(
 ) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     var confirmingForget by remember { mutableStateOf(false) }
     var editingName by remember { mutableStateOf(false) }
     var editingBoostAmount by remember { mutableStateOf(false) }
@@ -492,6 +493,8 @@ private fun YouMain(
                         // this one's coreState (Storage.kt, `deleteAccount`).
                         withContext(Dispatchers.Default) {
                             storage.deleteAccount()
+                            com.sphinx.peel.push.PushNameStore.forContext(appContext).clear()
+                            com.sphinx.peel.push.PushRegistrar.accountForgotten(appContext)
                             secretStore.deleteMnemonic()
                         }
                         onForgotten()

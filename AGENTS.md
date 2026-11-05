@@ -57,6 +57,13 @@ sections for code that isn't written yet.
       `PhoneControls.swift`/`PinPad.swift`.
     - `onboarding/`, `lock/`, `home/` — new account or restore, the PIN
       lock screen, a placeholder account screen (no chat list yet).
+  - `push/` — FCM (`PushRegistrar`, `PeelMessagingService`), `Notifications`
+    (channels, deep-link intents), `MessageNotifier`, `PushKeyStore`,
+    `PushApp` (own hub app id), `PushNames`/`PushNameStore`/`PushNameSync`
+    (iOS-style chat naming of data-only pushes). Firebase `google-services.json`
+    goes in `app/` (git-ignored).
+    `call/CallService` is the call foreground service; `engine/ConnectionWatcher`
+    reconnects on network change/app start. `docs/phases/20-push-and-reliability.md`.
   - `MainActivity.kt` — routes between those three screens.
 - `sphinxrs/` — generated UniFFI Kotlin bindings to the Rust core
   (`uniffi.sphinxrs`) plus the native `libsphinxrs.so`. Do not hand-edit;

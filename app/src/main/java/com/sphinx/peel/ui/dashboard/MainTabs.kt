@@ -1,5 +1,12 @@
 package com.sphinx.peel.ui.dashboard
 
+import com.sphinx.peel.ui.call.CallConnectionState
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import com.sphinx.peel.call.CallService
+import androidx.compose.runtime.LaunchedEffect
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -61,6 +68,18 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
+/// What a tapped notification asks `MainTabs` to open: a chat, or Payments.
+/// Read from the intent extras `push/Notifications.openIntent` sets.
+data class DeepLink(val chat: String?, val payments: Boolean) {
+    companion object {
+        fun from(intent: Intent?): DeepLink? {
+            val chat = intent?.getStringExtra(com.sphinx.peel.push.Notifications.EXTRA_CHAT)?.takeIf { it.isNotEmpty() }
+            val payments = intent?.getBooleanExtra(com.sphinx.peel.push.Notifications.EXTRA_OPEN_PAYMENTS, false) == true
+            return if (chat != null || payments) DeepLink(chat, payments) else null
+        }
+    }
+}
+
 private enum class MainTab { CHATS, PAYMENTS, YOU, SEARCH }
 
 /// The tab bar — PeelCore's `MainTabs.swift`: Chats, Payments, You, Search.
@@ -74,7 +93,10 @@ private enum class MainTab { CHATS, PAYMENTS, YOU, SEARCH }
 /// tab content, so it keeps running when either changes underneath it —
 /// `docs/phases/15-call-background.md`.
 @Composable
-fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
+fun MainTabs(
+    engine: Engine, storage: Storage, secretStore: SecretStore,
+    deepLink: DeepLink? = null, onDeepLinkHandled: () -> Unit = {}, onForgotten: () -> Unit,
+) {
     var tab by remember { mutableStateOf(MainTab.CHATS) }
     // An open chat replaces the whole tab area, bar included — PeelCore's
     // `ConversationScreen` hides the tab bar the same way; Back returns to
@@ -91,6 +113,13 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
     // thread; `openRoute` stays THREADS underneath, so Back from the chat
     // returns to the list.
     var openThreadRoot by remember { mutableStateOf<String?>(null) }
+
+    // A tapped notification: open its chat (or Payments), once.
+    LaunchedEffect(deepLink) {
+        val link = deepLink ?: return@LaunchedEffect
+        if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tab = MainTab.PAYMENTS }
+        onDeepLinkHandled()
+    }
 
     var callPhase by remember { mutableStateOf<CallPhase?>(null) }
     // The full call screen is in front, rather than just the banner (or
@@ -166,6 +195,37 @@ fun MainTabs(engine: Engine, storage: Storage, secretStore: SecretStore, onForgo
         (callPhase as? CallPhase.Active)?.session?.leave()
         callPhase = null
         callScreenShown = false
+    }
+
+    // A running call holds a foreground service, so Android keeps the
+    // process (and its LiveKit room) while Peel is in the background; Leave
+    // in its notification comes back here as a broadcast.
+    val activeCall = (callPhase as? CallPhase.Active)?.session
+    val activeTitle = activeCall?.title
+    val activeChat = activeCall?.chat
+    DisposableEffect(activeCall) {
+        if (activeCall == null) return@DisposableEffect onDispose { }
+        com.sphinx.peel.push.Notifications.cancelIncomingCall(appContext)
+        CallService.start(appContext, activeTitle ?: "Call", activeChat ?: "")
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) { leaveCall() }
+        }
+        ContextCompat.registerReceiver(
+            appContext, receiver, IntentFilter(CallService.ACTION_LEFT), ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose {
+            appContext.unregisterReceiver(receiver)
+            CallService.stop(appContext)
+        }
+    }
+
+    // The microphone is asked for after the call connects; the service's
+    // type needs that permission, so start it again once connected.
+    val activeState = activeCall?.state
+    LaunchedEffect(activeState) {
+        if (activeCall != null && activeState == CallConnectionState.CONNECTED) {
+            CallService.start(appContext, activeTitle ?: "Call", activeChat ?: "")
+        }
     }
 
     // "Forget this account" (or any other path that tears MainTabs down
