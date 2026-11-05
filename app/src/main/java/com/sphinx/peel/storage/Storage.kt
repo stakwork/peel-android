@@ -68,7 +68,19 @@ data class ConversationRow(
     /// still can't distinguish them (no mention tracking to pick a
     /// mentions-only count out of `unread`).
     val muteLevel: Int = 0,
+    /// The newest message as the preview line reads it (`previewType` null
+    /// when there is none): see `ConversationPreview`. Kept apart from
+    /// `lastContent` since it also takes deleted messages and invoices.
+    val previewType: Int? = null,
+    val previewBody: String? = null,
+    val previewDeleted: Boolean = false,
+    val previewFromMe: Boolean? = null,
+    val previewSender: String? = null,
 ) {
+    /// One line for the row, null for a chat with nothing yet.
+    val previewLine: String? get() =
+        com.sphinx.peel.engine.ConversationPreview.line(previewType, previewBody, previewDeleted, previewFromMe, isTribe, previewSender)
+
     /// The alias, or the chat's own key trimmed to 12 characters — same
     /// fallback as `Conversation.name`.
     val name: String get() = alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
@@ -907,8 +919,16 @@ class Storage(context: Context, account: String = "default") {
                         AND (m.type != 29 OR EXISTS (
                             SELECT 1 FROM message t WHERE t.chat = c.pubkey AND t.uuid = m.replyUuid AND t.fromMe = 1
                         ))),
-                COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0)
+                COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0),
+                p.type, p.body, p.deleted, p.fromMe, p.sender
             FROM contact c
+            LEFT JOIN message p ON p.id = (
+                SELECT id FROM message
+                WHERE chat = c.pubkey
+                    AND type IN (0, 2, 5, 6, 32)
+                    AND (deleted = 1 OR type != 0 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                ORDER BY timestamp DESC, id DESC LIMIT 1
+            )
             LEFT JOIN message l ON l.id = (
                 SELECT id FROM message
                 WHERE chat = c.pubkey AND deleted = 0
@@ -933,6 +953,11 @@ class Storage(context: Context, account: String = "default") {
                         lastFromMe = if (cursor.isNull(6)) null else cursor.getInt(6) != 0,
                         unread = cursor.getLong(7),
                         muteLevel = cursor.getInt(8),
+                        previewType = if (cursor.isNull(9)) null else cursor.getInt(9),
+                        previewBody = cursor.getString(10),
+                        previewDeleted = !cursor.isNull(11) && cursor.getInt(11) != 0,
+                        previewFromMe = if (cursor.isNull(12)) null else cursor.getInt(12) != 0,
+                        previewSender = cursor.getString(13),
                     ),
                 )
             }
