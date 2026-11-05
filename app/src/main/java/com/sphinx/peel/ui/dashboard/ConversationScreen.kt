@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Add
@@ -97,6 +98,7 @@ import androidx.compose.ui.window.PopupPositionProvider
 import coil3.compose.AsyncImage
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AttachmentKind
+import com.sphinx.peel.engine.attachmentKind
 import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.declaredAmountMsat
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
@@ -1533,6 +1535,9 @@ private fun NewMessagesDivider() {
 
 private sealed class AttachmentState {
     data object Loading : AttachmentState()
+    /// An image or video not fetched unasked (Auto download media off, or a
+    /// video over the size cap): a tile with a download button instead.
+    data object AwaitsDownload : AttachmentState()
     data class Failed(val message: String) : AttachmentState()
     data class Loaded(val attachment: DownloadedAttachment) : AttachmentState()
 }
@@ -1547,14 +1552,44 @@ private sealed class AttachmentState {
 @Composable
 private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPlayer) {
     var state by remember(row.id, row.uuid) { mutableStateOf<AttachmentState>(AttachmentState.Loading) }
-    LaunchedEffect(row.id, row.uuid) {
+    val scope = rememberCoroutineScope()
+    val declaredKind = remember(row.body) {
+        attachmentKind(com.sphinx.peel.engine.AttachmentFields.decode(row.body)?.mediaType)
+    }
+    val isPicture = declaredKind == AttachmentKind.IMAGE || declaredKind == AttachmentKind.VIDEO
+    val autoDownload = engine.autoDownloadsMedia()
+    // PeelCore's `AppModel.autoDownload`: with the setting off, images and
+    // videos only come from the cache; voice and the rest keep downloading.
+    // Videos and recordings over the cap are held for a tap.
+    LaunchedEffect(row.id, row.uuid, autoDownload) {
+        if (state is AttachmentState.Loaded) return@LaunchedEffect
+        val cachedOnly = !autoDownload && isPicture
+        val capped = declaredKind == AttachmentKind.VIDEO || declaredKind == AttachmentKind.AUDIO
         state = try {
-            AttachmentState.Loaded(engine.downloadAttachment(row))
+            AttachmentState.Loaded(
+                engine.downloadAttachment(row, cachedOnly = cachedOnly, upTo = if (!cachedOnly && capped) Engine.AUTO_DOWNLOAD_LIMIT else null),
+            )
+        } catch (_: com.sphinx.peel.engine.AttachmentNotCached) {
+            AttachmentState.AwaitsDownload
+        } catch (_: com.sphinx.peel.engine.AttachmentHeld) {
+            AttachmentState.AwaitsDownload
         } catch (e: Exception) {
-            AttachmentState.Failed(e.message ?: "Could not load this attachment.")
+            if (cachedOnly) AttachmentState.AwaitsDownload else AttachmentState.Failed(e.message ?: "Could not load this attachment.")
         }
     }
+    val startDownload = {
+        state = AttachmentState.Loading
+        scope.launch {
+            state = try {
+                AttachmentState.Loaded(engine.downloadAttachment(row))
+            } catch (e: Exception) {
+                AttachmentState.Failed(e.message ?: "Could not load this attachment.")
+            }
+        }
+        Unit
+    }
     when (val current = state) {
+        is AttachmentState.AwaitsDownload -> DownloadMediaTile(declaredKind, startDownload)
         is AttachmentState.Loading -> AttachmentPlaceholder {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Theme.colors.secondaryText)
         }
@@ -1564,6 +1599,35 @@ private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPl
             Text(current.message, style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
         }
         is AttachmentState.Loaded -> AttachmentContent(current.attachment, audioPlayer)
+    }
+}
+
+/// The stand-in for an image or video that was not downloaded unasked:
+/// a rounded dark card, a circled download arrow and "Download image" / "Download video".
+@Composable
+private fun DownloadMediaTile(kind: AttachmentKind, onClick: () -> Unit) {
+    val label = when (kind) {
+        AttachmentKind.VIDEO -> "Download video"
+        AttachmentKind.IMAGE -> "Download image"
+        else -> "Download"
+    }
+    Column(
+        Modifier
+            .mediaBubble(4f / 3f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF2A2A2E))
+            .clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.size(48.dp).border(2.dp, Color.White, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.ArrowDownward, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = Color.White)
     }
 }
 

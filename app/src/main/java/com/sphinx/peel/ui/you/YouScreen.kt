@@ -255,23 +255,18 @@ private fun YouMain(
                     onClick = { editingConfirmation = true },
                 )
                 AccountDivider()
-                // TODO(auto-download): Android has no attachment
-                // auto-download yet (iOS: on by default). Enable this row,
-                // and `Setting.AUTO_DOWNLOAD_MEDIA("autoDownloadMedia")`,
-                // once it exists:
-                //
-                // var autoDownload by remember { mutableStateOf(storage.value(Setting.AUTO_DOWNLOAD_MEDIA) != "0") }
-                // Row(
-                //     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
-                //     verticalAlignment = Alignment.CenterVertically,
-                // ) {
-                //     Text("Auto download media", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
-                //     Switch(checked = autoDownload, onCheckedChange = {
-                //         autoDownload = it
-                //         storage.apply(Storage.Commit(settings = mapOf(Setting.AUTO_DOWNLOAD_MEDIA to if (it) "1" else "0")))
-                //     })
-                // }
-                // AccountDivider()
+                var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Auto download media", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Switch(checked = autoDownload, onCheckedChange = {
+                        autoDownload = it
+                        engine.setAutoDownloadsMedia(it)
+                    })
+                }
+                AccountDivider()
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,

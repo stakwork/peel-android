@@ -740,6 +740,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         )
         PreferencesFile.PIN_TIMEOUT_KEY -> PrefSlot(Setting.PIN_TIMEOUT, Setting.PIN_TIMEOUT_UPDATED_AT)
         PreferencesFile.BIOMETRIC_KEY -> PrefSlot(Setting.BIOMETRIC_ENABLED, Setting.BIOMETRIC_ENABLED_UPDATED_AT)
+        PreferencesFile.AUTO_DOWNLOAD_MEDIA_KEY -> PrefSlot(Setting.AUTO_DOWNLOAD_MEDIA, Setting.AUTO_DOWNLOAD_MEDIA_UPDATED_AT)
         else -> PrefSlot(Setting.PAYMENT_CONFIRMATION_MSAT, Setting.PAYMENT_CONFIRMATION_UPDATED_AT)
     }
 
@@ -777,6 +778,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     fun setBiometricEnabled(on: Boolean) {
         if (syncsBiometrics) setPreference(PreferencesMerge.BIOMETRIC, if (on) 1 else 0)
     }
+
+    /// "Auto download media" (PeelCore's `autoDownloadsMedia`): on unless turned off.
+    fun autoDownloadsMedia(): Boolean = storage.value(Setting.AUTO_DOWNLOAD_MEDIA) != "0"
+
+    fun setAutoDownloadsMedia(on: Boolean) = setPreference(PreferencesMerge.AUTO_DOWNLOAD_MEDIA, if (on) 1 else 0)
 
     /// Writes a choice made here: dated strictly after what it replaces, synced right away.
     private fun setPreference(spec: PreferencesMerge.Spec, value: Long) {
@@ -888,7 +894,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// OS-managed under storage pressure, and every file here is always
     /// re-derivable from the server plus its key, so that's an accepted
     /// gap, not a silent one).
-    suspend fun downloadAttachment(row: MessageRow): DownloadedAttachment {
+    ///
+    /// `cachedOnly` never touches the network: a file not already cached
+    /// throws `AttachmentNotCached` (Auto download media off). `upTo`
+    /// holds a larger download back with `AttachmentHeld` (PeelCore's
+    /// `autoDownloadLimit` for videos and recordings); a tap on the
+    /// held tile downloads it with neither.
+    suspend fun downloadAttachment(row: MessageRow, cachedOnly: Boolean = false, upTo: Int? = null): DownloadedAttachment {
         val fields = AttachmentFields.decode(row.body) ?: throw IllegalStateException("Not an attachment.")
         val mediaToken = fields.mediaToken ?: throw IllegalStateException("This attachment has nowhere to come from yet.")
         val token = MediaToken.parse(mediaToken)?.takeIf { MediaToken.isSafeMuid(it.muid) }
@@ -910,9 +922,14 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), fileName, plain.size)
         }
 
+        if (cachedOnly) throw AttachmentNotCached()
         val memes = MemesServer(MEMES_HOST)
-        val limit = ATTACHMENT_LIMIT + 128 // Encryption adds a header, padding and a MAC.
-        val (sealed, fileName) = withMemes(memes) { auth -> memes.download(mediaToken, auth, limit) }
+        val limit = (upTo ?: ATTACHMENT_LIMIT) + 128 // Encryption adds a header, padding and a MAC.
+        val (sealed, fileName) = try {
+            withMemes(memes) { auth -> memes.download(mediaToken, auth, limit) }
+        } catch (e: MemesServer.TooLargeException) {
+            if (upTo != null) throw AttachmentHeld() else throw e
+        }
         val plain = MediaCrypto.decrypt(sealed, key)
         cacheFile.writeBytes(plain)
         if (fileName != null) nameFile.writeText(fileName)
@@ -1807,6 +1824,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         /// The largest attachment this device downloads — PeelCore's
         /// own `attachmentLimit`.
         private const val ATTACHMENT_LIMIT = 100_000_000
+
+        /// The largest video or recording downloaded unasked — PeelCore's
+        /// `Engine.autoDownloadLimit`; bigger ones wait for a tap.
+        const val AUTO_DOWNLOAD_LIMIT = 25_000_000
 
         /// The official apps always send a tribe message with at least
         /// this many msat (3 sats), whatever the tribe's own price —
