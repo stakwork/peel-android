@@ -113,6 +113,7 @@ import com.sphinx.peel.ui.payments.RequestMessage
 import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
@@ -1224,6 +1225,7 @@ private fun MessageRowView(
     // the same way; `SimpleDateFormat("HH:mm", ...)` ignored it outright.
     val timeContext = androidx.compose.ui.platform.LocalContext.current
     val time = row.timestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
+    val sendNow by rememberSendClock(row)
     var menuOpen by remember { mutableStateOf(false) }
     val clipboardContext = androidx.compose.ui.platform.LocalContext.current
 
@@ -1301,11 +1303,13 @@ private fun MessageRowView(
                 com.sphinx.peel.ui.components.MessageText(
                     content,
                     myAliases = mentionAliases,
-                    modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
+                    modifier = Modifier.alpha(if (SendRetry.isSending(row, sendNow)) 0.6f else 1f),
                 )
             }
-            if (row.status == "FAILED") {
-                Text("Not delivered", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
+            // Failed, or pending past the 30 s confirmation timeout and
+            // unable to have paid: Retry and Discard (`SendRetry`).
+            if (row.fromMe && !row.deleted && (row.status == "FAILED" || SendRetry.isRetryable(row, sendNow))) {
+                UndeliveredLine(row, engine, sendNow)
             }
             if (boosts != null && boosts.count > 0) {
                 Spacer(Modifier.height(2.dp))

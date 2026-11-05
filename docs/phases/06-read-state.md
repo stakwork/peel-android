@@ -14,19 +14,8 @@ marking it as new messages arrive while it's still open.
 
 **Open:**
 
-- No UI to mute a chat at all — `chatState.muteLevel` is read (another
-  device's mute is respected: its badge stops showing) but nothing here
-  can set one. No "mentions only": this port has no mention tracking, so
-  a chat muted that way reads identically to fully muted (both just hide
-  the count) — PeelCore's own three-tier `MuteLevel` is a two-tier
-  approximation here.
-- No "mark unread", no swipe actions, no per-row menu at all — PeelCore's
-  `ChatLink`'s swipe-to-read/mute and context menu are both out; marking
-  read only ever happens by opening a chat.
-- `markRead` only ever moves a marker *forward* to "everything in this
-  chat" — there's no equivalent of PeelCore's `markUnread` (moving it
-  back to just before some message, to make a chat show unread again on
-  purpose).
+- ~~No UI to mute; no mentions-only; no mark unread; no swipe/menu~~ —
+  done in [phase 19](19-chat-actions-send-retry.md).
 - Unread counting is coarser than PeelCore's own `countsAsUnreadSQL`:
   every non-`fromMe`, non-boost message past the marker counts, full
   stop — no filtering for control messages, no-words rows, or
