@@ -4,6 +4,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.sphinx.peel.engine.ConnectionState
+import com.sphinx.peel.storage.Storage
 import org.json.JSONObject
 
 /// FCM entry point. `onNewToken` re-registers the token with the server
@@ -28,7 +30,7 @@ class PeelMessagingService : FirebaseMessagingService() {
         val app = applicationContext
         val engine = PushRegistrar.activeEngine()
         val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-        val plan = PushPlan.decide(engineOpen = engine != null, connected = engine?.isOnline == true, foreground = foreground)
+        val plan = PushPlan.decide(engineOpen = engine != null, connected = engine?.let { it.isOnline || it.connectionState.value == ConnectionState.Connecting } == true, foreground = foreground)
         if (plan.reconnect) engine?.resume()
         if (!plan.postResolved) return
         val data = message.data
@@ -41,6 +43,9 @@ class PeelMessagingService : FirebaseMessagingService() {
         } else {
             content
         }
+        // A muted chat (any mute level, as `MessageNotifier`) stays quiet.
+        val chat = shown.route?.chat
+        if (chat != null && runCatching { Storage(app).muteLevel(chat) }.getOrDefault(0) != 0) return
         Notifications.showPush(app, shown)
     }
 

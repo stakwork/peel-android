@@ -494,6 +494,7 @@ private fun YouMain(
                         withContext(Dispatchers.Default) {
                             storage.deleteAccount()
                             com.sphinx.peel.push.PushNameStore.forContext(appContext).clear()
+                            com.sphinx.peel.push.PushRegistrar.accountForgotten(appContext)
                             secretStore.deleteMnemonic()
                         }
                         onForgotten()

@@ -27,6 +27,11 @@ object PushKeyStore {
     fun loadOrCreate(context: Context): String =
         existing(context) ?: generate().also { prefs(context).edit().putString(KEY, it).apply() }
 
+    /// Account forgotten: the next account gets a fresh key.
+    fun clear(context: Context) {
+        prefs(context).edit().remove(KEY).apply()
+    }
+
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 }

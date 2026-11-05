@@ -113,6 +113,11 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage, deepLink: DeepLi
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
 
+    // The engine keeps running behind the lock, so its connection watcher,
+    // push registration and notifications do too (one composition spot, so
+    // Home <-> Relock does not restart them).
+    val kept = (screen as? Screen.Home)?.engine ?: (screen as? Screen.Relock)?.engine
+    if (kept != null) KeepConnected(kept, storage)
     when (val current = screen) {
         Screen.Onboarding -> OnboardingScreen(secretStore, storage) { engine ->
             screen = if (engine.restoreProgress.value.restoring) Screen.Restoring(engine) else Screen.Home(engine)
@@ -121,7 +126,6 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage, deepLink: DeepLi
         is Screen.Relock -> LockScreen(secretStore, storage, existing = current.engine) { engine -> screen = Screen.Home(engine) }
         is Screen.Restoring -> RestoringAccountScreen(current.engine) { screen = Screen.Home(current.engine) }
         is Screen.Home -> {
-            KeepConnected(current.engine, storage)
             RelockWhenIdle(current.engine) { screen = Screen.Relock(current.engine) }
             BiometricHousekeeping(current.engine, secretStore)
             StadeumHousekeeping(current.engine)

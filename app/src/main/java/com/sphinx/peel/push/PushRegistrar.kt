@@ -65,6 +65,13 @@ object PushRegistrar {
         registered = null
     }
 
+    /// "Forget this account": the push key goes too (a push for the old
+    /// account then cannot be named); the token stays, it is the install's.
+    fun accountForgotten(context: Context) {
+        PushKeyStore.clear(context)
+        registered = null
+    }
+
     /// FirebaseMessagingService.onNewToken, and the launch-time fetch.
     fun onNewToken(context: Context, token: String) {
         val app = context.applicationContext

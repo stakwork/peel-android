@@ -16,9 +16,8 @@ and release share one Firebase app.
   app's: would overwrite its token on the same account) and not `com.sphinx.peel`
   (the `applicationId`, equal to the iOS bundle id). FCM has no sandbox, so the
   environment is always `production`.
-- **Registration flag `PUSH_REGISTER_WITH_HUB`.** Off for release builds. On only
-  with `-Ppeel.push.registerWithHub=true`, or for a debug build (no `release`
-  task requested) when `app/google-services.json` exists. `-Ppeel.push.registerWithHub=false`
+- **Registration flag `PUSH_REGISTER_WITH_HUB`.** Off for the release build type. On only
+  with `-Ppeel.push.registerWithHub=true`, or for the debug build type when `app/google-services.json` exists. `-Ppeel.push.registerWithHub=false`
   also forces it off.
 - **Data-only pushes.** The server (`fcmMode=data`) sends no `notification` block,
   only data: `child` (hex of 36 bytes: 12 nonce + 8 index + 16 tag, sealed with
@@ -96,3 +95,16 @@ pushes fall back to the generic line until that is confirmed on a device.
 - Tests: pure JVM/Robolectric in `app/src/test/.../push/` (key validation,
   `encryptedChild`, name directory, `resolve`, app id, `PushPlan`, sealed store).
   The service, `PushNameSync` and Keystore use are only exercised on a device.
+
+### 2026-11-05 review fixes
+- `PUSH_REGISTER_WITH_HUB` is now set per build type (debug: json present;
+  release: false), not from the requested task names (`build`/`assemble` used to
+  count as debug). `-P` still overrides.
+- `KeepConnected` (watcher, push registrar, notifier) now also runs while the app
+  is relocked (the engine lives on behind the lock), at one composition spot so
+  Home <-> Relock does not restart it.
+- "Forget this account" also drops the push key (`PushRegistrar.accountForgotten`).
+- A push for a muted chat posts nothing; a push no longer starts a second
+  connect while one is running.
+- Open: tribe child indexes (core `listContacts` has persons only), mention-only
+  mute levels, mute check needs the (PIN-less) chatState table.
