@@ -66,10 +66,40 @@ object PushRegistrar {
     }
 
     /// "Forget this account": the push key goes too (a push for the old
-    /// account then cannot be named); the token stays, it is the install's.
+    /// account then cannot be named), and so does the token: the stored copy
+    /// is removed (even without Firebase) and `FirebaseMessaging.deleteToken()`
+    /// is asked for (best-effort, async, never throws or blocks), so FCM
+    /// reports the old token invalid and the mixer drops it on its next push.
+    ///
+    /// Not a server-side unregister: the mixer's PUSH_TOKEN handler has a
+    /// DELETE action, but the current sphinx-rs bindings can't reach it
+    /// (`setPushTokenForApp` sends action=None, i.e. SET). A sphinx-rs release
+    /// with an action/delete parameter would let us call it before the wipe.
+    ///
+    /// Only for forgetting: [accountClosed] (lock) keeps the token, it is the
+    /// install's and the account comes back.
     fun accountForgotten(context: Context) {
-        PushKeyStore.clear(context)
+        val app = context.applicationContext
+        PushKeyStore.clear(app)
         registered = null
+        forgetToken(
+            available = available(app),
+            removeStored = { app.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().remove(TOKEN).apply() },
+            deleteToken = {
+                FirebaseMessaging.getInstance().deleteToken().addOnCompleteListener { t ->
+                    if (!t.isSuccessful) Log.d(TAG, "FCM token not deleted: ${t.exception?.javaClass?.simpleName}")
+                }
+            },
+        )
+    }
+
+    /// The pure part of [accountForgotten]. The stored token is always
+    /// removed; `deleteToken` runs only when push is available, and a
+    /// failure of either is logged (never the token) and swallowed.
+    internal fun forgetToken(available: Boolean, removeStored: () -> Unit, deleteToken: () -> Unit) {
+        runCatching(removeStored).onFailure { Log.d(TAG, "stored push token not removed: ${it.javaClass.simpleName}") }
+        if (!available) return
+        runCatching(deleteToken).onFailure { Log.d(TAG, "FCM token not deleted: ${it.javaClass.simpleName}") }
     }
 
     /// FirebaseMessagingService.onNewToken, and the launch-time fetch.

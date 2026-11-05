@@ -5,6 +5,12 @@
 **Built; compiled and unit-tested** (`testDebugUnitTest` 204 tests, `assembleDebug`
 and `lintDebug` pass). Not yet run against a real FCM push or the hub.
 
+**Forget account (2026-11-05):** `PushRegistrar.accountForgotten` also removes the stored
+FCM token and calls `FirebaseMessaging.deleteToken()` (best-effort, async), so the mixer
+drops the old token on its next push. A mixer-side unregister is not possible yet: the
+mixer's PUSH_TOKEN `DELETE` action isn't reachable, `setPushTokenForApp` sends action=None
+(SET); needs a sphinx-rs binding. Lock (`accountClosed`) keeps the token.
+
 **Setup:** put the Firebase project's `google-services.json` in `app/`
 (git-ignored; without it the plugin is not applied and push is inert). Debug
 and release share one Firebase app.
