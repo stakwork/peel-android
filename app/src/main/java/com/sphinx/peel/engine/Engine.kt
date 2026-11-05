@@ -41,6 +41,7 @@ import uniffi.sphinxrs.fetchFirstMsgsPerKey as coreFetchFirstMsgsPerKey
 import uniffi.sphinxrs.fetchMsgsBatch as coreFetchMsgsBatch
 import uniffi.sphinxrs.getMsgsCounts as coreGetMsgsCounts
 import uniffi.sphinxrs.getMutes as coreGetMutes
+import uniffi.sphinxrs.mute as coreMute
 import uniffi.sphinxrs.getReads as coreGetReads
 import uniffi.sphinxrs.getTags as coreGetTags
 import uniffi.sphinxrs.getTribeManagementTopic as coreGetTribeManagementTopic
@@ -452,9 +453,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             val answered = runCatching { JSONArray(result.tags) }.getOrNull()
             if (answered != null) {
                 for (i in 0 until answered.length()) {
-                    answered.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotEmpty() }?.let { ownStatusHeard.add(it) }
+                    val named = answered.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotEmpty() } ?: continue
+                    ownStatusHeard.add(named)
+                    // Any status: a send the server names reached it.
+                    resendGate?.name(named)
                 }
             }
+            resendAnswers++
         }
         storeMoney(result, rows)
         // Read markers and mutes, same "whatever `RunReturn` carries it"
@@ -464,8 +469,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // all (`startListening` reads whatever a `RunReturn` carries,
         // generically), so `fetchReadsAndMutes` triggers that itself once
         // its own `askAndAwait` returns, rather than from here.
-        parseIndexMap(result.lastRead)?.let { storage.applyServerReads(it) }
-        parseIndexMap(result.muteLevels)?.let { levels -> storage.applyServerMutes(levels.mapValues { it.value.toInt() }) }
+        parseIndexMap(result.lastRead)?.let { reads ->
+            storage.applyServerReads(reads, except = synchronized(readsSentSinceGetReads) { readsSentSinceGetReads.toSet() })
+        }
+        parseIndexMap(result.muteLevels)?.let { levels ->
+            storage.applyServerMutes(
+                levels.mapValues { it.value.toInt() },
+                except = synchronized(mutesSetSinceGetMutes) { mutesSetSinceGetMutes.toSet() },
+            )
+        }
     }
 
     /// `{"<chat>": <index>}`, as both `getReads`'s and `getMutes`' answers
@@ -505,7 +517,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `DELIVERED` from the mixer's own word on its `tag` if that arrives
     /// first (`storeMessages`'s `sentStatus` handling) — whichever comes.
     /// A send whose echo never arrives and whose tag the mixer never
-    /// mentions again stays `PENDING` forever: no retry, no timeout.
+    /// mentions again stays `PENDING`, but after 30 s the row offers Retry
+    /// and Discard ([SendRetry], [resendMessage]) and a reconnect may send
+    /// it again by itself ([resendRecent]).
     /// This account's [SphinxProof] (iOS `Engine.sphinxProof`), signed [now] by
     /// its account key (child 0) with the core's `signed_timestamp`. Signed
     /// half a minute back: Hive refuses a token from its future and takes one
@@ -1130,8 +1144,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
     /// Marks a chat read up to its newest stored message, here and on the
     /// server so the account's other devices agree — PeelCore's
-    /// `markRead`, trimmed to its one case this port needs (no
-    /// `markUnread`, no new-contact clearing). Offline, the marker is kept
+    /// `markRead`, trimmed (no new-contact clearing; see [markUnread]). Offline, the marker is kept
     /// as pending (`Storage.setRead`) rather than lost, and
     /// `fetchReadsAndMutes`'s `publishPendingReads` sends it once a
     /// connection answers `getReads`.
@@ -1141,6 +1154,131 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (!storage.setRead(chat, index, pending = !connected)) return
         if (connected) {
             run { time, stateBytes -> coreMarkRead(seed, time, stateBytes, chat, index.toULong()) }
+        }
+    }
+
+    /// Marks a chat unread: its marker goes just below its newest message
+    /// from someone else, so that one counts, as the official apps' "Mark as
+    /// Unread" does — PeelCore's `markUnread` (without its "from this
+    /// message" variant: no message menu entry for it here). The server
+    /// takes the lower marker as it is. Offline, the marker is kept as
+    /// pending like `markRead`'s. Returns whether a marker moved.
+    suspend fun markUnread(chat: String): Boolean {
+        // The server keeps markers only for core contacts (tribes included).
+        check(state["c/$chat"] != null) { "That is not a chat the server keeps a marker for." }
+        val index = storage.newestIncomingIndex(chat)?.takeIf { it > 0 }
+            ?: throw IllegalStateException("There is no message to mark unread.")
+        val connected = transport != null
+        if (!storage.setRead(chat, index - 1, pending = !connected, allowBack = true)) return false
+        if (connected) {
+            run { time, stateBytes -> coreMarkRead(seed, time, stateBytes, chat, (index - 1).toULong()) }
+            synchronized(readsSentSinceGetReads) { readsSentSinceGetReads += chat }
+        }
+        return true
+    }
+
+    /// Sets how loud a chat may be. The level lives on the server, which uses
+    /// it for push notifications (the tribes server marks "mentions only"),
+    /// so this needs a connection — PeelCore's `setMute`: sent first, stored
+    /// only once the core took it, never a local-only mute the server does
+    /// not know about.
+    suspend fun setMute(chat: String, level: MuteLevel) {
+        check(transport != null) { "Not connected." }
+        run { time, stateBytes -> coreMute(seed, time, stateBytes, chat, level.raw.toUByte()) }
+        synchronized(mutesSetSinceGetMutes) { mutesSetSinceGetMutes += chat }
+        storage.setMute(chat, level.raw)
+    }
+
+    /// Chats whose read marker / mute level this device set since `getReads`
+    /// / `getMutes` was last asked: an answer may predate the change, so it
+    /// is not applied to them (PeelCore's `readsSentSinceGetReads`/`mutesSetSinceGetMutes`).
+    private val readsSentSinceGetReads = mutableSetOf<String>()
+    private val mutesSetSinceGetMutes = mutableSetOf<String>()
+
+    // Resending an undelivered message of ours: see [resendMessage].
+    /// Row ids being sent again right now: a second Retry (or a reconnect's
+    /// own resend) for the same row while one runs is refused, not queued.
+    private val resending: MutableSet<Long> = java.util.Collections.synchronizedSet(mutableSetOf())
+
+    /// What a reconnect's resend of recent messages knows about the server's
+    /// records (`checkPendingSends`), and how many `getTags` answers came.
+    @Volatile private var resendGate: SendRetry.Gate? = null
+    @Volatile private var resendAnswers = 0
+
+    /// Sends an undelivered message of ours again, on the same row: PeelCore's
+    /// `resend`. Safe to call twice, or from Retry and a reconnect at once:
+    ///  * one run per row at a time ([resending]);
+    ///  * the row must be retryable *as stored now* ([SendRetry.isRetryable]:
+    ///    failed, or pending past 30 s and unable to have paid) — a delivered
+    ///    one, or one a status/echo settled meanwhile, is refused;
+    ///  * the new uuid/tag/time go onto the *same* row in one conditional
+    ///    UPDATE (`Storage.commitResend`) run after the core made the message
+    ///    and before it is published (`beforePublish`): if the row stopped
+    ///    being eligible the throw abandons the publish, so nothing goes out
+    ///    that the row does not record. The row is `PENDING` again, and the
+    ///    same rule keeps it so for another 30 s;
+    ///  * a tribe message pays the tribe's price again: refused if it rose
+    ///    over what was paid (`Failure.tribePriceRose`).
+    /// [auto] marks a reconnect's own send (`autoResentAt`), shown nowhere.
+    suspend fun resendMessage(id: Long, auto: Boolean = false): MessageRow {
+        check(transport != null) { "Not connected." }
+        if (!resending.add(id)) throw IllegalStateException("That message is already being sent.")
+        try {
+            val message = storage.message(id)
+            if (message == null || !SendRetry.isRetryable(message, System.currentTimeMillis())) {
+                throw IllegalStateException("That message is no longer waiting to be sent.")
+            }
+            val body = message.body ?: throw IllegalStateException("That message has nothing to send.")
+            val chat = message.chat
+            val isTribe = storage.contact(chat)?.isTribe == true
+            val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
+            if (isTribe && amountMsat > (message.msat ?: 0L)) {
+                throw IllegalStateException("The tribe's price rose since this was written. Send it again as a new message.")
+            }
+            val myAlias = storage.value(Setting.ALIAS) ?: ""
+            val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+            val now = System.currentTimeMillis()
+            var sent: uniffi.sphinxrs.Msg? = null
+            run(beforePublish = { result ->
+                sent = result.msgs.firstOrNull()
+                val moved = storage.commitResend(
+                    id, chat, sent?.uuid, sent?.tag, sent?.paymentHash, amountMsat.takeIf { it > 0 }, now, auto,
+                )
+                if (!moved) throw IllegalStateException("That message is no longer waiting to be sent.")
+            }) { time, stateBytes ->
+                coreSend(seed, time, chat, message.type.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
+            }
+            return storage.message(id) ?: message
+        } finally {
+            resending.remove(id)
+        }
+    }
+
+    /// Drops an undelivered message of ours from this device
+    /// (`Storage.discardUndelivered`); nothing was delivered, so nothing is
+    /// deleted anywhere else. False if it is not discardable (any more).
+    fun discardMessage(id: Long): Boolean {
+        if (id in resending) return false
+        return storage.discardUndelivered(id)
+    }
+
+    /// After a connection comes back, on that connection (PeelCore's
+    /// `resendRecent`): sends each recent undelivered message of ours again
+    /// by itself, once and oldest first, through [resendMessage]'s checks
+    /// ([SendRetry.autoResends]): one that reached the server however this
+    /// device marked it is never sent twice; a failure leaves the row failed,
+    /// for Retry (`autoResentAt` is stored, so a relaunch does not try again).
+    private suspend fun resendRecent(connection: Transport) {
+        val gate = resendGate
+        val now = System.currentTimeMillis()
+        val candidates = runCatching { storage.undeliveredSends(now - SendRetry.AUTO_RESEND_WINDOW_MS) }.getOrNull() ?: return
+        for (candidate in candidates) {
+            if (transport !== connection) return
+            // As stored now: a record or an echo may have landed since.
+            val message = storage.message(candidate.id) ?: continue
+            if (!SendRetry.autoResends(message, gate, System.currentTimeMillis())) continue
+            runCatching { resendMessage(message.id, auto = true) }
+                .onFailure { if (it is CancellationException) throw it else Log.w("PeelEngine", "automatic resend failed", it) }
         }
     }
 
@@ -1189,14 +1327,30 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// Asks the server what became of sends still pending here, on every
     /// connect and after a restore — PeelCore's `checkPendingSends`: a
     /// status published while this device was offline is not missed, and a
-    /// restored send (no status at all) learns how it went. Not ported: the
-    /// 30-minute "never recorded" failing of payments and the reconnect's
-    /// automatic resend gate (no resend machinery here yet).
+    /// restored send (no status at all) learns how it went. Also asks about
+    /// the tags of the messages [resendRecent] may send again, and keeps what
+    /// the server's records name (`resendGate`): the reconnect's automatic
+    /// resend only sends what the server has no record of. Not ported: the
+    /// 30-minute "never recorded" failing of payments.
     private suspend fun checkPendingSends() {
-        val tags = storage.pendingSendTags(System.currentTimeMillis() - CONFIRMATION_TIMEOUT_MS)
-        for (chunk in tags.chunked(OWN_STATUS_CHUNK)) {
+        val now = System.currentTimeMillis()
+        val candidates = runCatching { storage.undeliveredSends(now - SendRetry.AUTO_RESEND_WINDOW_MS) }.getOrDefault(emptyList())
+            .filter { SendRetry.isAutoResendable(it, now) }.mapNotNull { it.tag }
+        val tags = (storage.pendingSendTags(now - SendRetry.CONFIRMATION_TIMEOUT_MS) + candidates).distinct()
+        val gate = SendRetry.Gate(asked = candidates.toSet())
+        resendAnswers = 0
+        resendGate = gate
+        val chunks = tags.chunked(OWN_STATUS_CHUNK)
+        for (chunk in chunks) {
             run { time, stateBytes -> coreGetTags(seed, time, stateBytes, chunk, null) }
         }
+        // Nothing to ask: nothing is recorded. Otherwise wait (bounded) for
+        // every answer, which lands in `storeMessages`; without them a
+        // candidate with a tag is simply not sent (`SendRetry.autoResends`).
+        if (chunks.isEmpty()) return gate.settle()
+        val deadline = SystemClock.elapsedRealtime() + RECORDS_WAIT_MS
+        while (resendAnswers < chunks.size && SystemClock.elapsedRealtime() < deadline) delay(100)
+        if (resendAnswers >= chunks.size) gate.settle()
     }
 
     /// Read markers and mutes live on the server, shared by every device
@@ -1222,6 +1376,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     }
 
     private suspend fun fetchReadsAndMutesAwaiting() {
+        // The answers to what is asked now postdate every change made so far.
+        synchronized(readsSentSinceGetReads) { readsSentSinceGetReads.clear() }
+        synchronized(mutesSetSinceGetMutes) { mutesSetSinceGetMutes.clear() }
         askAndAwait(historyWaitMs, expect = { it.lastRead != null }) {
             run { time, stateBytes -> coreGetReads(seed, time, stateBytes) }
         }
@@ -1414,6 +1571,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // Best effort, before history (PeelCore's `cameOnline`): catching up
             // must not wait on it.
             runCatching { checkPendingSends() }.onFailure { Log.w("PeelEngine", "checking pending sends failed", it) }
+            // What the server has no record of goes again by itself, on this
+            // connection only; History does not wait on it.
+            transport?.let { connection -> scope.launch { runCatching { resendRecent(connection) } } }
             // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
         }.onFailure { Log.w("PeelEngine", "catch-up after connect failed", it) }
@@ -1882,7 +2042,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
         /// How long a pending text may wait before `checkPendingSends` asks
         /// about it (PeelCore's `Message.confirmationTimeout`).
-        private const val CONFIRMATION_TIMEOUT_MS = 30_000L
+        private const val RECORDS_WAIT_MS = 10_000L
 
         /// The official apps' own call server, same host as the main API —
         /// PeelCore's own `Engine.defaultCallServer`.

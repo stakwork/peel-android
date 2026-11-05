@@ -45,6 +45,10 @@ sections for code that isn't written yet.
     ZXing) and the in-chat payment and request rows.
   - `engine/MessageMarkup.kt`, `Mentions.kt` — message markdown parser (pure, JVM-tested) and
     mention helpers; `ui/components/MessageText.kt` draws it (`docs/phases/18-markdown.md`).
+  - `engine/ChatActions.kt` (`MuteLevel`, `ReadToggle`) and `engine/SendRetry.kt` (pure
+    retry/auto-resend rules; JVM-tested) back the chat-list actions and failed-send
+    Retry/Discard (`docs/phases/19-chat-actions-send-retry.md`); UI in
+    `ui/dashboard/ChatRowActions.kt` and `UndeliveredLine.kt`.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
@@ -59,7 +63,7 @@ sections for code that isn't written yet.
     (iOS-style chat naming of data-only pushes). Firebase `google-services.json`
     goes in `app/` (git-ignored).
     `call/CallService` is the call foreground service; `engine/ConnectionWatcher`
-    reconnects on network change/app start. `docs/phases/19-push-and-reliability.md`.
+    reconnects on network change/app start. `docs/phases/20-push-and-reliability.md`.
   - `MainActivity.kt` — routes between those three screens.
 - `sphinxrs/` — generated UniFFI Kotlin bindings to the Rust core
   (`uniffi.sphinxrs`) plus the native `libsphinxrs.so`. Do not hand-edit;

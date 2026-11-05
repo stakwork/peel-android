@@ -278,3 +278,15 @@ Kotlin code can't also be in the oracle it's checked against.
   whose expected values come from a *third*, independent implementation,
   not just "it's deterministic" — deterministic and correct are different
   claims.
+
+### Last-message preview on rows (port of peel #513)
+
+Tribe and Contact rows show the last message on one line under the name
+(12sp, muted; primary, semibold and an accent dot when unread; not on the
+agent row). `engine/ConversationPreview.kt` is the pure formatter (tested in
+`ConversationPreviewTest`): "You: " for your own, the sender's nickname in a
+tribe, labels for Photo/Video/Voice message/File/GIF/Payment/Payment request/
+Call/Message deleted. `Storage.conversations()` joins a separate newest-message
+row for it (it also takes deleted messages and invoices, which the `lastContent`
+row skips). Android has no `tertiaryText` colour, so the read colour is
+`secondaryText` at 80% alpha. Not ported: Giphy's host allowlist.

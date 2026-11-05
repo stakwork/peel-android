@@ -1,4 +1,4 @@
-# Phase 19 — Push notifications and connection reliability
+# Phase 20 — Push notifications and connection reliability
 
 ## Status (2026-11-04)
 

@@ -113,6 +113,7 @@ import com.sphinx.peel.ui.payments.RequestMessage
 import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.Avatar
@@ -538,7 +539,7 @@ fun ConversationScreen(
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(vertical = 8.dp),
         ) {
             itemsIndexed(displayedMessages, key = { _, row -> row.id.takeIf { it != 0L } ?: (row.uuid ?: row.hashCode()) }) { index, row ->
                 val previous = displayedMessages.getOrNull(index - 1)
@@ -863,7 +864,7 @@ private fun ThreadScreen(
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).alpha(if (positioned) 1f else 0f),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(vertical = 8.dp),
         ) {
             if (root != null) {
                 item(key = "root") {
@@ -883,7 +884,7 @@ private fun ThreadScreen(
                         onDelete = { deleteMessage(root) },
                         highlight = highlight.alphaFor(root.uuid),
                     )
-                    HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp))
+                    HorizontalDivider(color = Theme.colors.divider, modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp))
                 }
             } else {
                 item(key = "root-missing") {
@@ -891,7 +892,7 @@ private fun ThreadScreen(
                         "Original message not available",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Theme.colors.secondaryText,
-                        modifier = Modifier.padding(vertical = 8.dp),
+                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp),
                     )
                 }
             }
@@ -1224,6 +1225,7 @@ private fun MessageRowView(
     // the same way; `SimpleDateFormat("HH:mm", ...)` ignored it outright.
     val timeContext = androidx.compose.ui.platform.LocalContext.current
     val time = row.timestamp?.let { android.text.format.DateFormat.getTimeFormat(timeContext).format(it) }
+    val sendNow by rememberSendClock(row)
     var menuOpen by remember { mutableStateOf(false) }
     val clipboardContext = androidx.compose.ui.platform.LocalContext.current
 
@@ -1234,6 +1236,7 @@ private fun MessageRowView(
                 .then(if (highlight > 0f) Modifier.background(Theme.colors.accent.copy(alpha = highlight)) else Modifier)
                 .background(if (row.fromMe) Theme.colors.accent.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
                 .combinedClickable(onClick = {}, onLongClick = { if (row.uuid != null && !row.deleted) menuOpen = true })
+                .padding(horizontal = 16.dp)
                 .padding(top = if (startsRun) 8.dp else 1.dp, bottom = if (endsRun) 2.dp else 7.dp),
         ) {
         Box(Modifier.width(32.dp)) {
@@ -1301,11 +1304,13 @@ private fun MessageRowView(
                 com.sphinx.peel.ui.components.MessageText(
                     content,
                     myAliases = mentionAliases,
-                    modifier = Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f),
+                    modifier = Modifier.alpha(if (SendRetry.isSending(row, sendNow)) 0.6f else 1f),
                 )
             }
-            if (row.status == "FAILED") {
-                Text("Not delivered", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
+            // Failed, or pending past the 30 s confirmation timeout and
+            // unable to have paid: Retry and Discard (`SendRetry`).
+            if (row.fromMe && !row.deleted && (row.status == "FAILED" || SendRetry.isRetryable(row, sendNow))) {
+                UndeliveredLine(row, engine, sendNow)
             }
             if (boosts != null && boosts.count > 0) {
                 Spacer(Modifier.height(2.dp))
@@ -1497,8 +1502,7 @@ private fun DayDivider(timestamp: Long) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Theme.colors.divider.copy(alpha = 0.25f))
-            .padding(vertical = 8.dp, horizontal = 12.dp),
+            .padding(vertical = 8.dp, horizontal = 28.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
@@ -1521,7 +1525,7 @@ private fun DayDivider(timestamp: Long) {
 /// moment this screen opened — PeelCore's own `NewMessagesLine`.
 @Composable
 private fun NewMessagesDivider() {
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         HorizontalDivider(modifier = Modifier.weight(1f), color = Theme.colors.accent)
         Text(
             stringResource(R.string.new_messages),
