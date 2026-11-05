@@ -870,9 +870,13 @@ class Storage(context: Context, account: String = "default") {
     }
 
     /// The dashboard's rows: every ready contact or tribe, with its newest
-    /// message if it has one, newest chat first. A chat with no message
-    /// yet (just key-exchanged, say) sorts last — SQLite treats `NULL` as
-    /// lowest, which is what a `DESC` newest-first order wants here.
+    /// "last message" if it has one, newest chat first — PeelCore's
+    /// `conversationsSQL`. Only text/attachment (0, 6) and undeleted
+    /// payment/call (5, 32) messages with visible words count (noWords is
+    /// approximated by a non-blank body), newest `timestamp DESC, id DESC`;
+    /// joins, boosts and control messages never move a chat. Order is
+    /// `lastTimestamp IS NULL, lastTimestamp DESC, alias`: chats without
+    /// such a message last, ties broken by plain alias ascending.
     ///
     /// A boost only counts toward unread if it targets one of *this
     /// account's own* messages (someone boosting a third party's message
@@ -885,9 +889,9 @@ class Storage(context: Context, account: String = "default") {
             """
             SELECT
                 c.pubkey, c.alias, c.photoUrl, c.isTribe,
-                (SELECT body FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
-                (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
-                (SELECT fromMe FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1),
+                l.body,
+                l.timestamp,
+                l.fromMe,
                 (SELECT COUNT(*) FROM message m
                     WHERE m.chat = c.pubkey AND m.fromMe = 0
                         AND m.type IN (0, 5, 6, 2, 32, 29)
@@ -897,8 +901,15 @@ class Storage(context: Context, account: String = "default") {
                         ))),
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0)
             FROM contact c
+            LEFT JOIN message l ON l.id = (
+                SELECT id FROM message
+                WHERE chat = c.pubkey AND deleted = 0
+                    AND type IN (0, 5, 6, 32)
+                    AND (type = 6 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                ORDER BY timestamp DESC, id DESC LIMIT 1
+            )
             WHERE c.ready = 1
-            ORDER BY (SELECT timestamp FROM message WHERE chat = c.pubkey ORDER BY timestamp DESC LIMIT 1) DESC
+            ORDER BY l.timestamp IS NULL, l.timestamp DESC, c.alias
             """.trimIndent(),
             null,
         ).use { cursor ->
