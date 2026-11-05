@@ -4,11 +4,13 @@ import android.os.SystemClock
 import android.util.Log
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.PinTimeout
+import com.sphinx.peel.storage.CONTACT_KEY_MESSAGE_TYPE
 import com.sphinx.peel.storage.ContactRow
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -90,6 +92,37 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     @Volatile private var state: Map<String, ByteArray> = storage.loadCoreState()
     private var transport: Transport? = null
     private var listenerStarted = false
+
+    /// The invite a new account signed up with, waiting to be registered with
+    /// and then used to add its inviter (`Setting.INVITE`).
+    internal val pendingInvites: PendingInviteStore = SettingInviteStore(storage)
+
+    /// A register naming an invite may have reached the server: the account
+    /// may exist and hold the invite's sats (`Signup`'s keep-or-delete rule).
+    @Volatile var inviteMayBeRedeemed = false
+        private set
+
+    /// This connection registered with an invite: the sats it credits are not
+    /// in the balance until something asks (`afterConnect`).
+    @Volatile private var registeredWithInvite = false
+
+    private val inviterOutcomeFlow = MutableStateFlow<InviterFlow.Outcome?>(null)
+
+    /// What the last attempt to add the inviter came to, for a screen to say so
+    /// (`Failed`/`WillRetry` are the ones worth showing).
+    val inviterOutcome: StateFlow<InviterFlow.Outcome?> = inviterOutcomeFlow.asStateFlow()
+
+    /// Tags of sends whose async pay the server has not answered yet (false), or has (true):
+    /// `publishOrderedLocked`'s wait for it (PeelCore's `money.asyncPays`).
+    private val asyncPays = ConcurrentHashMap<String, Boolean>()
+
+    /// Invite codes being cancelled right now: the server answers a cancel with the balance
+    /// alone, so one at a time (`cancelInvite`).
+    internal val cancelsInFlight: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+
+    internal fun publishInviterOutcome(outcome: InviterFlow.Outcome) {
+        inviterOutcomeFlow.value = outcome
+    }
     /// True from `start()` until `cancel()`: whether a drop should trigger
     /// [reconnectLoop] at all (PeelCore's own `keepConnected`).
     @Volatile private var keepConnected = false
@@ -162,16 +195,80 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// published, still under the lock: a payment writes its own pending
     /// record there, so a send that may have gone is never unrecorded
     /// (PeelCore's `commitAndPublish(invoices:)`).
+    ///
+    /// `ordered` publishes in PeelCore's `publishPlan` order (the settle and
+    /// register first, a new key's messages after its register has landed, an
+    /// async pay's after the server took it) instead of everything at once:
+    /// what a key exchange and an invite's payment need. Off for every
+    /// caller from before those existed, whose behaviour is unchanged.
     suspend fun run(
         beforePublish: (RunReturn) -> Unit = {},
+        ordered: Boolean = false,
         call: (time: String, state: ByteArray) -> RunReturn,
-    ): RunReturn = mutex.withLock {
-        val time = clock.next()
-        val result = call(time, StateCodec.encode(state))
-        commitLocked(result, time)
-        beforePublish(result)
-        publishLocked(result)
-        result
+    ): RunReturn {
+        var afterPay: AfterPay? = null
+        val result = mutex.withLock {
+            val time = clock.next()
+            val result = call(time, StateCodec.encode(state))
+            commitLocked(result, time)
+            beforePublish(result)
+            if (ordered) afterPay = publishOrderedLocked(result, waitForAsyncPay = true) else publishLocked(result)
+            result
+        }
+        // Outside the lock: the server's answer to the async pay is handled by the listener, which needs it.
+        afterPay?.let { finishAfterPay(it) }
+        return result
+    }
+
+    /// What is left to publish once the server has taken an async pay.
+    private class AfterPay(val publishes: List<Pair<String, ByteArray>>, val tags: Set<String>)
+
+    private fun publishesOf(result: RunReturn): PublishPlan = PublishPlan.of(
+        settle = result.settleTopic?.let { t -> result.settlePayload?.let { t to it } },
+        register = result.registerTopic?.let { t -> result.registerPayload?.let { t to it } },
+        asyncPay = result.asyncpayTopic?.let { t -> result.asyncpayPayload?.let { t to it } },
+        topics = result.topics.indices.map { result.topics[it] to (result.payloads.getOrNull(it) ?: ByteArray(0)) },
+        newChildKey = result.newChildIdx != null,
+    )
+
+    /// [publishLocked] in [PublishPlan] order: what goes now is published, the rest of the
+    /// plan up to the wait for the async pay too; what follows the pay is returned for
+    /// [finishAfterPay] to publish once the lock is free. Under the lock like `publishLocked`.
+    private suspend fun publishOrderedLocked(result: RunReturn, waitForAsyncPay: Boolean): AfterPay? {
+        val connection = transport ?: throw NotConnectedException()
+        val plan = publishesOf(result)
+        // Listed before the async pay goes, so an answer that comes first counts.
+        val paying = if (waitForAsyncPay && plan.afterPay.isNotEmpty()) result.msgs.mapNotNull { it.tag }.toSet() else emptySet()
+        for (tag in paying) asyncPays[tag] = false
+        try {
+            if (result.subscriptionTopics.isNotEmpty()) connection.subscribe(result.subscriptionTopics)
+            for ((topic, payload) in plan.now) connection.publish(topic, payload)
+            if (plan.later.isNotEmpty()) {
+                delay(REGISTER_SETTLE_MS)
+                for ((topic, payload) in plan.later) connection.publish(topic, payload)
+            }
+        } catch (e: Exception) {
+            for (tag in paying) asyncPays.remove(tag)
+            throw e
+        }
+        return if (plan.afterPay.isEmpty()) null else AfterPay(plan.afterPay, paying)
+    }
+
+    /// Waits (at most [ASYNC_PAY_SETTLE_MS]) for the server to answer the async pay, then publishes the rest on
+    /// whatever connection there is by then. A wait that runs out still publishes: the state is committed
+    /// and the payment may be held, as the official apps do.
+    private suspend fun finishAfterPay(after: AfterPay) {
+        try {
+            if (after.tags.isNotEmpty()) {
+                withTimeoutOrNull(ASYNC_PAY_SETTLE_MS) {
+                    while (after.tags.none { asyncPays[it] == true }) delay(100)
+                }
+            }
+            val connection = transport ?: throw NotConnectedException()
+            for ((topic, payload) in after.publishes) connection.publish(topic, payload)
+        } finally {
+            for (tag in after.tags) asyncPays.remove(tag)
+        }
     }
 
     /// The commit half of `run`, usable on its own by `connect` — which
@@ -185,6 +282,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         newState.putAll(updates)
         for (key in result.stateToDelete) newState.remove(key)
         state = newState
+        result.asyncpayTag?.let { tag -> if (asyncPays.containsKey(tag)) asyncPays[tag] = true }
 
         // Any call's `RunReturn` can report a new balance, not just a
         // send's — PeelCore's own `Engine.swift` commits `newBalance` the
@@ -347,6 +445,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             val setupTime = clock.next()
             val setup = coreInitialSetup(seed, setupTime, StateCodec.encode(state), deviceID, inviteCode)
             commitLocked(setup, setupTime)
+            // Set before the publish, not after: a register that failed part-way may still have gone.
+            if (inviteCode != null) inviteMayBeRedeemed = true
             publishLocked(setup)
 
             val tribeTopicTime = clock.next()
@@ -356,7 +456,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             setup
         }
 
-        withTimeoutOrNull(registerWaitMs) { inboundResults.first { isRegistered } }
+        // An invite's register is waited for as long as PeelCore does (a refused one is never answered).
+        withTimeoutOrNull(if (inviteCode != null) INVITE_REGISTER_WAIT_MS else registerWaitMs) { inboundResults.first { isRegistered } }
         return setup
     }
 
@@ -380,6 +481,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                         storage.value(Setting.ALIAS) ?: "", storage.value(Setting.PHOTO_URL) ?: "",
                     )
                     commitLocked(result, handleTime)
+                    answerKeyExchange(result)
                     result
                 }
                 // Every inbound message, live or a restore's own page answer
@@ -397,6 +499,33 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
     }
 
+    /// The core's reply to someone adding this account (their type-10 message): the key
+    /// confirmation it made, and the sats it pays back. `handle` returns them but sends
+    /// nothing, so without publishing them the other side never gets this account's key.
+    /// Only for a live key exchange: never while a restore replays history (PeelCore
+    /// publishes every handled result; this port does so only where it is needed, see
+    /// docs/phases/19-invites.md). Under the lock, like the commit it follows. A failure
+    /// is logged, not thrown: it must not end the listener.
+    private suspend fun answerKeyExchange(result: RunReturn) {
+        if (restoreProgressFlow.value.restoring) return
+        if (result.msgs.none { it.type?.toInt() == CONTACT_KEY_MESSAGE_TYPE && it.fromMe != true }) return
+        try {
+            publishOrderedLocked(result, waitForAsyncPay = false)?.let { finishAfterPay(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("PeelEngine", "answering a key exchange failed", e)
+        }
+    }
+
+    /// Marks everyone the core now holds as a contact ready, and tells the dashboard's cache of who is a person.
+    internal fun markPeopleReady() {
+        runCatching {
+            refreshPersonKeys()
+            storage.markContactsReady(personKeys.toList())
+        }.onFailure { Log.w("PeelEngine", "listing contacts failed", it) }
+    }
+
     /// `result.msgs` as rows, stored — and, for whichever of them are an
     /// incoming message naming its own sender, the contact that reveals.
     /// Shared by the live listener and a restore's pages: a message is a
@@ -406,6 +535,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (rows.isNotEmpty()) {
             // Messages and the contacts they reveal in one transaction.
             storage.insertMessages(rows, rows.mapNotNull { contactHint(it) })
+            // A key exchange (someone adding this account, or its answer) makes a contact the
+            // core holds: ready, so the chat list shows them. Not while restoring, which
+            // marks everyone once from its contacts run.
+            if (rows.any { it.type == CONTACT_KEY_MESSAGE_TYPE || it.type == CONTACT_KEY_CONFIRMATION_MESSAGE_TYPE } &&
+                !restoreProgressFlow.value.restoring
+            ) markPeopleReady()
         }
         // The mixer's one live word on a tag this device sent under —
         // PeelCore's `liveStatus`: FAILED as it comes, anything else
@@ -1303,22 +1438,45 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// the caller knows not to go on to a catch-up with nothing to ask.
     private suspend fun connectAndRegister(): Boolean {
         connectionStateFlow.value = ConnectionState.Connecting
+        // The invite a new account registers with, until the register is known to have worked
+        // (the server answers `already_registered` if an earlier one landed, and needs the
+        // invite if it did not).
+        val invite = if (isRegistered) null else pendingInvites.peek()
         return try {
-            val config = ServerConfig.fetch(network)
-            config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
-            val server = ServerAddress.named(config.defaultLsp)
+            val server = resolveServer(invite)
             storage.apply(Storage.Commit(settings = mapOf(Setting.SERVER to server.toString())))
-            connect(server)
+            connect(server, inviteCode = invite?.code)
+            registeredWithInvite = invite != null && isRegistered
             connectionStateFlow.value = if (isRegistered) {
                 ConnectionState.Connected
             } else {
-                ConnectionState.Failed("No registration answer came back in time.")
+                ConnectionState.Failed(if (invite != null) SignupRules.NOT_CONFIRMED else "No registration answer came back in time.")
             }
             isRegistered
         } catch (e: Exception) {
             connectionStateFlow.value = ConnectionState.Failed(e.message ?: "Could not connect to the server.")
             false
         }
+    }
+
+    /// The broker to connect to: the one a waiting invite names; the one an invite
+    /// signup was made on (`Setting.SERVER_PINNED`); otherwise the public config's
+    /// default, as ever for a restored account. The tribes host comes from the config
+    /// where it is not known yet (never failing the connect for it on a named server).
+    private suspend fun resolveServer(invite: Invite?): ServerAddress {
+        invite?.server?.let { return ServerAddress.named(it) }
+        val pinned = if (storage.value(Setting.SERVER_PINNED) == "1") storage.value(Setting.SERVER) else null
+        if (pinned != null) {
+            val server = ServerAddress.parse(pinned) ?: throw IllegalStateException("the stored server address is unreadable")
+            if (storage.value(Setting.TRIBE_HOST) == null && !ServerAddress.isLoopback(server.host)) {
+                runCatching { ServerConfig.fetch(network).tribeHost }.getOrNull()
+                    ?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
+            }
+            return server
+        }
+        val config = ServerConfig.fetch(network)
+        config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
+        return ServerAddress.named(config.defaultLsp)
     }
 
     /// Called whenever the app returns to the foreground, after `start()`
@@ -1397,6 +1555,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
         }.onFailure { Log.w("PeelEngine", "catch-up after connect failed", it) }
+        // PeelCore's `cameOnline`: whoever sent the invite this account signed up with is
+        // added now, as its first contact. Never fails the catch-up it follows.
+        runCatching { addInviterIfPending() }.onFailure { Log.w("PeelEngine", "adding the inviter failed", it) }
+        if (registeredWithInvite) {
+            registeredWithInvite = false
+            // The invite's sats were credited before the register answered; nothing reported
+            // the balance. Best effort, in the background: the inviter above does not wait on it.
+            scope.launch { runCatching { fetchPaymentHistory() }.onFailure { Log.w("PeelEngine", "balance refresh failed", it) } }
+        }
         cameOnlineHere = true
         // The open chat's own sends, now that this connection can answer
         // (a foreground or a reconnect with a chat on screen).
@@ -1814,10 +1981,19 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         private const val BACKFILL_VERSION = "4"
 
         private const val registerWaitMs = 10_000L
+        private const val INVITE_REGISTER_WAIT_MS = 30_000L
 
         /// How long one history ask (counts, or a page) waits for its
         /// answer — PeelCore's own watchdog is 30s (`Engine.historyStall`).
         private const val historyWaitMs = 30_000L
+
+        /// How long a new key's register is given to land before the messages addressed to it go
+        /// (PeelCore's `registerSettle`).
+        private const val REGISTER_SETTLE_MS = 750L
+
+        /// How long a send waits for the server to take its async pay before publishing the rest
+        /// all the same (PeelCore's `asyncPaySettle`).
+        private const val ASYNC_PAY_SETTLE_MS = 10_000L
         private val HISTORY_PAGE_SIZE: UInt = 100u
 
         /// The memes server attachments come from — PeelCore's own

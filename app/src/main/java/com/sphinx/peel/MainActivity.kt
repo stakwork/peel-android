@@ -1,5 +1,6 @@
 package com.sphinx.peel
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +24,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.FileSecretStore
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.InviteLink
+import com.sphinx.peel.engine.InviterFlow
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.dashboard.MainTabs
 import com.sphinx.peel.ui.lock.LockScreen
@@ -36,8 +39,25 @@ import com.sphinx.peel.ui.toast.rememberToastState
 /// A FragmentActivity (still a ComponentActivity, `setContent` works) because
 /// BiometricPrompt needs one.
 class MainActivity : FragmentActivity() {
+    /// The invite a `sphinx.chat://?action=i&d=…` link opened the app with, until the
+    /// onboarding's invite step takes it (open question: the scheme is the official apps').
+    private var inviteLink by mutableStateOf<String?>(null)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        takeInviteLink(intent)
+    }
+
+    private fun takeInviteLink(intent: Intent?) {
+        val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
+        // Only an invite link, and only ever held in memory: never logged or stored.
+        InviteLink.fromDeepLink(data.scheme, data.getQueryParameter("action"), data.toString())?.let { inviteLink = it }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) takeInviteLink(intent)
         // No chat contents in the Recents thumbnail (API 33+). Screens that show
         // a secret are additionally FLAG_SECURE (`SecureWindow`).
         if (android.os.Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
@@ -52,7 +72,7 @@ class MainActivity : FragmentActivity() {
                     val toast = rememberToastState()
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                         CompositionLocalProvider(LocalToast provides toast) {
-                            PeelApp(secretStore, storage)
+                            PeelApp(secretStore, storage, inviteLink) { inviteLink = null }
                         }
                         ToastHost(toast, Modifier.align(Alignment.BottomCenter))
                     }
@@ -80,13 +100,13 @@ private sealed class Screen {
 /// `Engine.start()` is never called twice for the same account and its
 /// connection survives moving between these screens.
 @Composable
-private fun PeelApp(secretStore: SecretStore, storage: Storage) {
+private fun PeelApp(secretStore: SecretStore, storage: Storage, inviteLink: String?, onInviteLinkUsed: () -> Unit) {
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
 
     when (val current = screen) {
-        Screen.Onboarding -> OnboardingScreen(secretStore, storage) { engine ->
+        Screen.Onboarding -> OnboardingScreen(secretStore, storage, inviteLink, onInviteLinkUsed) { engine ->
             screen = if (engine.restoreProgress.value.restoring) Screen.Restoring(engine) else Screen.Home(engine)
         }
         Screen.Lock -> LockScreen(secretStore, storage) { engine -> screen = Screen.Home(engine) }
@@ -97,6 +117,7 @@ private fun PeelApp(secretStore: SecretStore, storage: Storage) {
             RelockWhenIdle(current.engine) { screen = Screen.Relock(current.engine) }
             BiometricHousekeeping(current.engine, secretStore)
             StadeumHousekeeping(current.engine)
+            InviterNotice(current.engine)
             MainTabs(current.engine, storage, secretStore) { screen = Screen.Onboarding }
         }
     }
@@ -186,6 +207,24 @@ private fun StadeumHousekeeping(engine: Engine) {
             lifecycleOwner.lifecycle.removeObserver(observer)
             model.close()
             model.sphinxProof = null
+        }
+    }
+}
+
+/// Says so when adding the inviter of a new account did not work: a failed key exchange is not
+/// retried (it may have gone), one the core refused is (`InviterFlow.Outcome.WillRetry`).
+@Composable
+private fun InviterNotice(engine: Engine) {
+    val toast = com.sphinx.peel.ui.toast.LocalToast.current
+    androidx.compose.runtime.LaunchedEffect(engine) {
+        engine.inviterOutcome.collect { outcome ->
+            when (outcome) {
+                is InviterFlow.Outcome.Failed ->
+                    toast.show("Adding the person who invited you didn't work: ${outcome.message}", com.sphinx.peel.ui.toast.ToastType.Error)
+                is InviterFlow.Outcome.WillRetry ->
+                    toast.show("Adding the person who invited you didn't work yet. Peel will try again.", com.sphinx.peel.ui.toast.ToastType.Warning)
+                else -> {}
+            }
         }
     }
 }
