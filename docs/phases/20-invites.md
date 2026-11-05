@@ -1,4 +1,4 @@
-# Phase 19 — Invites and contacts
+# Phase 20 — Invites and contacts
 
 Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a server or a device**
 (no native core on the JVM, no Lightning-backed server in the pod). Ported from `peel`
@@ -25,7 +25,7 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
   Incoming contact-key messages (type 10): the core's reply (key confirmation + sats back) is now
   **published** (`Engine.answerKeyExchange`; it was dropped before), the contact is marked ready so it
   shows in the chat list, and a code in the sender's info marks our invite used (`Storage.insertMessages`).
-- **Invites made here**: `invite` table (DB v10), `Engine.makeInvite` / `cancelInvite` / `forgetInvite`,
+- **Invites made here**: `invite` table (DB v11), `Engine.makeInvite` / `cancelInvite` / `forgetInvite`,
   statuses sending/ready/failed/cancelling/cancelled/used, funding payment status moves them
   (`InviteRules`, `Storage.markSendStatus`), sending ones are re-asked on connect (`pendingSendTags`).
   UI: `ui/invites/InvitesScreen.kt` (list, new invite with confirmation, QR/copy/share, cancel).
@@ -51,5 +51,5 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
 - Contact "ready" on Android comes from the core's `listContacts` (`Engine.markPeopleReady`), after an add
   and after a type 10/11 message.
 - Tests: `InviteLinkTest`, `ContactCodeTest`, `InviterFlowTest` (clear-first/restore, keep/delete matrix,
-  publish order), `InviteRulesTest`, `StorageInviteTest` (status moves, used-by-code, v9→v10 upgrade).
+  publish order), `InviteRulesTest`, `StorageInviteTest` (status moves, used-by-code, v10→v11 upgrade).
   Native-core paths (`Signup.create`, `makeInvite`, `addContact`) are untested.

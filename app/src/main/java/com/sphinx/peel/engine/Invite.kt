@@ -77,7 +77,7 @@ object InviteLink {
     private const val MAX_BYTES = MAX_LENGTH * 4
 
     /// The deep link: `sphinx.chat://?action=i&d=…`. The scheme is the official apps' and is not
-    /// confirmed for Peel (open question in docs/phases/19-invites.md).
+    /// confirmed for Peel (open question in docs/phases/20-invites.md).
     const val SCHEME = "sphinx.chat"
 
     /// Reads what was pasted or scanned: the full link, or the bare `d=…`

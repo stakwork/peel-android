@@ -40,7 +40,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!-- An invite link, sphinx.chat://?action=i&d=… (the official apps' scheme; Peel's own is
-                 not decided, docs/phases/19-invites.md). Only fills in the onboarding's invite step:
+                 not decided, docs/phases/20-invites.md). Only fills in the onboarding's invite step:
                  nothing is joined or paid by opening a link. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

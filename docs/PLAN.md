@@ -180,7 +180,8 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 15 | Calls keep running in the background: a call survives leaving its screen, a banner (dot, title, running time, mute, leave) on every other screen — no cross-chat switch confirmation, no foreground service for real OS backgrounding | built; see the file for what's open | [phases/15-call-background.md](phases/15-call-background.md) |
 | 17 | Lock hardening: Keystore wall under the PIN blob, biometric unlock, wrong-PIN throttle, `pin_timeout`/`biometric_enabled` (synced), FLAG_SECURE, clipboard hygiene | built, not device-tested; see the file | [phases/17-lock-hardening.md](phases/17-lock-hardening.md) |
 | 18 | Markdown in message text (blocks, emphasis, code, https/named links, mentions), ported from `MessageMarkup.swift` | built, not device-tested; see the file | [phases/18-markdown.md](phases/18-markdown.md) |
-| 19 | Invites (signup only with an invite, make/cancel invites) and add contact, key exchange, ported from `Account.signup`/`Engine+Contacts.swift` | built, unit-tested, not device-tested; see the file | [phases/19-invites.md](phases/19-invites.md) |
+| 19 | Chat-list actions (mute levels, mark read/unread, swipe, long-press menu) and Retry/Discard of failed sends with reconnect auto-resend, ported from `ChatsTab.swift`/`Engine+Messages.swift` | built, not device-tested; see the file | [phases/19-chat-actions-send-retry.md](phases/19-chat-actions-send-retry.md) |
+| 20 | Invites (signup only with an invite, make/cancel invites) and add contact, key exchange, ported from `Account.signup`/`Engine+Contacts.swift` | built, unit-tested, not device-tested; see the file | [phases/20-invites.md](phases/20-invites.md) |
 
 ## Open questions
 

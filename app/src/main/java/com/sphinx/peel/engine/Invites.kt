@@ -12,7 +12,7 @@ import uniffi.sphinxrs.makeInvite as coreMakeInvite
 /// Contacts and invites on the engine. Ported from PeelCore's `Engine+Contacts.swift`,
 /// `Engine+Messages.swift` (`addContact`) and `Engine+Account.swift` (`addInviterIfPending`).
 /// Not ported: removing a contact (`deleteContact`), tribe links and the "new contact"
-/// badge (`contact.isNew`); see docs/phases/19-invites.md.
+/// badge (`contact.isNew`); see docs/phases/20-invites.md.
 
 /// What a key exchange pays: the official apps attach 5 sats to its first message.
 const val KEY_EXCHANGE_MSAT = 5_000L

@@ -45,8 +45,12 @@ sections for code that isn't written yet.
     ZXing) and the in-chat payment and request rows.
   - `engine/MessageMarkup.kt`, `Mentions.kt` — message markdown parser (pure, JVM-tested) and
     mention helpers; `ui/components/MessageText.kt` draws it (`docs/phases/18-markdown.md`).
+  - `engine/ChatActions.kt` (`MuteLevel`, `ReadToggle`) and `engine/SendRetry.kt` (pure
+    retry/auto-resend rules; JVM-tested) back the chat-list actions and failed-send
+    Retry/Discard (`docs/phases/19-chat-actions-send-retry.md`); UI in
+    `ui/dashboard/ChatRowActions.kt` and `UndeliveredLine.kt`.
   - `engine/Invite*.kt`, `ContactCode.kt`, `InviterFlow.kt`, `Invites.kt` and `account/Signup.kt` — invites and
-    contacts (`docs/phases/19-invites.md`): a new account only signs up with an invite; `addContact`,
+    contacts (`docs/phases/20-invites.md`): a new account only signs up with an invite; `addContact`,
     `makeInvite`, `cancelInvite`; `run(ordered = true)` publishes in PeelCore's `publishPlan` order.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s

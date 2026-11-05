@@ -122,11 +122,11 @@ class StorageInviteTest {
     fun `a database from before invites gains the table, keeping what it had`() {
         val name = "invite-upgrade"
         context.deleteDatabase("peel-$name.db")
-        // The schema as of version 9, as far as an upgrade needs it: one stored setting.
+        // The schema as of version 10 (the base's latest), as far as an upgrade needs it: one stored setting.
         val old = context.openOrCreateDatabase("peel-$name.db", android.content.Context.MODE_PRIVATE, null)
         old.execSQL("CREATE TABLE setting (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
         old.insert("setting", null, ContentValues().apply { put("key", "alias"); put("value", "Old") })
-        old.version = 9
+        old.version = 10
         old.close()
         val storage = Storage(context, account = name)
         assertEquals("Old", storage.value(Setting.ALIAS))
