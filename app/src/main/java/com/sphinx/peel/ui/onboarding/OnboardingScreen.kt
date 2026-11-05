@@ -148,6 +148,8 @@ fun OnboardingScreen(secretStore: SecretStore, storage: Storage, onAccountReady:
                             )
                             Engine(mnemonic, storage).also { it.start() }
                         }
+                        // No pairing to show for it: You › Stadeum says to connect again.
+                        com.sphinx.peel.engine.Stadeum.model.accountRestored()
                         onAccountReady(restored)
                     }
                 }

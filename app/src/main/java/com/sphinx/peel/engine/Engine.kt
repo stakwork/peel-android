@@ -490,6 +490,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// first (`storeMessages`'s `sentStatus` handling) — whichever comes.
     /// A send whose echo never arrives and whose tag the mixer never
     /// mentions again stays `PENDING` forever: no retry, no timeout.
+    /// This account's [SphinxProof] (iOS `Engine.sphinxProof`), signed [now] by
+    /// its account key (child 0) with the core's `signed_timestamp`. Signed
+    /// half a minute back: Hive refuses a token from its future and takes one
+    /// up to five minutes old.
+    fun sphinxProof(now: Long = System.currentTimeMillis()): SphinxProof {
+        val time = maxOf(0L, now - 30_000)
+        return SphinxProof(accountKey, uniffi.sphinxrs.signedTimestamp(seed, 0u, time.toString(), network))
+    }
+
     suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null): MessageRow {
         check(transport != null) { "Not connected." }
         val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L

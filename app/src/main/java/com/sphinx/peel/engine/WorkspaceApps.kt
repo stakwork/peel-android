@@ -23,25 +23,6 @@ data class TalkHome(val id: String, val name: String, val url: String) {
     companion object { const val DEVELOPMENT = "development" }
 }
 
-/// What Android knows of Stadeum pairing. Android has no Stadeum pairing yet
-/// (iOS `Stadeum`: the "Connect Stadeum" flow under You, `live` workspaces,
-/// `talkHomes`). Until that is ported, both are empty, so the Dashboard's
-/// Apps row stays hidden exactly as iOS hides it with nothing connected.
-/// TODO(stadeum-pairing): feed [live] and [developmentHome] from the paired
-/// workspaces once the pairing flow lands.
-object Stadeum {
-    @Volatile var live: List<HivePeer> = emptyList()
-    @Volatile var developmentHome: TalkHome? = null
-
-    /// The Dashboard's Apps row shows only with something to show (iOS
-    /// `ChatsTab`: `!stadeum.live.isEmpty || talk.developmentHome != nil`).
-    val showsApps: Boolean get() = live.isNotEmpty() || developmentHome != null
-
-    /// One Talk to Jamie row per live workspace, then the development home.
-    val talkHomes: List<TalkHome>
-        get() = live.map { TalkHome(it.id, it.name, it.baseUrl) } + listOfNotNull(developmentHome)
-}
-
 /// An app a Stadeum workspace pinned as a tab. Ported from PeelCore's
 /// `WorkspaceApps.swift`; not ported: the icon table, `waiting`/own-strut apps
 /// (the Mac's), and `AgentArtifact.Handle.isAppName` (approximated by [isAppName]).

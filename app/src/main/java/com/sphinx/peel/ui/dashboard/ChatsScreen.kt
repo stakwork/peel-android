@@ -168,8 +168,8 @@ private fun ChatListBody(
                 // Not while searching. Threads counts threads with new
                 // replies, Mentions the unread mentions; Apps stays 0 and
                 // shows only with a live Stadeum workspace or a development
-                // talk home, as on iOS (Android has no Stadeum pairing yet,
-                // so for now never).
+                // talk home, as on iOS (`Stadeum` is observable: the row
+                // appears as soon as You › Stadeum pairs).
                 if (!searching) {
                     if (Stadeum.showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
