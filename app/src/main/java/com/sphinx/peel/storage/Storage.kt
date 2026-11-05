@@ -1,6 +1,9 @@
 package com.sphinx.peel.storage
 
 import com.sphinx.peel.engine.MONEY_SEND_TYPES
+import com.sphinx.peel.engine.MuteLevel
+import com.sphinx.peel.engine.ReadToggle
+import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.engine.SendStatus
 import android.content.ContentValues
 import android.content.Context
@@ -42,6 +45,11 @@ data class ContactRow(
     val escrowMsat: Long = 0,
 )
 
+/// The message types that count as unread (and that "Mark unread" can sit
+/// just below): the list in [Storage.conversations]'s unread subquery,
+/// minus boosts, which count only on our own message.
+private const val COUNTED_TYPES = "(0, 5, 6, 2, 32)"
+
 /// One row the dashboard shows: a chat (a ready contact or a discovered
 /// tribe) and its newest message, if it has one yet. The Android shape of
 /// PeelCore's `Conversation` (`Models.swift`) and `Storage.conversations()`.
@@ -76,6 +84,15 @@ data class ConversationRow(
     val previewDeleted: Boolean = false,
     val previewFromMe: Boolean? = null,
     val previewSender: String? = null,
+    /// Unread messages that mention this account (tribes only), filled in
+    /// by [Storage.conversations] only for a chat on "mentions only" —
+    /// what that level shows instead of `unread` (`ChatReadState.shownUnread`).
+    val mentions: Long = 0,
+    /// The server index of the newest counted message from someone else —
+    /// what "Mark unread" moves the marker just below, and whether the
+    /// chat can be marked unread at all (PeelCore's `ReadToggle`: only
+    /// once someone else has written in it). Null when there is none.
+    val newestIncoming: Long? = null,
 ) {
     /// One line for the row, null for a chat with nothing yet.
     val previewLine: String? get() =
@@ -85,14 +102,28 @@ data class ConversationRow(
     /// fallback as `Conversation.name`.
     val name: String get() = alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
 
-    /// Any mute level above "all" hides the count — PeelCore distinguishes
-    /// "mentions only" from "muted" (`ChatReadState.shownUnread`, which
-    /// shows a mentions-only chat its *mentions* count); this port can't,
-    /// since it has no mention tracking, so both read as muted here.
-    val muted: Boolean get() = muteLevel != 0
+    /// Fully muted ("Nothing"); "mentions only" is level 1.
+    val muted: Boolean get() = muteLevel == MuteLevel.MUTED.raw
 
-    /// What a chat row actually shows — `unread`, unless muted.
-    val shownUnread: Long get() = if (muted) 0 else unread
+    /// What a chat row actually shows — PeelCore's `ChatReadState.shownUnread`:
+    /// every unread message, only the mentions, or nothing, by mute level.
+    val shownUnread: Long
+        get() = when (MuteLevel.of(muteLevel)) {
+            MuteLevel.ALL -> unread
+            MuteLevel.MENTIONS_ONLY -> mentions
+            MuteLevel.MUTED -> 0
+        }
+
+    /// Mark as read while something is unread, otherwise Mark as unread
+    /// once someone else has written in the chat, otherwise nothing —
+    /// PeelCore's `ReadToggle.offered`. Asked of the *real* unread count,
+    /// not [shownUnread]: a muted chat with unread messages can be marked read.
+    val readToggle: ReadToggle?
+        get() = when {
+            unread > 0 -> ReadToggle.MARK_READ
+            newestIncoming != null && newestIncoming > 0 -> ReadToggle.MARK_UNREAD
+            else -> null
+        }
 }
 
 /// One row of the Threads list — PeelCore's `ThreadSummary` as
@@ -189,6 +220,11 @@ data class MessageRow(
     /// message naming this one), never by a caller building a row by
     /// hand. `body` is cleared alongside it (`Storage.v8`).
     val deleted: Boolean = false,
+    /// For a send of ours sent again: when it was first sent (ms;
+    /// `Storage.v10`) — a resend moves `timestamp`. Null for one never resent.
+    val firstSentAt: Long? = null,
+    /// When a reconnect sent it again by itself (ms; `Storage.v10`).
+    val autoResentAt: Long? = null,
 )
 
 /// Everything Peel keeps on disk for one account: `coreState` (opaque
@@ -409,11 +445,13 @@ class Storage(context: Context, account: String = "default") {
     /// flag). Returns whether anything actually changed, the way
     /// PeelCore's own `setRead` returns whether the marker moved: a
     /// caller only publishes when it did.
-    fun setRead(chat: String, index: Long, pending: Boolean): Boolean {
+    fun setRead(chat: String, index: Long, pending: Boolean, allowBack: Boolean = false): Boolean {
         val db = helper.writableDatabase
         val existing = readChatState(db, chat)
         val current = existing?.lastRead ?: -1L
-        if (index < current) return false
+        // `allowBack`: Mark unread (`setRead(.., as: .unread)`), the one
+        // caller that moves the marker down, to just below a message.
+        if (index < current && !allowBack) return false
         if (index == current && pending == (existing?.readPending ?: false)) return false
         val values = ContentValues().apply {
             put("chat", chat)
@@ -423,6 +461,34 @@ class Storage(context: Context, account: String = "default") {
         }
         db.insertWithOnConflict("chatState", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         return true
+    }
+
+    /// The server index of the newest counted message from someone else in
+    /// `chat` (the types that count as unread, see [conversations]) — what
+    /// Mark unread puts the marker just below, so it counts one. Null for none.
+    fun newestIncomingIndex(chat: String): Long? {
+        helper.readableDatabase.rawQuery(
+            "SELECT MAX(serverIndex) FROM message WHERE chat = ? AND fromMe = 0 AND deleted = 0 AND type IN $COUNTED_TYPES",
+            arrayOf(chat),
+        ).use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) return null
+            return cursor.getLong(0)
+        }
+    }
+
+    /// Sets a chat's own mute level here, keeping its read marker —
+    /// PeelCore's `Storage.setMute`. The server holds the level too
+    /// (`Engine.setMute` sends it first).
+    fun setMute(chat: String, level: Int) {
+        val db = helper.writableDatabase
+        val existing = readChatState(db, chat)
+        val values = ContentValues().apply {
+            put("chat", chat)
+            put("lastRead", existing?.lastRead)
+            put("readPending", if (existing?.readPending == true) 1 else 0)
+            put("muteLevel", level)
+        }
+        db.insertWithOnConflict("chatState", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
     /// This chat's own read marker, or null if it has none yet — the
@@ -452,12 +518,13 @@ class Storage(context: Context, account: String = "default") {
     /// hasn't reached the server yet (`readPending`): that one is left for
     /// `publishPendingReads` to push forward instead of being quietly
     /// reset backward by an answer that predates it.
-    fun applyServerReads(reads: Map<String, Long>) {
+    fun applyServerReads(reads: Map<String, Long>, except: Set<String> = emptySet()) {
         if (reads.isEmpty()) return
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
             for ((chat, index) in reads) {
+                if (chat in except) continue
                 val existing = readChatState(db, chat)
                 if (existing?.readPending == true) continue
                 val values = ContentValues().apply {
@@ -475,14 +542,16 @@ class Storage(context: Context, account: String = "default") {
     }
 
     /// The server's own mute levels (`RunReturn.muteLevels`), applied the
-    /// same way as reads — these are set from another device (or a
-    /// previous session), never from any UI this port has yet.
-    fun applyServerMutes(mutes: Map<String, Int>) {
+    /// same way as reads — set from another device (or a previous session),
+    /// or here (`Engine.setMute`), whose chats `except` skips: an answer
+    /// asked before this device's own change must not undo it.
+    fun applyServerMutes(mutes: Map<String, Int>, except: Set<String> = emptySet()) {
         if (mutes.isEmpty()) return
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
             for ((chat, level) in mutes) {
+                if (chat in except) continue
                 val existing = readChatState(db, chat)
                 val values = ContentValues().apply {
                     put("chat", chat)
@@ -563,7 +632,7 @@ class Storage(context: Context, account: String = "default") {
             "message",
             arrayOf(
                 "id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag",
-                "paymentHash", "status", "replyUuid", "threadUuid", "deleted",
+                "paymentHash", "status", "replyUuid", "threadUuid", "deleted", "firstSentAt", "autoResentAt",
             ),
             selection, args, null, null, orderBy,
         ).use { cursor ->
@@ -586,6 +655,8 @@ class Storage(context: Context, account: String = "default") {
                         replyUuid = cursor.getString(13),
                         threadUuid = cursor.getString(14),
                         deleted = cursor.getInt(15) != 0,
+                        firstSentAt = if (cursor.isNull(16)) null else cursor.getLong(16),
+                        autoResentAt = if (cursor.isNull(17)) null else cursor.getLong(17),
                     ),
                 )
             }
@@ -755,6 +826,69 @@ class Storage(context: Context, account: String = "default") {
             arrayOf(chat), null, null, "id DESC", "200",
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
 
+    /// One stored message by its row id, or null.
+    fun message(id: Long): MessageRow? = readMessages("id = ?", arrayOf(id.toString()), "id ASC").firstOrNull()
+
+    /// Our messages of the resendable types still undelivered (pending or
+    /// failed), carrying no sats, outside any tribe, never sent again by a
+    /// reconnect, and first sent at or after [since] (ms), oldest first, at
+    /// most 100: what a reconnect may send again (`Engine.resendRecent`) —
+    /// PeelCore's `undeliveredSends(since:)`.
+    fun undeliveredSends(since: Long): List<MessageRow> = readMessages(
+        "fromMe = 1 AND deleted = 0 AND status IN ('PENDING', 'FAILED') AND type IN (${SendRetry.RESENDABLE_TYPES.joinToString(",")}) " +
+            "AND COALESCE(msat, 0) = 0 AND autoResentAt IS NULL AND COALESCE(firstSentAt, timestamp) >= CAST(? AS INTEGER) " +
+            "AND chat NOT IN (SELECT pubkey FROM contact WHERE isTribe = 1)",
+        arrayOf(since.toString()), "COALESCE(firstSentAt, timestamp) ASC, id ASC",
+    ).take(100)
+
+    /// A send of ours sent again: the row keeps its id (so no second
+    /// message appears) and takes the new uuid, tag and time — PeelCore's
+    /// `Commit.resend`. One conditional UPDATE, so a second Retry racing
+    /// the first (or an echo or status that landed since) finds the row no
+    /// longer eligible and changes nothing: it is `PENDING` again after
+    /// this, which the same rule (a pending row must be older than
+    /// [SendRetry.CONFIRMATION_TIMEOUT_MS] at [now]) refuses until then. Eligible: failed, or pending and unable to have paid
+    /// (`SendRetry.mayHavePaid`). Returns whether the row moved.
+    fun commitResend(
+        id: Long, chat: String, uuid: String?, tag: String?, paymentHash: String?, msat: Long?, now: Long, auto: Boolean,
+    ): Boolean {
+        val db = helper.writableDatabase
+        val types = SendRetry.RESENDABLE_TYPES.joinToString(",")
+        val moneyTypes = MONEY_SEND_TYPES.joinToString(",")
+        val update = db.compileStatement(
+            """
+            UPDATE message SET uuid = ?, tag = ?, paymentHash = ?, msat = ?, status = 'PENDING', timestamp = ?,
+                firstSentAt = COALESCE(firstSentAt, timestamp), autoResentAt = COALESCE(?, autoResentAt)
+            WHERE id = ? AND chat = ? AND fromMe = 1 AND deleted = 0 AND type IN ($types)
+                AND (status = 'FAILED' OR (status = 'PENDING' AND COALESCE(timestamp, 0) < ? - ${SendRetry.CONFIRMATION_TIMEOUT_MS}
+                    AND NOT (tag IS NOT NULL AND (COALESCE(msat, 0) > 0 OR type IN ($moneyTypes)))))
+            """.trimIndent(),
+        )
+        var i = 0
+        for (value in listOf<Any?>(uuid, tag, paymentHash, msat, now, if (auto) now else null, id, chat, now)) {
+            i++
+            when (value) {
+                null -> update.bindNull(i)
+                is Long -> update.bindLong(i, value)
+                else -> update.bindString(i, value.toString())
+            }
+        }
+        return update.executeUpdateDelete() > 0
+    }
+
+    /// Drops an undelivered message of ours from this device: it never
+    /// reached the server, so there is nothing to delete anywhere else.
+    /// Only a row [SendRetry.isDiscardable] allows (re-checked here against
+    /// what is stored now, so a message delivered since is never lost).
+    /// Returns whether a row went.
+    fun discardUndelivered(id: Long, now: Long = System.currentTimeMillis()): Boolean {
+        val row = message(id) ?: return false
+        if (!SendRetry.isDiscardable(row, now)) return false
+        return helper.writableDatabase.delete(
+            "message", "id = ? AND fromMe = 1 AND status IN ('PENDING', 'FAILED')", arrayOf(id.toString()),
+        ) > 0
+    }
+
     /// Every send of ours the server has not confirmed or refused, for
     /// `Engine.checkPendingSends` — PeelCore's `pendingSendTags(textBefore:)`
     /// trimmed to this port's tables: our messages still `PENDING` that
@@ -920,6 +1054,8 @@ class Storage(context: Context, account: String = "default") {
                             SELECT 1 FROM message t WHERE t.chat = c.pubkey AND t.uuid = m.replyUuid AND t.fromMe = 1
                         ))),
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0),
+                (SELECT MAX(m.serverIndex) FROM message m
+                    WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.deleted = 0 AND m.type IN $COUNTED_TYPES),
                 p.type, p.body, p.deleted, p.fromMe, p.sender
             FROM contact c
             LEFT JOIN message p ON p.id = (
@@ -953,16 +1089,26 @@ class Storage(context: Context, account: String = "default") {
                         lastFromMe = if (cursor.isNull(6)) null else cursor.getInt(6) != 0,
                         unread = cursor.getLong(7),
                         muteLevel = cursor.getInt(8),
-                        previewType = if (cursor.isNull(9)) null else cursor.getInt(9),
-                        previewBody = cursor.getString(10),
-                        previewDeleted = !cursor.isNull(11) && cursor.getInt(11) != 0,
-                        previewFromMe = if (cursor.isNull(12)) null else cursor.getInt(12) != 0,
-                        previewSender = cursor.getString(13),
+                        newestIncoming = if (cursor.isNull(9)) null else cursor.getLong(9),
+                        previewType = if (cursor.isNull(10)) null else cursor.getInt(10),
+                        previewBody = cursor.getString(11),
+                        previewDeleted = !cursor.isNull(12) && cursor.getInt(12) != 0,
+                        previewFromMe = if (cursor.isNull(13)) null else cursor.getInt(13) != 0,
+                        previewSender = cursor.getString(14),
                     ),
                 )
             }
         }
-        return rows
+        // A chat on "mentions only" shows its unread mentions, which only
+        // Kotlin can tell (`Mentions`): worked out only when one exists.
+        if (rows.none { it.muteLevel == MuteLevel.MENTIONS_ONLY.raw }) return rows
+        val alias = value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
+        val lastReads = HashMap<String, Long>()
+        val mentionCounts = mentionRows(alias).filter { row ->
+            val index = row.serverIndex ?: return@filter false
+            index > lastReads.getOrPut(row.chat) { lastRead(row.chat) ?: -1L }
+        }.groupingBy { it.chat }.eachCount()
+        return rows.map { if (it.muteLevel == MuteLevel.MENTIONS_ONLY.raw) it.copy(mentions = (mentionCounts[it.chat] ?: 0).toLong()) else it }
     }
 
     /// The Threads list — PeelCore's `Storage.threads()`: threads (replies
@@ -1233,6 +1379,7 @@ class Storage(context: Context, account: String = "default") {
             v7(db)
             v8(db)
             v9(db)
+            v10(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -1247,6 +1394,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 7) v7(db)
             if (oldVersion < 8) v8(db)
             if (oldVersion < 9) v9(db)
+            if (oldVersion < 10) v10(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -1442,8 +1590,20 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("CREATE INDEX payment_ts ON payment(ts)")
         }
 
+        // `message.firstSentAt`/`autoResentAt`: PeelCore's v22, what a resend
+        // needs. A resend moves `timestamp` (the row is reused, with a new
+        // uuid and tag), so `firstSentAt` keeps when it was first sent for
+        // the one-hour auto-resend window; `autoResentAt` marks a row a
+        // reconnect already sent again by itself, so a relaunch does not
+        // do it twice. chatState needs nothing new: its read marker,
+        // `readPending` and `muteLevel` already carry Mark unread and Mute.
+        private fun v10(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE message ADD COLUMN firstSentAt INTEGER")
+            db.execSQL("ALTER TABLE message ADD COLUMN autoResentAt INTEGER")
+        }
+
         companion object {
-            const val VERSION = 9
+            const val VERSION = 10
         }
     }
 }

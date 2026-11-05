@@ -2,6 +2,7 @@ package com.sphinx.peel.ui.dashboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -115,6 +116,7 @@ private fun ChatListBody(
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
     var unreadMentions by remember { mutableStateOf(0L) }
     var unreadThreads by remember { mutableStateOf(0L) }
+    var refresh by remember { mutableStateOf(0) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
     var allTribes by remember { mutableStateOf(false) }
@@ -133,7 +135,8 @@ private fun ChatListBody(
         }
         unreadThreads = withContext(Dispatchers.Default) { storage.unreadThreadCount().toLong() }
     }
-    LaunchedEffect(restoreProgress) { reload() }
+    // `refresh`: a row action (read, unread, mute) just changed something.
+    LaunchedEffect(restoreProgress, refresh) { reload() }
     LaunchedEffect(Unit) {
         while (true) {
             delay(3_000)
@@ -181,7 +184,9 @@ private fun ChatListBody(
                 if (sections.unread.isNotEmpty()) {
                     item { SectionHeader("Unread", expanded = true, onToggle = null) }
                     items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
-                        ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
+                        ChatRowActions(conversation, engine, onChanged = { refresh++ }) { onLongClick ->
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0, onLongClick = onLongClick) { onOpenChat(conversation.chat) }
+                        }
                     }
                     item { Spacer(Modifier.height(16.dp)) }
                 }
@@ -193,7 +198,9 @@ private fun ChatListBody(
                     item { SectionHeader("Tribes", expanded = tribesOpen || searching, onToggle = toggleTribes) }
                     if (tribesOpen || searching) {
                         items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
-                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
+                            ChatRowActions(conversation, engine, onChanged = { refresh++ }) { onLongClick ->
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0, onLongClick = onLongClick) { onOpenChat(conversation.chat) }
+                        }
                         }
                         sections.allTribesCount?.let { count ->
                             item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
@@ -211,10 +218,16 @@ private fun ChatListBody(
                     item { SectionHeader("Direct messages", expanded = directOpen || searching, onToggle = toggleDirect) }
                     if (directOpen || searching) {
                         agentConversation?.let { agent ->
-                            item(key = "agent") { AgentChatRow(agent.shownUnread) { onOpenChat(engine.agentPubkey) } }
+                            item(key = "agent") {
+                                ChatRowActions(agent, engine, onChanged = { refresh++ }) { onLongClick ->
+                                    AgentChatRow(agent.shownUnread, onLongClick = onLongClick) { onOpenChat(engine.agentPubkey) }
+                                }
+                            }
                         }
                         items(sections.direct, key = { "direct-${it.chat}" }) { conversation ->
-                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0) { onOpenChat(conversation.chat) }
+                            ChatRowActions(conversation, engine, onChanged = { refresh++ }) { onLongClick ->
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0, onLongClick = onLongClick) { onOpenChat(conversation.chat) }
+                        }
                         }
                         sections.allDirectCount?.let { count ->
                             item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
@@ -402,10 +415,10 @@ private fun SectionHeader(title: String, expanded: Boolean, onToggle: (() -> Uni
 }
 
 @Composable
-private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onClick: () -> Unit) {
+private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     val unread = conversation.shownUnread
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ConversationAvatar(conversation, size = 44.dp)
@@ -492,9 +505,9 @@ private fun UnreadBadge(count: Long) {
 /// stored alias/photo would otherwise get, and the "AGENT" tag beside its
 /// name — PeelCore's `ChatListRow(isAgent: true)`.
 @Composable
-private fun AgentChatRow(unread: Long, onClick: () -> Unit) {
+private fun AgentChatRow(unread: Long, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         PeelLogo(size = 44.dp)
