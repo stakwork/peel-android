@@ -38,6 +38,10 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         const val PIN_TIMEOUT_KEY = "pin_timeout"
         const val BIOMETRIC_KEY = "biometric_enabled"
 
+        /// Peel-only key (iOS `Preference<Bool>.autoDownloadMedia`): "true"/"false"
+        /// as a JSON string; absent means on.
+        const val AUTO_DOWNLOAD_MEDIA_KEY = "peel.auto_download_media"
+
         fun parse(text: String): PreferencesFile {
             val root = JSONObject(text)
             // PeelCore's `PreferencesFile.init(text:)`: a file the official

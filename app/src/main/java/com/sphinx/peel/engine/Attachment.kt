@@ -167,3 +167,9 @@ fun declaredAmountMsat(body: String?): Long? {
     }
     return value.takeIf { it >= 0 }
 }
+
+/// Auto download media is off and the attachment is not cached: nothing was fetched.
+class AttachmentNotCached : Exception("Not downloaded.")
+
+/// A video or recording over `Engine.AUTO_DOWNLOAD_LIMIT`, held for a tap.
+class AttachmentHeld : Exception("Too large to download automatically.")

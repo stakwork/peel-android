@@ -98,6 +98,44 @@ class PreferencesMergeTest {
     }
 
     @Test
+    fun `auto download media reads true and false in any case and writes lowercase`() {
+        val spec = PreferencesMerge.AUTO_DOWNLOAD_MEDIA
+        assertEquals("peel.auto_download_media", spec.key)
+        assertEquals(1L, spec.parse("true"))
+        assertEquals(0L, spec.parse("FALSE"))
+        assertEquals(null, spec.parse("maybe"))
+        assertEquals("true", spec.format(1))
+        assertEquals("false", spec.format(0))
+        assertTrue(PreferencesMerge.SPECS.contains(spec))
+    }
+
+    @Test
+    fun `auto download media off is taken from a newer file and uploaded when newer here`() {
+        val spec = PreferencesMerge.AUTO_DOWNLOAD_MEDIA
+        val off = file(item("peel.auto_download_media", "200", "false"))
+        assertEquals(Outcome.Take(Local(0, 200)), PreferencesMerge.decide(spec, off, Local(1, 100), now))
+        assertEquals(Outcome.Take(Local(0, 200)), PreferencesMerge.decide(spec, off, null, now))
+        assertEquals(Outcome.Upload(Local(1, 300)), PreferencesMerge.decide(spec, off, Local(1, 300), now))
+    }
+
+    @Test
+    fun `auto download media absent from the file leaves the default on and uploads only a choice`() {
+        val spec = PreferencesMerge.AUTO_DOWNLOAD_MEDIA
+        assertEquals(Outcome.Nothing, PreferencesMerge.decide(spec, file(), null, now))
+        assertEquals(Outcome.Upload(Local(0, 50)), PreferencesMerge.decide(spec, file(), Local(0, 50), now))
+    }
+
+    @Test
+    fun `auto download media is written as a string and other items survive`() {
+        val f = PreferencesFile.parse("""{"items":[{"key":"chat_color","identifier":"x","date":"1","value":"#fff"}]}""")
+        f.setEntry("peel.auto_download_media", "false", 7)
+        val text = f.text()
+        assertTrue(text.contains("chat_color"))
+        assertEquals("false" to 7L, PreferencesFile.parse(text).entry("peel.auto_download_media"))
+        assertTrue(text.contains("\"value\":\"false\""))
+    }
+
+    @Test
     fun `a date chosen here is always after the one it replaces`() {
         assertEquals(101L, PreferencesMerge.nextDate(100, 100))
         assertEquals(500L, PreferencesMerge.nextDate(500, 100))

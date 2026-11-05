@@ -53,7 +53,15 @@ object PreferencesMerge {
         format = { if (it != 0L) "true" else "false" },
     )
 
-    val SPECS = listOf(TIP, CONFIRMATION, PIN_TIMEOUT, BIOMETRIC)
+    /// Peel's `peel.auto_download_media`: "true"/"false" in any case (PeelCore's
+    /// `flag`); 1/0 here. Default apply policy: always the newest.
+    val AUTO_DOWNLOAD_MEDIA = Spec(
+        PreferencesFile.AUTO_DOWNLOAD_MEDIA_KEY,
+        parse = { text -> when (text.lowercase()) { "true" -> 1L; "false" -> 0L; else -> null } },
+        format = { if (it != 0L) "true" else "false" },
+    )
+
+    val SPECS = listOf(TIP, CONFIRMATION, PIN_TIMEOUT, BIOMETRIC, AUTO_DOWNLOAD_MEDIA)
 
     /// This device's value (in the spec's unit) and its date in seconds;
     /// 0 for one never chosen on a device.
