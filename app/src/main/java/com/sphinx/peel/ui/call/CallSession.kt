@@ -72,7 +72,9 @@ class CallSession(
     var state by mutableStateOf(CallConnectionState.CONNECTING)
         private set
 
-    /// When the room first connected: the running time counts from here.
+    /// When the first participant joined the room (epoch ms), so everyone
+    /// sees the same running time; falls back to the local connect time
+    /// when no join time is known. Only ever moves earlier.
     var connectedAtMs by mutableStateOf<Long?>(null)
         private set
     var tiles by mutableStateOf<List<CallTile>>(emptyList())
@@ -114,6 +116,7 @@ class CallSession(
     private var switchingMic = false
     private var switchingCamera = false
     private var failed = false
+    private var everConnected = false
 
     init {
         scope.launch { room.events.collect { refresh() } }
@@ -153,6 +156,19 @@ class CallSession(
     }
 
     companion object {
+        /// The call's start: the earliest known join time (epoch ms) of
+        /// anyone in the room. Never later than [current] (so it survives
+        /// the first participant leaving); with nothing known and no
+        /// [current], [fallback] (the local connect time).
+        internal fun earliestStart(current: Long?, joinedAts: List<Long?>, fallback: Long): Long {
+            val earliest = joinedAts.filterNotNull().minOrNull()
+            return when {
+                earliest == null -> current ?: fallback
+                current == null -> earliest
+                else -> minOf(current, earliest)
+            }
+        }
+
         /// "03:18", "1:02:07" past the hour — PeelCore's own
         /// `Duration.formatted(.time(...))`, a pure function (no `Date`/
         /// `Room` involved) so it can be tested without a LiveKit session.
@@ -263,12 +279,18 @@ class CallSession(
 
         val now = when (room.state) {
             Room.State.CONNECTED -> {
-                if (connectedAtMs == null) connectedAtMs = System.currentTimeMillis()
+                everConnected = true
+                val start = earliestStart(
+                    connectedAtMs,
+                    listOf(local.joinedAt) + others.map { it.joinedAt },
+                    System.currentTimeMillis(),
+                )
+                if (start != connectedAtMs) connectedAtMs = start
                 CallConnectionState.CONNECTED
             }
             Room.State.RECONNECTING -> CallConnectionState.RECONNECTING
-            Room.State.CONNECTING -> if (connectedAtMs == null) CallConnectionState.CONNECTING else CallConnectionState.RECONNECTING
-            Room.State.DISCONNECTED -> if (connectedAtMs == null && !failed) CallConnectionState.CONNECTING else CallConnectionState.LOST
+            Room.State.CONNECTING -> if (!everConnected) CallConnectionState.CONNECTING else CallConnectionState.RECONNECTING
+            Room.State.DISCONNECTED -> if (!everConnected && !failed) CallConnectionState.CONNECTING else CallConnectionState.LOST
         }
         if (now != state) state = now
     }

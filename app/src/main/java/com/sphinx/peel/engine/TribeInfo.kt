@@ -25,6 +25,20 @@ data class TribeInfo(
     val pricePerMessageMsat: Long,
     /// Staked with each message, paid back later — `"escrow_amount"`.
     val escrowMsat: Long,
+    /// What the tribe says about itself, for its details view only —
+    /// `"description"`, `"tags"`, `"owner_alias"`, `"member_count"`. Not
+    /// stored: read again each time the details open.
+    val description: String? = null,
+    val tags: List<String> = emptyList(),
+    val ownerAlias: String? = null,
+    val memberCount: Long? = null,
+    /// `"private"`: null when the registry did not say. Only a private tribe is
+    /// sent the sender's time zone (`TimeZoneSharing`).
+    val isPrivate: Boolean? = null,
+    /// `"created"` as the registry wrote it (RFC 3339), for "Created <date>".
+    val created: String? = null,
+    /// `"price_to_join"`, in sats on the registry, kept here in msat; 0 when free or unsaid.
+    val priceToJoinMsat: Long = 0,
 ) {
     companion object {
         /// `pubkey` doesn't match what the registry actually answered —
@@ -54,6 +68,13 @@ data class TribeInfo(
                 img = root.optString("img").takeIf { it.isNotEmpty() },
                 pricePerMessageMsat = root.optLong("price_per_message", 0L).coerceAtLeast(0L),
                 escrowMsat = root.optLong("escrow_amount", 0L).coerceAtLeast(0L),
+                description = root.optString("description").trim().takeIf { it.isNotEmpty() },
+                tags = root.optJSONArray("tags")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).trim().takeIf { t -> t.isNotEmpty() } } } ?: emptyList(),
+                ownerAlias = root.optString("owner_alias").trim().takeIf { it.isNotEmpty() },
+                memberCount = if (root.has("member_count")) root.optLong("member_count").takeIf { it > 0 } else null,
+                isPrivate = if (root.has("private") && !root.isNull("private")) root.optBoolean("private") else null,
+                priceToJoinMsat = (root.optLong("price_to_join", 0L).coerceIn(0L, Long.MAX_VALUE / 1000)) * 1000,
+                created = root.optString("created").trim().takeIf { it.isNotEmpty() },
             )
             if (info.pubkey != pubkey) throw MismatchException(pubkey)
             info

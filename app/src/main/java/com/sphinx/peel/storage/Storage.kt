@@ -271,6 +271,44 @@ class Storage(context: Context, account: String = "default") {
         return state
     }
 
+    /// This chat's time zone item: whether the offset is shared (null row = on)
+    /// and the zone chosen for it (null = the device's).
+    data class ChatTimeZone(val enabled: Boolean, val identifier: String?)
+
+    fun chatTimeZone(chat: String): ChatTimeZone? {
+        helper.readableDatabase
+            .query("chatTimeZone", arrayOf("enabled", "identifier"), "chat = ?", arrayOf(chat), null, null, null)
+            .use { c -> return if (c.moveToFirst()) ChatTimeZone(c.getInt(0) != 0, c.getString(1)) else null }
+    }
+
+    fun setChatTimeZone(chat: String, item: ChatTimeZone) {
+        val values = ContentValues().apply {
+            put("chat", chat)
+            put("enabled", if (item.enabled) 1 else 0)
+            put("identifier", item.identifier)
+        }
+        helper.writableDatabase.insertWithOnConflict("chatTimeZone", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /// The bodies of the newest messages other people sent in `chat` since
+    /// `since` (ms) that carry a `tz`, newest first.
+    fun timeZoneBodies(chat: String, since: Long, limit: Int = 20): List<String?> {
+        val bodies = mutableListOf<String?>()
+        helper.readableDatabase.query(
+            "message", arrayOf("body"),
+            "chat = ? AND fromMe = 0 AND timestamp >= ? AND deleted = 0 AND body LIKE '%tz%'", arrayOf(chat, since.toString()),
+            null, null, "timestamp DESC", limit.toString(),
+        ).use { c -> while (c.moveToNext()) bodies += c.getString(0) }
+        return bodies
+    }
+
+    /// When the chat's oldest message was sent (ms): since when someone is a contact.
+    fun firstMessageTime(chat: String): Long? {
+        helper.readableDatabase
+            .rawQuery("SELECT MIN(timestamp) FROM message WHERE chat = ? AND timestamp IS NOT NULL", arrayOf(chat))
+            .use { c -> return if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+    }
+
     fun value(setting: Setting): String? {
         helper.readableDatabase
             .query("setting", arrayOf("value"), "key = ?", arrayOf(setting.key), null, null, null)
@@ -1492,6 +1530,7 @@ class Storage(context: Context, account: String = "default") {
             v9(db)
             v10(db)
             v11(db)
+            v12(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -1508,6 +1547,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 9) v9(db)
             if (oldVersion < 10) v10(db)
             if (oldVersion < 11) v11(db)
+            if (oldVersion < 12) v12(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -1737,8 +1777,15 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("CREATE INDEX invite_tag ON invite(tag) WHERE tag IS NOT NULL")
         }
 
+        // `chatTimeZone`: per chat, whether this account's time zone offset goes
+        // with what it sends there, and a zone chosen for that chat alone (null
+        // follows the device's). Peel's `timezone` preference item, kept local.
+        private fun v12(db: SQLiteDatabase) {
+            db.execSQL("CREATE TABLE chatTimeZone (chat TEXT PRIMARY KEY NOT NULL, enabled INTEGER NOT NULL, identifier TEXT)")
+        }
+
         companion object {
-            const val VERSION = 11
+            const val VERSION = 12
         }
     }
 }

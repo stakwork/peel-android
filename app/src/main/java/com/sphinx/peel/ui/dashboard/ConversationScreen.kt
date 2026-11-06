@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -58,6 +60,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -81,6 +86,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -113,6 +120,7 @@ import com.sphinx.peel.ui.payments.RequestMessage
 import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.TimeZones
 import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
@@ -174,6 +182,7 @@ fun ConversationScreen(
     var pendingFocus by remember(chat) { mutableStateOf(focusMessageUuid) }
     val highlight = remember(chat) { MessageHighlight() }
     var error by remember(chat) { mutableStateOf<String?>(null) }
+    var showDetails by remember(chat) { mutableStateOf(false) }
     var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
@@ -412,6 +421,12 @@ fun ConversationScreen(
         return
     }
 
+    val detailsConversation = conversation
+    if (showDetails && detailsConversation != null) {
+        com.sphinx.peel.ui.details.ChatDetailsScreen(engine, storage, detailsConversation, onBack = { showDetails = false })
+        return
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -420,18 +435,41 @@ fun ConversationScreen(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Theme.colors.text)
             }
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Theme.colors.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (isAgent) {
-                Spacer(Modifier.width(8.dp))
-                AgentTag()
+            // The name opens the chat's details: a tribe's or a contact's.
+            val detailsLabel = if (isTribe) "Tribe details" else "Contact details"
+            Row(
+                Modifier.weight(1f)
+                    .clickable(enabled = detailsConversation != null, onClickLabel = detailsLabel) { showDetails = true }
+                    .semantics { contentDescription = "$title, $detailsLabel" },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f, fill = false)) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Theme.colors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // A contact's local time, when they shared a zone and it is not yours.
+                    val theirZone by produceState<java.time.ZoneId?>(null, chat, messages.size) {
+                        value = if (isTribe || isAgent) null else withContext(Dispatchers.IO) { engine.theirTimeZone(chat) }
+                    }
+                    theirZone?.let { zone ->
+                        val mine = java.time.ZoneId.systemDefault()
+                        TimeZones.localTimeLine(zone, java.time.Instant.now(), mine) { at, z ->
+                            java.time.format.DateTimeFormatter.ofLocalizedTime(java.time.format.FormatStyle.SHORT).withZone(z).format(at)
+                        }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                if (isAgent) {
+                    Spacer(Modifier.width(8.dp))
+                    AgentTag()
+                }
+                Spacer(Modifier.weight(1f))
             }
             // Only when this account has a call server at all (`callServer()`'s
             // own doc comment: null on a local test server, never configured) -
@@ -1028,7 +1066,14 @@ private val HIDDEN_MONEY_TYPES = setOf(3, 7, 8, 9)
 /// One distinct boost sender, as `senderDisplay` describes them.
 internal data class BoostSender(val name: String, val photoUrl: String?, val hueKey: String)
 
-internal data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean, val senders: List<BoostSender> = emptyList())
+internal data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean, val senders: List<BoostSender> = emptyList(), val boosts: List<BoostEntry> = emptyList())
+
+/// One boost, for the "Boosts" popup: who sent it and how much (msat).
+internal data class BoostEntry(val sender: BoostSender, val amountMsat: Long)
+
+/// "<total> sats from N boosts" — the popup's summary line.
+internal fun boostSummaryLine(summary: BoostSummary): String =
+    "%,d sats from %d %s".format(java.util.Locale.US, summary.totalMsat / 1000, summary.count, if (summary.count == 1) "boost" else "boosts")
 
 /// Every boost in `messages`, summed per message it boosts — PeelCore's
 /// `BoostSummary`, trimmed: no pending/unsettled/failed tracking — a
@@ -1044,11 +1089,16 @@ internal fun boostSummaries(messages: List<MessageRow>, myAlias: String, myPhoto
         val target = row.replyUuid ?: continue
         byTarget.getOrPut(target) { mutableListOf() }.add(row)
     }
-    return byTarget.mapValues { (_, boosts) ->
+    return byTarget.mapValues { (_, unsorted) ->
+        val boosts = unsorted.sortedBy { it.timestamp } // oldest first (stable)
         BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe },
             senders = boosts
                 .map { senderDisplay(it, myAlias, myPhotoUrl, isTribe).let { (name, photoUrl, hueKey) -> BoostSender(name, photoUrl, hueKey) } }
                 .distinctBy { it.hueKey to it.name },
+            boosts = boosts.map {
+                val (name, photoUrl, hueKey) = senderDisplay(it, myAlias, myPhotoUrl, isTribe)
+                BoostEntry(BoostSender(name, photoUrl, hueKey), it.msat ?: declaredAmountMsat(it.body) ?: 0L)
+            },
         )
     }
 }
@@ -1367,6 +1417,7 @@ private fun MessageRowView(
 /// new here, not something PeelCore's own card shows inline — a
 /// reasonable use for presence given there's no sidebar indicator or call
 /// banner to spend it on yet.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> Unit) {
     var presence by remember(link.room) { mutableStateOf<CallPresence>(CallPresence.Unknown) }
@@ -1374,6 +1425,34 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
         engine.callPresence(link).collect { presence = it }
     }
     val people = presence.people().orEmpty()
+    var showParticipants by remember(link.room) { mutableStateOf(false) }
+    if (showParticipants && people.isNotEmpty()) {
+        ModalBottomSheet(
+            onDismissRequest = { showParticipants = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Text(
+                "${people.size} on the call",
+                style = MaterialTheme.typography.titleMedium,
+                color = Theme.colors.text,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                items(people.size) { i ->
+                    val person = people[i]
+                    val name = person.nickname.ifEmpty { "Guest" }
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Avatar(name = name, url = person.avatarUrl, size = 32.dp, hue = PersonHue.of(person.identity))
+                        Spacer(Modifier.width(12.dp))
+                        Text(name, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                    }
+                }
+            }
+        }
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -1392,7 +1471,13 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
                 Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
             }
             when {
-                people.isNotEmpty() -> Row(verticalAlignment = Alignment.CenterVertically) {
+                people.isNotEmpty() -> Row(
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showParticipants = true }
+                        .semantics { contentDescription = "${people.size} on the call. Show participants" },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box(Modifier.width((26 + (minOf(people.size, 3) - 1) * 19).dp).height(26.dp)) {
                         people.take(3).forEachIndexed { i, person ->
                             Avatar(
@@ -1870,10 +1955,13 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
 /// when there are several distinct boosters), as on iOS.
 @Composable
 private fun BoostChip(boosts: BoostSummary) {
+    var showing by remember { mutableStateOf(false) }
+    if (showing) BoostersDialog(boosts) { showing = false }
     Row(
         Modifier
             .clip(RoundedCornerShape(10.dp))
             .background(Theme.colors.fieldFill)
+            .clickable(onClickLabel = "Show who boosted") { showing = true }
             .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1904,6 +1992,39 @@ private fun BoostChip(boosts: BoostSummary) {
             }
         }
     }
+}
+
+/// The "Boosts" popup: summary line, then every boost oldest first.
+@Composable
+private fun BoostersDialog(boosts: BoostSummary, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Boosts")
+                Text(boostSummaryLine(boosts), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+            }
+        },
+        text = {
+            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                for (entry in boosts.boosts) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(
+                            name = entry.sender.name.ifBlank { "?" }, url = entry.sender.photoUrl, size = 32.dp,
+                            hue = PersonHue.of(entry.sender.hueKey), shape = AvatarShape.CIRCLE,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            entry.sender.name, Modifier.weight(1f), color = PersonHue.of(entry.sender.hueKey).fill,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Text("${formattedSats(entry.amountMsat)} sats", color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 /// "1,200" — msat to whole sats, thousands-grouped, as PeelCore's own

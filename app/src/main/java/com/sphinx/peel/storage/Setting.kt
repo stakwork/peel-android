@@ -120,4 +120,13 @@ enum class Setting(val key: String) {
     /// config's default (`Engine.connectAndRegister`). Other accounts
     /// (a restore) keep resolving the default each time, as before.
     SERVER_PINNED("serverPinned"),
+
+    /// "Share my time zone" per chat (`TimeZoneSharing.encodeStore`): one JSON
+    /// object `{chat pubkey: {e: enabled, i: IANA id or "", d: date in seconds}}`.
+    /// Synced as the preferences file's per-chat `timezone` items.
+    CHAT_TIME_ZONES("chatTimeZones"),
+
+    /// Which tribes the registry calls private (`TimeZoneSharing.encodeFlags`,
+    /// `{pubkey: bool}`): only a private tribe is sent the time zone.
+    TRIBE_PRIVACY("tribePrivacy"),
 }
