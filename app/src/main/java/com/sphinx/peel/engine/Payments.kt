@@ -323,7 +323,9 @@ suspend fun Engine.sendPayment(chat: String, amountMsat: Long, text: String = ""
     requirePerson(chat, "pay")
     checkPayment(amountMsat, confirmedMsat, reserveMsat = PING_MSAT)
     if (!isConnected) throw PaymentRefused("Not connected.")
-    val body = JSONObject().put("content", text.trim()).toString()
+    val body = JSONObject().put("content", text.trim()).apply {
+        timeZoneMetadata(chat, isTribe = false)?.let { put("metadata", it) }
+    }.toString()
     return deliverMoney(chat, DIRECT_PAYMENT_MESSAGE_TYPE, body, amountMsat, null)
 }
 

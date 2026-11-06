@@ -670,6 +670,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val body = JSONObject().put("content", text).apply {
             if (replyTo != null) put("replyUuid", replyTo)
             if (inThread != null) put("threadUuid", inThread)
+            timeZoneMetadata(chat, isTribe)?.let { put("metadata", it) }
         }.toString()
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
@@ -859,6 +860,64 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         return row
     }
 
+    /// A chat's "Share my time zone" choice: on, with the device's zone, until chosen otherwise.
+    fun timeZoneChoice(chat: String): TimeZoneSharing.Choice = timeZoneStore()[chat] ?: TimeZoneSharing.Choice()
+
+    private fun timeZoneStore(): Map<String, TimeZoneSharing.Choice> =
+        TimeZoneSharing.decodeStore(storage.value(Setting.CHAT_TIME_ZONES))
+
+    /// Saves a chat's choice right away (dated strictly after what it replaces, as
+    /// `setPreference`) and syncs it in the background. `identifier` "" = the device's zone.
+    fun setTimeZoneChoice(chat: String, enabled: Boolean, identifier: String) {
+        val store = timeZoneStore().toMutableMap()
+        val date = PreferencesMerge.nextDate(System.currentTimeMillis() / 1000, store[chat]?.date ?: 0L)
+        store[chat] = TimeZoneSharing.Choice(enabled, identifier, date)
+        storage.apply(Storage.Commit(settings = mapOf(Setting.CHAT_TIME_ZONES to TimeZoneSharing.encodeStore(store))))
+        syncPreferencesInBackground()
+    }
+
+    /// Whether the time zone setting is offered in this chat: a person, or a tribe the
+    /// registry called private. A public tribe (or one not known yet) never gets the offset.
+    fun offersTimeZone(chat: String, isTribe: Boolean): Boolean =
+        !isTribe || TimeZoneSharing.decodeFlags(storage.value(Setting.TRIBE_PRIVACY))[chat] == true
+
+    /// What the registry said about a tribe's privacy, kept for `offersTimeZone`.
+    fun recordTribePrivacy(chat: String, isPrivate: Boolean) {
+        val flags = TimeZoneSharing.decodeFlags(storage.value(Setting.TRIBE_PRIVACY))
+        if (flags[chat] == isPrivate) return
+        storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_PRIVACY to TimeZoneSharing.encodeFlags(flags + (chat to isPrivate)))))
+    }
+
+    /// The `metadata` field of a text, attachment or direct-payment message: `{"tz":"GMT+1"}`
+    /// when this chat shares its time zone, else null (iOS `TimeZoneOffset`).
+    fun timeZoneMetadata(chat: String, isTribe: Boolean): String? =
+        TimeZoneSharing.metadata(timeZoneChoice(chat), offersTimeZone(chat, isTribe), System.currentTimeMillis())
+
+    /// Merges the per-chat `timezone` items with the file, as `syncPreferences` does the
+    /// account-wide ones. True when something must go up (written into `target`).
+    private fun syncTimeZones(file: PreferencesFile?, target: PreferencesFile): Boolean {
+        val local = timeZoneStore()
+        var upload = false
+        val taken = mutableMapOf<String, TimeZoneSharing.Choice>()
+        for (chat in (local.keys + (file?.chatIdentifiers(TimeZoneSharing.KEY) ?: emptyList())).toSet()) {
+            when (val outcome = TimeZoneSharing.decide(file?.timeZone(chat), local[chat])) {
+                is TimeZoneSharing.Outcome.Upload -> {
+                    target.setTimeZone(chat, outcome.choice, outcome.choice.date)
+                    upload = true
+                }
+                is TimeZoneSharing.Outcome.Take -> taken[chat] = outcome.choice
+                TimeZoneSharing.Outcome.Nothing -> {}
+            }
+        }
+        if (taken.isNotEmpty()) {
+            // Only over what was merged against: a choice made here meanwhile goes up next time.
+            val now = timeZoneStore().toMutableMap()
+            for ((chat, choice) in taken) if (now[chat] == local[chat]) now[chat] = choice
+            storage.apply(Storage.Commit(settings = mapOf(Setting.CHAT_TIME_ZONES to TimeZoneSharing.encodeStore(now))))
+        }
+        return upload
+    }
+
     /// This account's own one-tap boost amount, in msat — whatever was
     /// last chosen here or taken from another device
     /// (`syncPreferences`), else `BOOST_AMOUNT_MSAT`'s own default.
@@ -1026,6 +1085,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 PreferencesMerge.Outcome.Nothing -> {}
             }
         }
+        if (syncTimeZones(file, target)) upload = true
         if (upload) {
             uploadPreferencesFile(memes, secret, target)
             if (file == null) markPreferencesFileSeen()
@@ -1151,6 +1211,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             put("mediaToken", mediaToken)
             if (replyTo != null) put("replyUuid", replyTo)
             if (inThread != null) put("threadUuid", inThread)
+            timeZoneMetadata(chat, isTribe)?.let { put("metadata", it) }
         }.toString()
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
@@ -1604,6 +1665,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
             afterConnect()
             refreshTribeNames()
+            refreshTribePrivacy()
             runCatching { syncPreferences() }
         }
     }
@@ -1811,6 +1873,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         suspend fun attempt(chat: String): Boolean = try {
             val info = TribeInfo.fetch(chat, host)
             storage.updateTribeInfo(chat, info.name, info.img, info.pricePerMessageMsat, info.escrowMsat)
+            info.isPrivate?.let { recordTribePrivacy(chat, it) }
             true
         } catch (e: Exception) {
             false
@@ -1823,6 +1886,21 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         delay(2_000)
         for (chat in failed) {
             if (!attempt(chat)) Log.w("PeelTribes", "no tribe info for $chat from $host")
+        }
+    }
+
+    /// Asks the registry whether each named tribe is private, once per tribe, best effort
+    /// (`refreshTribeNames` only fetches tribes still without a name, and records theirs).
+    private suspend fun refreshTribePrivacy() {
+        val host = storage.value(Setting.TRIBE_HOST)?.takeIf { it.isNotEmpty() } ?: return
+        val known = TimeZoneSharing.decodeFlags(storage.value(Setting.TRIBE_PRIVACY)).keys
+        for (tribe in storage.conversations()) {
+            if (!tribe.isTribe || tribe.chat in known) continue
+            try {
+                TribeInfo.fetch(tribe.chat, host).isPrivate?.let { recordTribePrivacy(tribe.chat, it) }
+            } catch (e: Exception) {
+                Log.w("PeelTribes", "no privacy for ${tribe.chat} from $host")
+            }
         }
     }
 
