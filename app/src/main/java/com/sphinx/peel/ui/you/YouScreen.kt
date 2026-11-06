@@ -485,6 +485,13 @@ private fun YouMain(
                 TextButton(onClick = {
                     confirmingForget = false
                     scope.launch {
+                        // Best effort, before cancel and any wipe (no engine exists after):
+                        // drop this install's token on the server. Offline, a failure or a
+                        // timeout is only logged and never blocks the forget.
+                        val unregistered = runCatching {
+                            kotlinx.coroutines.withTimeoutOrNull(3_000) { engine.unregisterPushToken() }
+                        }.getOrNull()
+                        if (unregistered != true) android.util.Log.d("YouScreen", "server push unregister skipped or failed")
                         engine.cancel()
                         // The Stadeum pairing goes with the account.
                         Stadeum.model.disconnect()

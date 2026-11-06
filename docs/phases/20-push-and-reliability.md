@@ -5,6 +5,24 @@
 **Built; compiled and unit-tested** (`testDebugUnitTest` 204 tests, `assembleDebug`
 and `lintDebug` pass). Not yet run against a real FCM push or the hub.
 
+**Forget account (2026-11-05):** `PushRegistrar.accountForgotten` also removes the stored
+FCM token and calls `FirebaseMessaging.deleteToken()` (best-effort, async), so the mixer
+drops the old token on its next push. The mixer-side unregister now exists
+(sphinx-rs 0.8.42 `unregisterPushTokenForApp`): `Engine.unregisterPushToken()` is called by the
+"Forget this account" confirm in `YouScreen` before `engine.cancel()` and any wipe (no engine
+exists afterwards), inside `withTimeoutOrNull(3s)`; offline, failure or timeout is only logged and
+the local cleanup above is the fallback. Lock (`accountClosed`) keeps the token. Android never
+sends `setActive`.
+
+**readAll (2026-11-06):** `ReadAllPolicy` (engine package): the core's `readAll` is sent only when
+the LOCAL real unread total (sum of `ConversationRow.unread`, not `shownUnread`) is 0, connected,
+no restore running, and at most once per 30 minutes (monotonic clock); a failed attempt does not
+start the window. Triggered by `Engine.maybeReadAll()` at the end of `afterConnect` (after read
+sync and catch-up) and after `markRead`. No UI, no setting.
+
+**Badge-only pushes:** `PeelMessagingService.isBadgeOnly` (no child, blank title and body) returns
+without posting; the reconnect decision before it is unchanged.
+
 **Setup:** put the Firebase project's `google-services.json` in `app/`
 (git-ignored; without it the plugin is not applied and push is inert). Debug
 and release share one Firebase app.
