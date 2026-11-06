@@ -49,12 +49,14 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.MessageMarkup
+import com.sphinx.peel.engine.Mentions
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.storage.ThreadListItem
 import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AvatarShape
+import com.sphinx.peel.ui.components.MessageText
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.dashboard.previewContent
 import com.sphinx.peel.ui.dashboard.senderDisplay
@@ -168,7 +170,9 @@ private fun ThreadRow(item: ThreadListItem, myAlias: String, myPhotoUrl: String?
     var menuOpen by remember { mutableStateOf(false) }
     val isTribe = item.conversation.isTribe
     val (rootName, rootPhoto, rootHueKey) = senderDisplay(item.root, myAlias, myPhotoUrl, isTribe)
-    val rootText = MessageMarkup.plainText(previewContent(item.root)).ifBlank { attachmentFallback(item.root) }
+    val rootContent = previewContent(item.root)
+    val rootIsBlank = MessageMarkup.plainText(rootContent).isBlank()
+    val rootFallback = attachmentFallback(item.root)
     val unread = item.unread > 0
 
     Box {
@@ -196,14 +200,25 @@ private fun ThreadRow(item: ThreadListItem, myAlias: String, myPhotoUrl: String?
                     )
                 }
                 Text(
-                    buildAnnotatedString {
-                        withStyle(SpanStyle(color = PersonHue.of(rootHueKey).fill, fontWeight = FontWeight.SemiBold)) { append(rootName) }
-                        append(" ")
-                        withStyle(SpanStyle(fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal)) { append(rootText) }
-                    },
-                    style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    rootName,
+                    style = MaterialTheme.typography.bodyMedium.copy(color = PersonHue.of(rootHueKey).fill, fontWeight = FontWeight.SemiBold),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
+                if (rootIsBlank) {
+                    Text(
+                        rootFallback,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal),
+                        color = Theme.colors.text,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    // The same markdown as a chat bubble, capped at two lines.
+                    MessageText(
+                        rootContent,
+                        myAliases = remember(myAlias) { Mentions.ownAliases(myAlias) },
+                        maxLines = 2,
+                    )
+                }
                 Text(
                     buildAnnotatedString {
                         if (unread) {
