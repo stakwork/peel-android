@@ -12,10 +12,10 @@ import java.util.Locale
 /// `ChatDetails.swift`: a row is shown only when it has something to say.
 /// Ported since: the QR of the tribe link, the "Seen here" count, the
 /// "To join" fact, the hero subtitle and the time zone switch/picker
-/// (`TimeZoneSharing`). Not ported (no backing functionality on Android
+/// (`TimeZoneSharing`), and on a contact the key's QR with its share button
+/// and "since"/local-time lines (`TimeZones.kt`). Not ported (no backing functionality on Android
 /// yet): leave tribe, delete contact, edit tribe, members list, editing
-/// "How you appear in #<tribe>", the QR button (save/share the QR image),
-/// a contact's QR; see `docs/phases/22-tribe-details-parity.md`.
+/// "How you appear in #<tribe>"; see `docs/phases/22-tribe-details-parity.md`.
 object ChatDetails {
     /// A tribe's link in the official apps' format (`Tribe.link`).
     fun tribeLink(pubkey: String, host: String?): String? =

@@ -16,6 +16,10 @@ the iOS source itself was not read.
   `TimeZone.getAvailableIDs()`, each with its GMT offset); a pick saves at once. Offered in direct chats and **private**
   tribes only. A tribe's privacy comes from the registry (`Setting.TRIBE_PRIVACY`, filled by the details screen,
   `refreshTribeNames` and `refreshTribePrivacy` at connect); unknown counts as public, i.e. nothing is sent.
+- **Merged with main's `TimeZones.kt`** (receiving side: their zone, "local time" lines, `Storage.chatTimeZone`, schema v12):
+  sending now goes only through this phase's store (`Engine.timeZoneMetadata`), so main's duplicate send-side Engine
+  accessors and picker were dropped; `TimeZones.theirTimeZone`/`localTimeLine` and the contact's "since" line stay. The
+  `chatTimeZone` table is no longer written.
 - **Storage/sync**: local `Setting.CHAT_TIME_ZONES` (one JSON map) and the account preferences file item
   `key "timezone"`, `identifier <chat pubkey>`, `value {"timezone_enabled":"true|false","timezone_identifier":"<IANA>" or ""}`
   (legacy `timezoneEnabled`/`timezoneIdentifier` read; a value held as JSON text read). `PreferencesFile` gained

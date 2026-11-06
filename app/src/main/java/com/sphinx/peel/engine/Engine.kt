@@ -696,6 +696,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         return row
     }
 
+    /// The other side's zone in a direct message, from the newest offset they
+    /// sent within 90 days that can be read.
+    fun theirTimeZone(chat: String): java.time.ZoneId? =
+        TimeZones.newest(storage.timeZoneBodies(chat, System.currentTimeMillis() - TimeZones.FRESHNESS_MS))
+
     /// What a tribe's member pays for an ordinary message (text or
     /// attachment): the owner's own price plus escrow, or the 3-sat
     /// floor if that's higher — PeelCore's own `Tribe.messageAmountMsat`/
