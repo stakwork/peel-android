@@ -121,6 +121,50 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         )
     }
 
+    /// The chats that have a per-chat item for `key` (any identifier but the account-wide one).
+    fun chatIdentifiers(key: String): List<String> =
+        items.filter { it.optString("key") == key && it.optString("identifier") != ACCOUNT_WIDE }
+            .map { it.optString("identifier") }.distinct()
+
+    /// The chat's `timezone` item: its choice if the value reads (an object, or JSON text of
+    /// one; current or legacy field names) and its date. Null if the file has no item.
+    fun timeZone(chat: String): TimeZoneSharing.FileItem? {
+        val item = items.lastOrNull { it.optString("key") == TimeZoneSharing.KEY && it.optString("identifier") == chat } ?: return null
+        val value = when (val raw = item.opt("value")) {
+            is JSONObject -> raw
+            is String -> try { JSONObject(raw) } catch (e: org.json.JSONException) { null }
+            else -> null
+        }
+        val date = readDate(item)
+        val choice = value?.let {
+            TimeZoneSharing.decode(
+                it.opt(TimeZoneSharing.ENABLED_FIELD), it.opt(TimeZoneSharing.IDENTIFIER_FIELD),
+                it.opt(TimeZoneSharing.LEGACY_ENABLED_FIELD), it.opt(TimeZoneSharing.LEGACY_IDENTIFIER_FIELD),
+                date ?: 0L,
+            )
+        }
+        return TimeZoneSharing.FileItem(choice, date)
+    }
+
+    /// Replaces every copy of the chat's `timezone` item with one: the value as the iPhone
+    /// writes it, `{"timezone_enabled":"true|false","timezone_identifier":"<id>" or ""}`.
+    fun setTimeZone(chat: String, choice: TimeZoneSharing.Choice, dateSeconds: Long) {
+        items.removeAll { it.optString("key") == TimeZoneSharing.KEY && it.optString("identifier") == chat }
+        items.add(
+            JSONObject().apply {
+                put("key", TimeZoneSharing.KEY)
+                put("identifier", chat)
+                put("date", dateSeconds.toString())
+                put(
+                    "value",
+                    JSONObject()
+                        .put(TimeZoneSharing.ENABLED_FIELD, if (choice.enabled) "true" else "false")
+                        .put(TimeZoneSharing.IDENTIFIER_FIELD, choice.identifier),
+                )
+            },
+        )
+    }
+
     /// `tip_amount`'s whole-sats value and date, if the file holds one
     /// that reads (more than zero, no overflow in msat).
     fun tipAmount(): Pair<Long, Long>? {
