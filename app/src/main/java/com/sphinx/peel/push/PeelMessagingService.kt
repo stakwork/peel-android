@@ -34,6 +34,7 @@ class PeelMessagingService : FirebaseMessagingService() {
         if (plan.reconnect) engine?.resume()
         if (!plan.postResolved) return
         val data = message.data
+        if (isBadgeOnly(data)) return
         val content = runCatching {
             PushNames.resolve(encryptedChild(data), PushKeyStore.existing(app), PushNameStore.forContext(app).read())
         }.getOrDefault(PushContent.GENERIC)
@@ -50,6 +51,12 @@ class PeelMessagingService : FirebaseMessagingService() {
     }
 
     internal companion object {
+        /// The mixer's badge-only push: a data message with no encrypted child
+        /// and an empty title and body. Nothing to show (Strut skips Android for
+        /// these, so this is only a safety guard).
+        fun isBadgeOnly(data: Map<String, String>): Boolean =
+            encryptedChild(data) == null && data["title"].isNullOrBlank() && data["body"].isNullOrBlank()
+
         /// The child index a push carries, from FCM's flat data map
         /// (`child`) or an APNs-shaped `custom_data` JSON object.
         fun encryptedChild(data: Map<String, String>): String? {

@@ -59,6 +59,8 @@ import uniffi.sphinxrs.send as coreSend
 import uniffi.sphinxrs.signBase64 as coreSignBase64
 import uniffi.sphinxrs.setNetwork as coreSetNetwork
 import uniffi.sphinxrs.setPushTokenForApp as coreSetPushTokenForApp
+import uniffi.sphinxrs.unregisterPushTokenForApp as coreUnregisterPushTokenForApp
+import uniffi.sphinxrs.readAll as coreReadAll
 import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 
 /// Drives one account against the Sphinx core: the engine foundation
@@ -1355,6 +1357,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (!storage.setRead(chat, index, pending = !connected)) return
         if (connected) {
             run { time, stateBytes -> coreMarkRead(seed, time, stateBytes, chat, index.toULong()) }
+            maybeReadAll()
         }
     }
 
@@ -1802,6 +1805,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // A restore that failed or was cut short resumes from its cursor.
             if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
         }.onFailure { Log.w("PeelEngine", "catch-up after connect failed", it) }
+        // Local unread is settled (reads synced, history caught up): reset the mixer's badge if it is 0.
+        runCatching { maybeReadAll() }
         // PeelCore's `cameOnline`: whoever sent the invite this account signed up with is
         // added now, as its first contact. Never fails the catch-up it follows.
         runCatching { addInviterIfPending() }.onFailure { Log.w("PeelEngine", "adding the inviter failed", it) }
@@ -1859,6 +1864,53 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
             done(ok)
         }
+    }
+
+    /// Removes this install's push token from the server through the core
+    /// (`unregisterPushTokenForApp`), under the same app id as registration
+    /// ([PushApp.APP_ID]). For "Forget this account", called before [cancel]
+    /// and any wipe. Answers false, never throws, when not connected or on any
+    /// failure. Logs only the exception class.
+    suspend fun unregisterPushToken(): Boolean = try {
+        if (transport == null) {
+            false
+        } else {
+            run { time, state -> coreUnregisterPushTokenForApp(seed, time, state, PushApp.APP_ID) }
+            true
+        }
+    } catch (e: Exception) {
+        Log.w("Engine", "push unregister failed: ${e.javaClass.simpleName}")
+        false
+    }
+
+    /// Tells the server everything is read (the core's `readAll`) so the
+    /// mixer's badge count resets. Answers false, never throws, when not
+    /// connected or on failure. Only [maybeReadAll] decides when to call it.
+    suspend fun readAllOnServer(): Boolean = try {
+        if (transport == null) {
+            false
+        } else {
+            run { time, state -> coreReadAll(seed, time, state) }
+            true
+        }
+    } catch (e: Exception) {
+        Log.w("Engine", "readAll failed: ${e.javaClass.simpleName}")
+        false
+    }
+
+    private val readAllPolicy = ReadAllPolicy(SystemClock::elapsedRealtime)
+
+    /// Calls [readAllOnServer] when [ReadAllPolicy] allows: local real unread
+    /// total (sum of `ConversationRow.unread`) is 0, connected, not restoring,
+    /// throttled to once per 30 minutes. Run after connect's read sync and after
+    /// a chat is marked read, the two places the local total can become 0.
+    private suspend fun maybeReadAll() {
+        val restoring = restoreProgressFlow.value.restoring
+        val connected = transport != null
+        if (restoring || !connected) return
+        val unread = storage.conversations().sumOf { it.unread }
+        if (!readAllPolicy.shouldCall(unread, connected, restoring)) return
+        if (readAllOnServer()) readAllPolicy.recordSuccess()
     }
 
     /// Each known tribe's real name and photo, from its own registry —

@@ -108,4 +108,15 @@ class PushMessagingTest {
         assertEquals(PushPlan(reconnect = false, postResolved = false), PushPlan.decide(true, true, true))
         assertEquals(PushPlan(reconnect = true, postResolved = false), PushPlan.decide(true, false, true))
     }
+
+    @Test fun `badge only push has no child and blank title and body`() {
+        assertTrue(PeelMessagingService.isBadgeOnly(emptyMap()))
+        assertTrue(PeelMessagingService.isBadgeOnly(mapOf("title" to "", "body" to " ")))
+    }
+
+    @Test fun `a push with a child or text is not badge only`() {
+        assertFalse(PeelMessagingService.isBadgeOnly(mapOf("child" to "aa", "title" to "", "body" to "")))
+        assertFalse(PeelMessagingService.isBadgeOnly(mapOf("title" to "Peel", "body" to "")))
+        assertFalse(PeelMessagingService.isBadgeOnly(mapOf("body" to "You have new messages")))
+    }
 }

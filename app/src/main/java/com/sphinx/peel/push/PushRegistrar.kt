@@ -71,10 +71,11 @@ object PushRegistrar {
     /// is asked for (best-effort, async, never throws or blocks), so FCM
     /// reports the old token invalid and the mixer drops it on its next push.
     ///
-    /// Not a server-side unregister: the mixer's PUSH_TOKEN handler has a
-    /// DELETE action, but the current sphinx-rs bindings can't reach it
-    /// (`setPushTokenForApp` sends action=None, i.e. SET). A sphinx-rs release
-    /// with an action/delete parameter would let us call it before the wipe.
+    /// The server-side unregister (`Engine.unregisterPushToken`, the core's
+    /// `unregisterPushTokenForApp`) is not done here: no engine exists by now,
+    /// so the caller (the "Forget this account" confirm in `YouScreen`) runs it
+    /// first, before `engine.cancel()` and any wipe, best effort within 3 s.
+    /// What is below is the local fallback when that was offline or failed.
     ///
     /// Only for forgetting: [accountClosed] (lock) keeps the token, it is the
     /// install's and the account comes back.
