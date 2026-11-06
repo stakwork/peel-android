@@ -11,16 +11,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -36,17 +42,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.ChatDetails
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.TimeZones
 import com.sphinx.peel.engine.TribeInfo
 import com.sphinx.peel.storage.ConversationRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.components.ConversationAvatar
 import com.sphinx.peel.ui.payments.PageFrame
+import com.sphinx.peel.ui.payments.QrCode
+import com.sphinx.peel.ui.payments.QrCodeImage
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.toast.LocalToast
 import com.sphinx.peel.ui.toast.ToastType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 /// A chat's details (the iPhone's `ChatDetailsScreen`), opened by tapping
 /// the conversation's header: a tribe's, or a contact's. Pushed over the
@@ -59,7 +72,7 @@ fun ChatDetailsScreen(engine: Engine, storage: Storage, conversation: Conversati
     if (conversation.isTribe) {
         TribeDetails(storage, conversation, onBack)
     } else {
-        ContactDetails(conversation, onBack)
+        ContactDetails(engine, storage, conversation, onBack)
     }
 }
 
@@ -121,21 +134,129 @@ private fun TribeDetails(storage: Storage, conversation: ConversationRow, onBack
 }
 
 @Composable
-private fun ContactDetails(conversation: ConversationRow, onBack: () -> Unit) {
+private fun ContactDetails(engine: Engine, storage: Storage, conversation: ConversationRow, onBack: () -> Unit) {
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val toast = LocalToast.current
+    val since = remember(conversation.chat) { storage.firstMessageTime(conversation.chat) }
+    val theirZone by produceState<ZoneId?>(null, conversation.chat) {
+        value = withContext(Dispatchers.IO) { engine.theirTimeZone(conversation.chat) }
+    }
     PageFrame("Details", onBack) {
         Hero(conversation, conversation.name)
+        // Under the name, like the iPhone: since when, and their time when it is not yours.
+        Column(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            since?.let {
+                val day = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()))
+                HeroLine("Contact since $day")
+            }
+            theirZone?.let { zone ->
+                TimeZones.localTimeLine(zone, Instant.now(), ZoneId.systemDefault(), ::localTime)?.let { HeroLine(it) }
+            }
+        }
         Spacer(Modifier.height(24.dp))
-        SectionLabel("Public key")
+        Text(
+            "Public key",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = Theme.colors.secondaryText,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        )
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            QrCodeImage(conversation.chat, 220.dp, "QR code of their public key")
+        }
+        Spacer(Modifier.height(12.dp))
         MonoValue(conversation.chat)
         Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = {
-            clipboard.setText(AnnotatedString(conversation.chat))
-            toast.show("Key copied", ToastType.Success)
-        }) { Text("Copy key") }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
+            OutlinedButton(onClick = {
+                clipboard.setText(AnnotatedString(conversation.chat))
+                toast.show("Key copied", ToastType.Success)
+            }) { Text("Copy key") }
+            OutlinedButton(onClick = {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, conversation.chat)
+                context.startActivity(Intent.createChooser(send, "Share public key"))
+            }) { Text("Share") }
+            OutlinedButton(onClick = { shareQr(context, conversation.chat) }) { Text("QR") }
+        }
+        Spacer(Modifier.height(24.dp))
+        TimeZoneSection(engine, conversation)
         Spacer(Modifier.height(24.dp))
     }
+}
+
+private fun localTime(at: Instant, zone: ZoneId): String =
+    DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(zone).format(at)
+
+/// The QR as a PNG in the shared cache folder, handed to the share sheet.
+private fun shareQr(context: android.content.Context, text: String) {
+    val bitmap = QrCode.bitmap(text) ?: return
+    val file = java.io.File(context.cacheDir, "outgoing/key-qr.png")
+    file.parentFile?.mkdirs()
+    file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val send = Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    context.startActivity(Intent.createChooser(send, "Share QR code"))
+}
+
+/// The "Time zone" section: the switch for sharing your offset with this
+/// contact, and a picker to send another zone's instead (the default entry
+/// uses the device's).
+@Composable
+private fun TimeZoneSection(engine: Engine, conversation: ConversationRow) {
+    val toast = LocalToast.current
+    var sharing by remember(conversation.chat) { mutableStateOf(engine.timeZoneSharing(conversation.chat)) }
+    var identifier by remember(conversation.chat) { mutableStateOf(engine.timeZoneIdentifier(conversation.chat)) }
+    var picking by remember { mutableStateOf(false) }
+    SectionLabel("Time zone")
+    Column(Modifier.fillMaxWidth().border(1.dp, Theme.colors.inputBorder, RoundedCornerShape(12.dp)).padding(horizontal = 16.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Share my time zone with ${conversation.name}",
+                style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f),
+            )
+            Switch(checked = sharing, onCheckedChange = {
+                sharing = it
+                engine.setTimeZoneSharing(conversation.chat, it)
+            })
+        }
+        if (sharing) {
+            HorizontalDivider(color = Theme.colors.divider)
+            Box {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { picking = true },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Time zone", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Text(
+                        identifier ?: TimeZones.DEFAULT_CHOICE,
+                        style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
+                        textAlign = TextAlign.End, modifier = Modifier.widthIn(max = 220.dp),
+                    )
+                }
+                DropdownMenu(expanded = picking, onDismissRequest = { picking = false }, modifier = Modifier.heightIn(max = 400.dp)) {
+                    for (choice in TimeZones.choices) {
+                        DropdownMenuItem(text = { Text(choice) }, onClick = {
+                            picking = false
+                            val new = choice.takeIf { it != TimeZones.DEFAULT_CHOICE }
+                            if (new != identifier) {
+                                identifier = new
+                                engine.setTimeZoneIdentifier(conversation.chat, new)
+                                toast.show("Time zone changed", ToastType.Success)
+                            }
+                        })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroLine(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, textAlign = TextAlign.Center)
 }
 
 /// The top of a details page: the picture at 64 dp and the name, centred.

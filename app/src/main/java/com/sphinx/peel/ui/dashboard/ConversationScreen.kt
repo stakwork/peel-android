@@ -117,6 +117,7 @@ import com.sphinx.peel.ui.payments.RequestMessage
 import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.TimeZones
 import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
@@ -439,15 +440,28 @@ fun ConversationScreen(
                     .semantics { contentDescription = "$title, $detailsLabel" },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Theme.colors.text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
+                Column(Modifier.weight(1f, fill = false)) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Theme.colors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // A contact's local time, when they shared a zone and it is not yours.
+                    val theirZone by produceState<java.time.ZoneId?>(null, chat, messages.size) {
+                        value = if (isTribe || isAgent) null else withContext(Dispatchers.IO) { engine.theirTimeZone(chat) }
+                    }
+                    theirZone?.let { zone ->
+                        val mine = java.time.ZoneId.systemDefault()
+                        TimeZones.localTimeLine(zone, java.time.Instant.now(), mine) { at, z ->
+                            java.time.format.DateTimeFormatter.ofLocalizedTime(java.time.format.FormatStyle.SHORT).withZone(z).format(at)
+                        }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
                 if (isAgent) {
                     Spacer(Modifier.width(8.dp))
                     AgentTag()
