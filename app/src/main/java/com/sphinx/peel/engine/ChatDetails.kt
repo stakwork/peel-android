@@ -4,8 +4,8 @@ package com.sphinx.peel.engine
 /// JVM. Ported in spirit from PeelCore's `Tribe.link` / the iPhone's
 /// `ChatDetails.swift`: a row is shown only when it has something to say.
 /// Not ported (no backing functionality on Android yet): leave tribe,
-/// delete contact, edit tribe, members list, join price, the time zone
-/// switch.
+/// delete contact, edit tribe, members list, join price. (The contact's time zone
+/// switch and picker are ported: `TimeZones.kt`.)
 object ChatDetails {
     /// A tribe's link in the official apps' format (`Tribe.link`).
     fun tribeLink(pubkey: String, host: String?): String? =

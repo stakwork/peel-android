@@ -667,10 +667,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null): MessageRow {
         check(transport != null) { "Not connected." }
         val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
-        val body = JSONObject().put("content", text).apply {
-            if (replyTo != null) put("replyUuid", replyTo)
-            if (inThread != null) put("threadUuid", inThread)
-        }.toString()
+        val body = TimeZones.setting(
+            sharedOffset(chat, isTribe),
+            JSONObject().put("content", text).apply {
+                if (replyTo != null) put("replyUuid", replyTo)
+                if (inThread != null) put("threadUuid", inThread)
+            },
+        ).toString()
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
         val result = run { time, stateBytes ->
@@ -694,6 +697,32 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         storage.insertMessages(listOf(row))
         return row
     }
+
+    /// Whether this account's time zone offset goes with what it sends in
+    /// `chat`: on unless turned off (`TimeZones.kt`, iOS `timeZoneSharing(in:)`).
+    fun timeZoneSharing(chat: String): Boolean = storage.chatTimeZone(chat)?.enabled ?: true
+
+    /// The zone chosen for `chat` alone; null follows the device's.
+    fun timeZoneIdentifier(chat: String): String? = storage.chatTimeZone(chat)?.identifier
+
+    fun setTimeZoneSharing(chat: String, enabled: Boolean) =
+        storage.setChatTimeZone(chat, Storage.ChatTimeZone(enabled, timeZoneIdentifier(chat)))
+
+    fun setTimeZoneIdentifier(chat: String, identifier: String?) =
+        storage.setChatTimeZone(chat, Storage.ChatTimeZone(timeZoneSharing(chat), identifier))
+
+    /// The offset a text or attachment to `chat` carries ("GMT+2"): null when
+    /// the switch is off, and never in a tribe.
+    private fun sharedOffset(chat: String, isTribe: Boolean): String? {
+        if (isTribe || !timeZoneSharing(chat)) return null
+        val zone = TimeZones.zoneNamed(timeZoneIdentifier(chat)) ?: java.time.ZoneId.systemDefault()
+        return TimeZones.format(zone)
+    }
+
+    /// The other side's zone in a direct message, from the newest offset they
+    /// sent within 90 days that can be read.
+    fun theirTimeZone(chat: String): java.time.ZoneId? =
+        TimeZones.newest(storage.timeZoneBodies(chat, System.currentTimeMillis() - TimeZones.FRESHNESS_MS))
 
     /// What a tribe's member pays for an ordinary message (text or
     /// attachment): the owner's own price plus escrow, or the 3-sat
@@ -1151,6 +1180,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             put("mediaToken", mediaToken)
             if (replyTo != null) put("replyUuid", replyTo)
             if (inThread != null) put("threadUuid", inThread)
+            TimeZones.setting(sharedOffset(chat, isTribe), this)
         }.toString()
         val myAlias = storage.value(Setting.ALIAS) ?: ""
         val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
