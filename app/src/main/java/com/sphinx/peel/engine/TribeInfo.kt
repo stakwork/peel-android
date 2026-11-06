@@ -37,8 +37,10 @@ data class TribeInfo(
     val isPrivate: Boolean? = null,
     /// `"created"` as the registry wrote it (RFC 3339), for "Created <date>".
     val created: String? = null,
-    /// `"price_to_join"`, in sats on the registry, kept here in msat; 0 when free or unsaid.
+    /// `"price_to_join"`, in msat as iOS reads it; 0 when free or unsaid.
     val priceToJoinMsat: Long = 0,
+    /// `"escrow_millis"`: how long escrow is held before it is paid back.
+    val escrowMillis: Long? = null,
 ) {
     companion object {
         /// `pubkey` doesn't match what the registry actually answered —
@@ -73,7 +75,8 @@ data class TribeInfo(
                 ownerAlias = root.optString("owner_alias").trim().takeIf { it.isNotEmpty() },
                 memberCount = if (root.has("member_count")) root.optLong("member_count").takeIf { it > 0 } else null,
                 isPrivate = if (root.has("private") && !root.isNull("private")) root.optBoolean("private") else null,
-                priceToJoinMsat = (root.optLong("price_to_join", 0L).coerceIn(0L, Long.MAX_VALUE / 1000)) * 1000,
+                priceToJoinMsat = root.optLong("price_to_join", 0L).coerceAtLeast(0L),
+                escrowMillis = if (root.has("escrow_millis") && !root.isNull("escrow_millis")) root.optLong("escrow_millis") else null,
                 created = root.optString("created").trim().takeIf { it.isNotEmpty() },
             )
             if (info.pubkey != pubkey) throw MismatchException(pubkey)

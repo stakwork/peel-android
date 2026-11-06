@@ -83,7 +83,7 @@ class MemesServer(private val host: String) {
     /// `POST /file`: the encrypted bytes, as a multipart body (one text
     /// field, then the file) — PeelCore's `upload`/`multipart`. Returns
     /// the muid.
-    suspend fun upload(sealed: ByteArray, fieldName: String, fileName: String, mediaType: String, token: Token): String =
+    suspend fun upload(sealed: ByteArray, fieldName: String, fileName: String, mediaType: String, token: Token, route: String = "file"): String =
         withContext(Dispatchers.IO) {
             val boundary = "peel-${java.util.UUID.randomUUID()}"
             val body = java.io.ByteArrayOutputStream()
@@ -101,7 +101,7 @@ class MemesServer(private val host: String) {
             body.write("--$boundary--\r\n".toByteArray(Charsets.UTF_8))
             val bodyBytes = body.toByteArray()
 
-            val connection = (URL("https://$host/file").openConnection() as HttpURLConnection).apply {
+            val connection = (URL("https://$host/$route").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
@@ -117,6 +117,9 @@ class MemesServer(private val host: String) {
                 ?: throw UnreadableException("the upload")
             muid
         }
+
+    /// Where an image uploaded to `/public` is served.
+    fun publicUrl(muid: String): String = "https://$host/public/$muid"
 
     /// `GET /preferences`: the account's encrypted preferences file, as
     /// base64 text — PeelCore's own `preferences`, including its exact

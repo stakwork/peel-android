@@ -302,6 +302,18 @@ class Storage(context: Context, account: String = "default") {
         return bodies
     }
 
+    /// How many different people have posted in a tribe, by alias, not counting this account
+    /// (iOS `tribeSenders`: text and attachment messages).
+    fun tribeSenderCount(chat: String): Int {
+        helper.readableDatabase.rawQuery(
+            "SELECT sender FROM message WHERE chat = ? AND fromMe = 0 AND sender IS NOT NULL AND type IN (0, 6)", arrayOf(chat),
+        ).use { c ->
+            val aliases = HashSet<String>()
+            while (c.moveToNext()) aliasOf(c.getString(0))?.let { aliases += it }
+            return aliases.size
+        }
+    }
+
     /// When the chat's oldest message was sent (ms): since when someone is a contact.
     fun firstMessageTime(chat: String): Long? {
         helper.readableDatabase
