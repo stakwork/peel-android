@@ -20,4 +20,27 @@ class CallSessionTest {
         assertEquals("1:00:00", CallSession.formatElapsed(3600))
         assertEquals("1:02:07", CallSession.formatElapsed(3727))
     }
+
+    @Test
+    fun `earliestStart picks the earliest join time`() {
+        assertEquals(100L, CallSession.earliestStart(null, listOf(300L, 100L, 200L), 999L))
+    }
+
+    @Test
+    fun `earliestStart only moves earlier`() {
+        assertEquals(100L, CallSession.earliestStart(100L, listOf(300L), 999L))
+        assertEquals(50L, CallSession.earliestStart(100L, listOf(50L, 300L), 999L))
+    }
+
+    @Test
+    fun `earliestStart ignores null join times`() {
+        assertEquals(200L, CallSession.earliestStart(null, listOf(null, 200L, null), 999L))
+    }
+
+    @Test
+    fun `earliestStart falls back to the connect time only with nothing else`() {
+        assertEquals(999L, CallSession.earliestStart(null, listOf(null, null), 999L))
+        assertEquals(999L, CallSession.earliestStart(null, emptyList(), 999L))
+        assertEquals(500L, CallSession.earliestStart(500L, listOf(null), 999L))
+    }
 }
