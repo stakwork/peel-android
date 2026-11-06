@@ -60,6 +60,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -1414,6 +1417,7 @@ private fun MessageRowView(
 /// new here, not something PeelCore's own card shows inline — a
 /// reasonable use for presence given there's no sidebar indicator or call
 /// banner to spend it on yet.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> Unit) {
     var presence by remember(link.room) { mutableStateOf<CallPresence>(CallPresence.Unknown) }
@@ -1421,6 +1425,34 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
         engine.callPresence(link).collect { presence = it }
     }
     val people = presence.people().orEmpty()
+    var showParticipants by remember(link.room) { mutableStateOf(false) }
+    if (showParticipants && people.isNotEmpty()) {
+        ModalBottomSheet(
+            onDismissRequest = { showParticipants = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Text(
+                "${people.size} on the call",
+                style = MaterialTheme.typography.titleMedium,
+                color = Theme.colors.text,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                items(people.size) { i ->
+                    val person = people[i]
+                    val name = person.nickname.ifEmpty { "Guest" }
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Avatar(name = name, url = person.avatarUrl, size = 32.dp, hue = PersonHue.of(person.identity))
+                        Spacer(Modifier.width(12.dp))
+                        Text(name, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                    }
+                }
+            }
+        }
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -1439,7 +1471,13 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
                 Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
             }
             when {
-                people.isNotEmpty() -> Row(verticalAlignment = Alignment.CenterVertically) {
+                people.isNotEmpty() -> Row(
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showParticipants = true }
+                        .semantics { contentDescription = "${people.size} on the call. Show participants" },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box(Modifier.width((26 + (minOf(people.size, 3) - 1) * 19).dp).height(26.dp)) {
                         people.take(3).forEachIndexed { i, person ->
                             Avatar(
