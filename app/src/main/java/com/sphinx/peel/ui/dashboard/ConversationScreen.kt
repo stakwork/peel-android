@@ -81,6 +81,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -174,6 +176,7 @@ fun ConversationScreen(
     var pendingFocus by remember(chat) { mutableStateOf(focusMessageUuid) }
     val highlight = remember(chat) { MessageHighlight() }
     var error by remember(chat) { mutableStateOf<String?>(null) }
+    var showDetails by remember(chat) { mutableStateOf(false) }
     var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
     val scope = rememberCoroutineScope()
     val restoreProgress by engine.restoreProgress.collectAsState()
@@ -412,6 +415,12 @@ fun ConversationScreen(
         return
     }
 
+    val detailsConversation = conversation
+    if (showDetails && detailsConversation != null) {
+        com.sphinx.peel.ui.details.ChatDetailsScreen(engine, storage, detailsConversation, onBack = { showDetails = false })
+        return
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -420,18 +429,28 @@ fun ConversationScreen(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Theme.colors.text)
             }
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Theme.colors.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (isAgent) {
-                Spacer(Modifier.width(8.dp))
-                AgentTag()
+            // The name opens the chat's details: a tribe's or a contact's.
+            val detailsLabel = if (isTribe) "Tribe details" else "Contact details"
+            Row(
+                Modifier.weight(1f)
+                    .clickable(enabled = detailsConversation != null, onClickLabel = detailsLabel) { showDetails = true }
+                    .semantics { contentDescription = "$title, $detailsLabel" },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Theme.colors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (isAgent) {
+                    Spacer(Modifier.width(8.dp))
+                    AgentTag()
+                }
+                Spacer(Modifier.weight(1f))
             }
             // Only when this account has a call server at all (`callServer()`'s
             // own doc comment: null on a local test server, never configured) -
