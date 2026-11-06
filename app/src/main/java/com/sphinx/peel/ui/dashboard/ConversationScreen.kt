@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -1028,7 +1030,14 @@ private val HIDDEN_MONEY_TYPES = setOf(3, 7, 8, 9)
 /// One distinct boost sender, as `senderDisplay` describes them.
 internal data class BoostSender(val name: String, val photoUrl: String?, val hueKey: String)
 
-internal data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean, val senders: List<BoostSender> = emptyList())
+internal data class BoostSummary(val count: Int, val totalMsat: Long, val boostedByMe: Boolean, val senders: List<BoostSender> = emptyList(), val boosts: List<BoostEntry> = emptyList())
+
+/// One boost, for the "Boosts" popup: who sent it and how much (msat).
+internal data class BoostEntry(val sender: BoostSender, val amountMsat: Long)
+
+/// "<total> sats from N boosts" — the popup's summary line.
+internal fun boostSummaryLine(summary: BoostSummary): String =
+    "%,d sats from %d %s".format(java.util.Locale.US, summary.totalMsat / 1000, summary.count, if (summary.count == 1) "boost" else "boosts")
 
 /// Every boost in `messages`, summed per message it boosts — PeelCore's
 /// `BoostSummary`, trimmed: no pending/unsettled/failed tracking — a
@@ -1044,11 +1053,16 @@ internal fun boostSummaries(messages: List<MessageRow>, myAlias: String, myPhoto
         val target = row.replyUuid ?: continue
         byTarget.getOrPut(target) { mutableListOf() }.add(row)
     }
-    return byTarget.mapValues { (_, boosts) ->
+    return byTarget.mapValues { (_, unsorted) ->
+        val boosts = unsorted.sortedBy { it.timestamp } // oldest first (stable)
         BoostSummary(count = boosts.size, totalMsat = boosts.sumOf { it.msat ?: declaredAmountMsat(it.body) ?: 0L }, boostedByMe = boosts.any { it.fromMe },
             senders = boosts
                 .map { senderDisplay(it, myAlias, myPhotoUrl, isTribe).let { (name, photoUrl, hueKey) -> BoostSender(name, photoUrl, hueKey) } }
                 .distinctBy { it.hueKey to it.name },
+            boosts = boosts.map {
+                val (name, photoUrl, hueKey) = senderDisplay(it, myAlias, myPhotoUrl, isTribe)
+                BoostEntry(BoostSender(name, photoUrl, hueKey), it.msat ?: declaredAmountMsat(it.body) ?: 0L)
+            },
         )
     }
 }
@@ -1870,10 +1884,13 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
 /// when there are several distinct boosters), as on iOS.
 @Composable
 private fun BoostChip(boosts: BoostSummary) {
+    var showing by remember { mutableStateOf(false) }
+    if (showing) BoostersDialog(boosts) { showing = false }
     Row(
         Modifier
             .clip(RoundedCornerShape(10.dp))
             .background(Theme.colors.fieldFill)
+            .clickable(onClickLabel = "Show who boosted") { showing = true }
             .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1904,6 +1921,39 @@ private fun BoostChip(boosts: BoostSummary) {
             }
         }
     }
+}
+
+/// The "Boosts" popup: summary line, then every boost oldest first.
+@Composable
+private fun BoostersDialog(boosts: BoostSummary, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Boosts")
+                Text(boostSummaryLine(boosts), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+            }
+        },
+        text = {
+            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                for (entry in boosts.boosts) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(
+                            name = entry.sender.name.ifBlank { "?" }, url = entry.sender.photoUrl, size = 32.dp,
+                            hue = PersonHue.of(entry.sender.hueKey), shape = AvatarShape.CIRCLE,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            entry.sender.name, Modifier.weight(1f), color = PersonHue.of(entry.sender.hueKey).fill,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Text("${formattedSats(entry.amountMsat)} sats", color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 /// "1,200" — msat to whole sats, thousands-grouped, as PeelCore's own
