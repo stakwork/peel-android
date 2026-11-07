@@ -12,13 +12,21 @@ object Sats {
 
     private fun whole(msat: Long): Long = if (msat <= 0) 0 else msat / MSAT_PER_SAT
 
-    private fun grouped(value: Long, locale: Locale): String = NumberFormat.getIntegerInstance(locale).format(value)
+    fun grouped(value: Long, locale: Locale): String = NumberFormat.getIntegerInstance(locale).format(value)
 
     /// "1 sat", "21 sats", "1,210 sats": whole sats, the rest of a sat
     /// dropped as the official apps drop it; below zero reads "0 sats".
     fun format(msat: Long, locale: Locale = Locale.getDefault()): String {
         val sats = whole(msat)
         return "${grouped(sats, locale)} ${if (sats == 1L) "sat" else "sats"}"
+    }
+
+    /// "3 sats", "3.5 sats": exact, as sent (the sub-sat part kept, up to three places).
+    fun exact(msat: Long, locale: Locale = Locale.getDefault()): String {
+        val value = msat.coerceAtLeast(0)
+        if (value % MSAT_PER_SAT == 0L) return format(value, locale)
+        val format = NumberFormat.getNumberInstance(locale).apply { minimumFractionDigits = 0; maximumFractionDigits = 3 }
+        return "${format.format(java.math.BigDecimal(value).divide(java.math.BigDecimal(MSAT_PER_SAT)))} sats"
     }
 
     /// "1,210": the number alone, for chips and lists that write "sats" apart.

@@ -129,4 +129,8 @@ enum class Setting(val key: String) {
     /// Which tribes the registry calls private (`TimeZoneSharing.encodeFlags`,
     /// `{pubkey: bool}`): only a private tribe is sent the time zone.
     TRIBE_PRIVACY("tribePrivacy"),
+
+    /// How this account appears in each tribe (`TribeIdentity.encode`):
+    /// `{tribe pubkey: {a: alias, p: https photo}}`. Local to this device.
+    TRIBE_IDENTITIES("tribeIdentities"),
 }

@@ -674,8 +674,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             if (inThread != null) put("threadUuid", inThread)
             timeZoneMetadata(chat, isTribe)?.let { put("metadata", it) }
         }.toString()
-        val myAlias = storage.value(Setting.ALIAS) ?: ""
-        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val (myAlias, myPhoto) = sentIdentity(chat, isTribe)
         val result = run { time, stateBytes ->
             coreSend(seed, time, chat, 0u, body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
@@ -758,8 +757,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             put("content", "")
             put("replyUuid", targetUuid)
         }.toString()
-        val myAlias = storage.value(Setting.ALIAS) ?: ""
-        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val (myAlias, myPhoto) = sentIdentity(chat, isTribe)
         val result = run { time, stateBytes ->
             coreSend(seed, time, chat, BOOST_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
@@ -799,8 +797,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val link = CallLink.new(server, audioOnly)
         val amountMsat = if (isTribe) MESSAGE_FLOOR_MSAT else 0L
         val body = JSONObject().apply { put("content", link.message) }.toString()
-        val myAlias = storage.value(Setting.ALIAS) ?: ""
-        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val (myAlias, myPhoto) = sentIdentity(chat, isTribe)
         val result = run { time, stateBytes ->
             coreSend(seed, time, chat, CALL_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
@@ -843,8 +840,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             put("content", "")
             put("replyUuid", targetUuid)
         }.toString()
-        val myAlias = storage.value(Setting.ALIAS) ?: ""
-        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val (myAlias, myPhoto) = sentIdentity(chat, isTribe)
         val result = run { time, stateBytes ->
             coreSend(seed, time, chat, DELETE_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
@@ -866,6 +862,40 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         storage.insertMessages(listOf(row))
         return row
     }
+
+    /// How this account appears in a tribe, if it has its own name or photo there.
+    fun tribeIdentity(chat: String): TribeIdentity.Identity = identityStore()[chat] ?: TribeIdentity.Identity()
+
+    private fun identityStore(): Map<String, TribeIdentity.Identity> = TribeIdentity.decode(storage.value(Setting.TRIBE_IDENTITIES))
+
+    /// Saves a tribe's own name and photo (empty = the account's), as iOS `setTribeIdentity`;
+    /// a photo that is not https is refused. Sent from the next message on.
+    fun setTribeIdentity(chat: String, alias: String?, photoUrl: String?) {
+        val photo = TribeIdentity.cleanPhoto(photoUrl).getOrThrow()
+        val store = identityStore().toMutableMap()
+        store[chat] = TribeIdentity.Identity(alias?.trim()?.takeIf { it.isNotEmpty() }, photo)
+        storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_IDENTITIES to TribeIdentity.encode(store))))
+    }
+
+    /// The alias and photo a message to `chat` goes out with: a tribe's own where set, else the account's.
+    internal fun sentIdentity(chat: String, isTribe: Boolean): Pair<String, String> {
+        val alias = storage.value(Setting.ALIAS) ?: ""
+        val photo = storage.value(Setting.PHOTO_URL) ?: ""
+        return if (isTribe) TribeIdentity.sent(identityStore()[chat], alias, photo) else alias to photo
+    }
+
+    /// Puts a picture on the memes server's public route, as iOS `uploadPicture` (a profile
+    /// or tribe photo): `jpeg` in the clear. Returns its public https link.
+    suspend fun uploadPicture(jpeg: ByteArray): String {
+        val memes = MemesServer(MEMES_HOST)
+        val muid = withMemes(memes) { auth ->
+            memes.upload(jpeg, fieldName = "image", fileName = "image.jpg", mediaType = "image/jpg", token = auth, route = "public")
+        }
+        return memes.publicUrl(muid)
+    }
+
+    /// The people seen posting in a tribe (not this account), as iOS `tribeSenders`.
+    fun tribeSeenCount(chat: String): Int = storage.tribeSenderCount(chat)
 
     /// A chat's "Share my time zone" choice: on, with the device's zone, until chosen otherwise.
     fun timeZoneChoice(chat: String): TimeZoneSharing.Choice = timeZoneStore()[chat] ?: TimeZoneSharing.Choice()
@@ -1220,8 +1250,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             if (inThread != null) put("threadUuid", inThread)
             timeZoneMetadata(chat, isTribe)?.let { put("metadata", it) }
         }.toString()
-        val myAlias = storage.value(Setting.ALIAS) ?: ""
-        val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+        val (myAlias, myPhoto) = sentIdentity(chat, isTribe)
         val result = run { time, stateBytes ->
             coreSend(seed, time, chat, ATTACHMENT_MESSAGE_TYPE.toUByte(), body, stateBytes, myAlias, myPhoto, amountMsat.toULong(), isTribe)
         }
@@ -1439,8 +1468,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             if (isTribe && amountMsat > (message.msat ?: 0L)) {
                 throw IllegalStateException("The tribe's price rose since this was written. Send it again as a new message.")
             }
-            val myAlias = storage.value(Setting.ALIAS) ?: ""
-            val myPhoto = storage.value(Setting.PHOTO_URL) ?: ""
+            val (myAlias, myPhoto) = sentIdentity(chat, isTribe)
             val now = System.currentTimeMillis()
             var sent: uniffi.sphinxrs.Msg? = null
             run(beforePublish = { result ->

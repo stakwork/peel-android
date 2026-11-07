@@ -238,9 +238,11 @@ fun ConversationScreen(
 
     val isTribe = conversation?.isTribe ?: false
     val title = if (isAgent) "Peel" else (conversation?.name ?: chat.take(12))
-    val myAlias = storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
-    val myPhotoUrl = storage.value(com.sphinx.peel.storage.Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() }
-    val mentionMembers = remember(messages, conversation, isTribe, isAgent, myPhotoUrl) {
+    // In a tribe, how this account appears there (its own name and photo), else the account's (iOS `me(in:)`).
+    val tribeIdentity = if (isTribe) engine.tribeIdentity(chat) else null
+    val myAlias = tribeIdentity?.alias ?: storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
+    val myPhotoUrl = tribeIdentity?.photoUrl ?: storage.value(com.sphinx.peel.storage.Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() }
+    val mentionMembers = remember(messages, conversation, isTribe, isAgent, myAlias, myPhotoUrl) {
         val peer = conversation?.takeIf { !isTribe && !isAgent }?.let { MentionMember(it.alias ?: title, it.photoUrl, it.chat) }
         chatMentionMembers(messages, myAlias, myPhotoUrl, isTribe, peer)
     }

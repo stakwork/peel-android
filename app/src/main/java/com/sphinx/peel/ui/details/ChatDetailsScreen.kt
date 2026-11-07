@@ -2,6 +2,16 @@ package com.sphinx.peel.ui.details
 
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.Button
+import androidx.compose.runtime.rememberCoroutineScope
+import com.sphinx.peel.engine.TribeIdentity
+import com.sphinx.peel.ui.components.Avatar
+import com.sphinx.peel.ui.components.PersonHue
+import com.sphinx.peel.ui.components.prepareImageForSending
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -98,6 +108,10 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
     }
     val stored = remember(conversation.chat) { storage.contact(conversation.chat) }
     val facts = ChatDetails.tribeFacts(info, stored?.pricePerMessageMsat ?: 0, stored?.escrowMsat ?: 0)
+    // Who has posted here, counted from the stored messages (iOS `knownMembers`): not the registry's count.
+    val seen by produceState<Int?>(null, conversation.chat) {
+        value = withContext(Dispatchers.IO) { engine.tribeSeenCount(conversation.chat) }
+    }
     val link = ChatDetails.tribeLink(conversation.chat, host)
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -129,14 +143,10 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
                 modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Tags: ${tags.joinToString(", ")}" },
             )
         }
-        if (facts.isNotEmpty()) {
-            Spacer(Modifier.height(24.dp))
-            FactsCard(facts)
-        }
-        ChatDetails.seenHere(info)?.let { seen ->
-            Spacer(Modifier.height(12.dp))
-            FactsCard(listOf(ChatDetails.Fact("Seen here", seen)))
-        }
+        Spacer(Modifier.height(24.dp))
+        FactsCard(facts)
+        Spacer(Modifier.height(12.dp))
+        FactsCard(listOf(ChatDetails.Fact("Seen here", seen?.let(ChatDetails::seenLabel) ?: "")))
         if (link != null) {
             Spacer(Modifier.height(24.dp))
             Text(
@@ -166,6 +176,8 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
             Spacer(Modifier.height(12.dp))
             MonoValue(link)
         }
+        Spacer(Modifier.height(24.dp))
+        TribeIdentitySection(engine, storage, conversation.chat, info?.name ?: conversation.name)
         if (offersTimeZone) {
             Spacer(Modifier.height(24.dp))
             TimeZoneSection(engine, conversation.chat, "#${info?.name ?: conversation.name}")
@@ -183,6 +195,13 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
     val theirZone by produceState<ZoneId?>(null, conversation.chat) {
         value = withContext(Dispatchers.IO) { engine.theirTimeZone(conversation.chat) }
     }
+    // Their time moves on while the page is open: read again each minute (iOS `TimelineView(.everyMinute)`).
+    val now by produceState(Instant.now()) {
+        while (true) {
+            kotlinx.coroutines.delay(60_000 - System.currentTimeMillis() % 60_000)
+            value = Instant.now()
+        }
+    }
     PageFrame("Details", onBack) {
         Hero(conversation, conversation.name, null)
         // Under the name, like the iPhone: since when, and their time when it is not yours.
@@ -192,7 +211,7 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
                 HeroLine("Contact since $day")
             }
             theirZone?.let { zone ->
-                TimeZones.localTimeLine(zone, Instant.now(), ZoneId.systemDefault(), ::localTime)?.let { HeroLine(it) }
+                TimeZones.localTimeLine(zone, now, ZoneId.systemDefault(), ::localTime)?.let { HeroLine(it) }
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -224,6 +243,82 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
         Spacer(Modifier.height(24.dp))
         TimeZoneSection(engine, conversation.chat, conversation.name)
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/// "How you appear in #tribe" (iOS `TribeIdentity`, `TribeIdentityDraft`): a name and a photo sent
+/// with your messages there in place of your account's. The photo is picked, never typed; Save sends
+/// neither until it is tapped. Kept on this device, as iOS keeps it.
+@Composable
+private fun TribeIdentitySection(engine: Engine, storage: Storage, chat: String, tribeName: String) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val saved = remember(chat) { mutableStateOf(engine.tribeIdentity(chat)) }
+    var alias by remember(chat) { mutableStateOf(saved.value.alias ?: "") }
+    var photo by remember(chat) { mutableStateOf(saved.value.photoUrl) }
+    var uploading by remember { mutableStateOf(false) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    val accountName = remember { storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "you" }
+    val accountPhoto = remember { storage.value(Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() } }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        uploading = true
+        problem = null
+        scope.launch {
+            try {
+                // A JPEG at quality 0.5, at most 1024 px on the long side, as iOS `ProfilePhoto.jpeg`.
+                val jpeg = withContext(Dispatchers.IO) { prepareImageForSending(context, uri, maxDimension = 1024, quality = 50) }
+                    ?: throw IllegalStateException("That is not a picture.")
+                photo = engine.uploadPicture(jpeg)
+            } catch (e: Exception) {
+                problem = "Could not upload the photo: ${e.message ?: "try again"}"
+            } finally {
+                uploading = false
+            }
+        }
+    }
+    val typed = alias.trim().takeIf { it.isNotEmpty() }
+    val changed = typed != saved.value.alias || photo != saved.value.photoUrl
+    SectionLabel("How you appear in #$tribeName")
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Avatar(typed ?: accountName, photo ?: accountPhoto, 56.dp, PersonHue.of(storage.value(Setting.ALIAS) ?: chat))
+        OutlinedButton(
+            onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            enabled = !uploading,
+            modifier = Modifier.semantics { contentDescription = "Choose your photo for this tribe" },
+        ) { Text(if (uploading) "Uploading…" else "Photo") }
+        if (photo != null) TextButton(onClick = { photo = null }) { Text("Use mine") }
+    }
+    Spacer(Modifier.height(12.dp))
+    OutlinedTextField(
+        value = alias,
+        onValueChange = { alias = it; problem = null },
+        singleLine = true,
+        label = { Text("Name") },
+        placeholder = { Text(accountName) },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    (problem ?: TribeIdentity.aliasNote(alias))?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = if (problem != null) Theme.colors.destructive else Theme.colors.secondaryText, modifier = Modifier.padding(top = 4.dp))
+    }
+    if (changed) {
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = {
+                alias = saved.value.alias ?: ""
+                photo = saved.value.photoUrl
+                problem = null
+            }, modifier = Modifier.weight(1f)) { Text("Revert") }
+            Button(onClick = {
+                try {
+                    engine.setTribeIdentity(chat, alias, photo)
+                    saved.value = engine.tribeIdentity(chat)
+                    alias = saved.value.alias ?: ""
+                } catch (e: Exception) {
+                    problem = "Could not save how you appear: ${e.message ?: "try again"}"
+                }
+            }, enabled = !uploading, modifier = Modifier.weight(1f)) { Text("Save") }
+        }
     }
 }
 
