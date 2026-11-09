@@ -30,4 +30,4 @@ Not matched / open:
 
 ## Apps section (Dashboard "Apps" row)
 
-Status: built `engine/WorkspaceApps.kt` (WorkspaceApp parser/sort/filter/shareLink, `GET {strut}/apps` with bearer token, `AppPage.opening`) and `ui/apps/AppsScreen.kt` (search, source filter, Refresh, long-press Share link, in-app WebView with the token in an Authorization header). Open: Android has no Stadeum pairing, so `Stadeum.live` is empty and the Apps row is hidden (iOS gate); no pull-to-refresh; Talk to Jamie rows start the iOS-style Talk call (`docs/phases/25-talk-to-jamie.md`). Not compiled/tested in the pod (no Android SDK/JDK).
+Status: built `engine/WorkspaceApps.kt` (WorkspaceApp parser/sort/filter/shareLink, `GET {strut}/apps` with bearer token, `AppPage.opening`) and `ui/apps/AppsScreen.kt` (search, source filter, Refresh, long-press Share link, in-app WebView with the token in an Authorization header). Open: Android has no Stadeum pairing, so `Stadeum.live` is empty and the Apps row is hidden (iOS gate); no pull-to-refresh; Talk to Jamie rows start the iOS-style Talk call (`docs/phases/26-talk-to-jamie.md`). Not compiled/tested in the pod (no Android SDK/JDK).
