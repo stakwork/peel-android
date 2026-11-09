@@ -8,9 +8,9 @@ import org.json.JSONObject
 /// `https://<call server>/rooms/sphinx.call.<name>`, with `startAudioOnly=true`
 /// for an audio call. A message carries it bare (the Mac app) or as
 /// `call::{"link":…}` (iOS, Android, and this port). Ported from PeelCore's
-/// `Call.swift` `CallLink`, trimmed: no Hive (`CallLink.hive`, Stadeum's own
-/// call-with-Jamie flow — this port has no Hive/Workspaces feature to need
-/// it from) and no `callKey` parsing on the way in, since nothing here ever
+/// `Call.swift` `CallLink`, trimmed: Hive's own call-with-Jamie rooms come in
+/// through [hive] (Stadeum starts those; the link is never posted to a chat)
+/// and no `callKey` parsing on the way in, since nothing here ever
 /// reads one — but still parsed and round-tripped, in case a link posted by
 /// another client carries one.
 ///
@@ -54,6 +54,12 @@ data class CallLink(
         const val PREFIX = "call::"
         const val ROOM_PREFIX = "sphinx.call."
         private const val ROOMS_PATH = "/rooms/"
+        /// How long a call message may still be live (PeelCore's `CallLink.liveAge`,
+        /// 12 hours) and how far ahead of this device's clock a message may be
+        /// stamped before it counts as not from now (clock skew).
+        const val LIVE_AGE_MS = 12L * 60 * 60 * 1000
+        const val CLOCK_SKEW_MS = 5L * 60 * 1000
+        private val HIVE_ROOM = Regex("^[A-Za-z0-9._-]{1,100}\\.sphinx\\.chat-\\.[0-9]{1,12}$")
         private val QUERY_KEYS = setOf("startAudioOnly", "callKey", "hiveToken")
         private const val MAX_CONTENT = 4096
         private val random = SecureRandom()
@@ -86,7 +92,7 @@ data class CallLink(
             val path = uri.rawPath ?: return null
             if (!path.startsWith(ROOMS_PATH)) return null
             val room = path.removePrefix(ROOMS_PATH)
-            if (!isRoom(room)) return null
+            if (!isPeelRoom(room)) return null
 
             val query = mutableMapOf<String, String>()
             for (raw in (uri.rawQuery ?: "").split("&").filter { it.isNotEmpty() }) {
@@ -131,7 +137,41 @@ data class CallLink(
             }
         }
 
-        fun isRoom(room: String): Boolean {
+        /// Whether a call stamped [timestampMs] may still be joined from its
+        /// card at [nowMs]: no older than [LIVE_AGE_MS], and not stamped more
+        /// than [CLOCK_SKEW_MS] in the future. Unknown time: not judged.
+        fun isRecent(timestampMs: Long?, nowMs: Long = System.currentTimeMillis()): Boolean {
+            if (timestampMs == null) return true
+            return nowMs - timestampMs <= LIVE_AGE_MS && timestampMs - nowMs <= CLOCK_SKEW_MS
+        }
+
+        /// A room on the call server: Peel's own, or one Hive made for a call
+        /// with Jamie.
+        fun isRoom(room: String): Boolean = isPeelRoom(room) || isHiveRoom(room)
+
+        /// Hive's room name: `<swarm>.sphinx.chat-.<unix seconds>` (Hive's `startCall`).
+        fun isHiveRoom(room: String): Boolean = HIVE_ROOM.matches(room)
+
+        /// The link to a call Hive started (`HiveClient.startCall`'s `url`):
+        /// the account's own call server, its room the last path segment
+        /// (Hive's call base URL may or may not carry `/rooms/`), no
+        /// credentials, query or fragment. Null for anything else.
+        fun hive(url: String, server: String, audioOnly: Boolean = false): CallLink? {
+            val base = baseURL(server) ?: return null
+            if (url.toByteArray(Charsets.UTF_8).size > MAX_CONTENT) return null
+            val uri = try { URI(url) } catch (e: Exception) { return null }
+            val scheme = uri.scheme?.lowercase() ?: return null
+            val host = uri.host?.lowercase() ?: return null
+            if (scheme != base.first || host != base.second) return null
+            val port = if (uri.port == -1) defaultPort(scheme) else uri.port
+            if (port != base.third) return null
+            if (uri.userInfo != null || uri.fragment != null || uri.rawQuery != null) return null
+            val room = (uri.rawPath ?: return null).trimEnd('/').substringAfterLast('/')
+            if (!isHiveRoom(room)) return null
+            return CallLink(server, scheme, host, port, room, audioOnly, null, null)
+        }
+
+        fun isPeelRoom(room: String): Boolean {
             if (!room.startsWith(ROOM_PREFIX)) return false
             val name = room.removePrefix(ROOM_PREFIX)
             return name.length in 1..128 && name.all { isAlphanumeric(it) || it in "._-" }

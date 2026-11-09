@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- Screen share: the capture runs in LiveKit's own mediaProjection
+         service (merged in from the SDK), which needs this permission. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Network policy: usesCleartextTraffic/networkSecurityConfig only govern

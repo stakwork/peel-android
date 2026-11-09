@@ -160,8 +160,8 @@ class OkHttpHive(
 }
 
 /// Hive's device-flow API for a strut desktop app (iOS `HiveClient`). Not
-/// ported: calls with Jamie and Jamie-in-tribes (`startCall`, `callTicket`,
-/// `jamieLinks`, `linkTribe`, `unlinkTribe`).
+/// ported: Jamie-in-tribes (`jamieLinks`, `linkTribe`, `unlinkTribe`). A call
+/// with Jamie is [startCall].
 class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkHttpHive()) {
     /// Where one poll of a [Pairing] stands.
     sealed class Poll {
@@ -198,6 +198,22 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
             pairing.userCode.isEmpty() || pairing.userCode.length > 32
         ) throw HiveException("Stadeum's pairing code could not be read.")
         return pairing
+    }
+
+    /// Starts a call with Jamie in [workspace] as the paired person: Hive's
+    /// `POST /api/strut-devices/calls` (device credential as the bearer, body
+    /// `{"workspace":"<slug>"}`) mints the call's Hive token, dispatches Jamie
+    /// into a new room and answers `{"url":"<call link>"}` (the token stays
+    /// behind Hive's own opaque callKey, never in the link). The link is
+    /// returned unchecked: the caller checks it against the account's call
+    /// server (`CallLink.hive`).
+    suspend fun startCall(link: HiveLink, workspace: String): String {
+        if (link.revokedAt != null) throw HiveException("Stadeum no longer knows this device; connect again in You.")
+        val (status, body) = request("POST", "api/strut-devices/calls", JSONObject().put("workspace", workspace).toString(), link.credential)
+        if (status != 200) throw failure(status, body, "start the call")
+        val url = json(body)?.optString("url", "")?.takeIf { it.isNotEmpty() }
+            ?: throw HiveException("Stadeum's call link could not be read.")
+        return url
     }
 
     /// One poll of [pairing]: still waiting, an answer, or the device.

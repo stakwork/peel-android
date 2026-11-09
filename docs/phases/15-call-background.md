@@ -196,3 +196,15 @@ to keep it a member.
   wrong tool even if it looks like the obvious one — an extension
   property gets the same call-site ergonomics without the override
   machinery fighting back.
+
+## Update — iOS call parity (screen share, chat, Jamie, devices, switch confirm, recency)
+
+Built: screen share via LiveKit's `ScreenCaptureParams` (its own mediaProjection service; manifest declares
+`FOREGROUND_SERVICE_MEDIA_PROJECTION`) plus "share a camera" as a share tile; tap-to-pin focus layout
+(`CallSession.focusTile`, pinned tile or first screen share large, strip of the rest); in-call chat side panel
+(`engine/CallChat.kt`, topic `lk-chat-topic`, JSON `{id,timestamp,message}` = LiveKit/meet convention); camera picker
+and audio-route picker (device menu); "Leave the call and join?" dialog (`CallSwitch`, `MainTabs.request`);
+Join hidden on call cards older than 12 h (`CallLink.isRecent`); call with Jamie from Apps
+(`HiveClient.startCall` -> `POST /api/strut-devices/calls {workspace}`, `CallLink.hive`). The sidebar green phone already existed.
+Assumptions (the iOS `peel` source was not available): chat wire format, `workspace` = the peer id, Hive room
+must be on the account's call server, "camera picker for share" = share a second camera. Untested on a device.

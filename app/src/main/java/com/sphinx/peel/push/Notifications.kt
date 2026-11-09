@@ -146,6 +146,15 @@ object Notifications {
             .build()
     }
 
+    /// The notification a screen share's capture service shows (Android
+    /// requires one while the screen is being captured).
+    fun sharingScreen(context: Context, title: String): Notification =
+        builder(context, NotificationKind.ONGOING_CALL, title, "Sharing your screen")
+            .setContentIntent(openIntent(context, chat = null, requestCode = 2))
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .build()
+
     private fun builder(context: Context, kind: NotificationKind, title: String, text: String) =
         NotificationCompat.Builder(context, kind.channelId)
             .setSmallIcon(R.drawable.ic_notification)

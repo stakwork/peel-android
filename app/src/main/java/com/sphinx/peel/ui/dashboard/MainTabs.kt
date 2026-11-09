@@ -1,6 +1,17 @@
 package com.sphinx.peel.ui.dashboard
 
 import com.sphinx.peel.ui.call.CallConnectionState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import com.sphinx.peel.engine.HiveClient
+import com.sphinx.peel.engine.HiveException
+import com.sphinx.peel.engine.Stadeum
+import com.sphinx.peel.engine.StadeumModel
+import com.sphinx.peel.engine.TalkHome
+import com.sphinx.peel.engine.CallSwitch
+import com.sphinx.peel.ui.call.PendingCall
+import com.sphinx.peel.ui.toast.LocalToast
+import com.sphinx.peel.ui.toast.ToastType
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -160,13 +171,13 @@ fun MainTabs(
         }
     }
 
-    // Joining or starting a call while already on a different one leaves
-    // the old one first, without asking — PeelCore's own `CallStore`
-    // confirms that in a dialog first ("Leave the call in #design and
-    // join?"); this port doesn't yet, a deliberate trim (`docs/phases/15-
-    // call-background.md`'s own "Open"), not an oversight: nothing is
-    // lost by leaving a call, only by losing a message draft or the like.
-    fun connect(chat: String, title: String, link: CallLink, camera: Boolean) {
+    // Joining or starting a call while on a different one asks first, as
+    // PeelCore's `CallStore` does ("Leave the call in #design and join?"):
+    // nothing happens until the person says yes. The same call just comes
+    // back to the front.
+    var pendingCall by remember { mutableStateOf<PendingCall?>(null) }
+
+    fun connectNow(chat: String, title: String, link: CallLink, camera: Boolean) {
         (callPhase as? CallPhase.Active)?.session?.leave()
         callPhase = CallPhase.Connecting(chat, title, link, camera)
         callScreenShown = true
@@ -186,9 +197,46 @@ fun MainTabs(
         }
     }
 
+    fun request(chat: String, title: String, link: CallLink, camera: Boolean) {
+        val current = callPhase
+        when (CallSwitch.action(current?.link?.room, link.room)) {
+            CallSwitch.Action.JOIN -> connectNow(chat, title, link, camera)
+            CallSwitch.Action.SHOW_CURRENT -> callScreenShown = true
+            CallSwitch.Action.CONFIRM -> pendingCall = PendingCall(chat, title, link, camera)
+        }
+    }
+
     fun retryCall() {
         val phase = callPhase ?: return
-        connect(phase.chat, phase.title, phase.link, phase.camera)
+        connectNow(phase.chat, phase.title, phase.link, phase.camera)
+    }
+
+    // A call with Jamie, started by Stadeum (Hive's strut-device call
+    // endpoint) in the workspace picked on Apps, then joined like any call.
+    val toast = LocalToast.current
+    fun talkToJamie(home: TalkHome) {
+        if (home.id == TalkHome.DEVELOPMENT) {
+            toast.show("Talking to Jamie on a development workspace is not available on Android.", ToastType.Info)
+            return
+        }
+        val paired = Stadeum.model.link
+        val server = engine.callServer()
+        if (paired == null || Stadeum.model.status != StadeumModel.Status.Connected || server == null) {
+            toast.show("Connect Stadeum in You to talk to Jamie.", ToastType.Warning)
+            return
+        }
+        scope.launch {
+            try {
+                val url = HiveClient(paired.hive).startCall(paired, home.id)
+                val link = CallLink.hive(url, server)
+                    ?: throw HiveException("Stadeum started the call on a server this account's calls do not use.")
+                request("", "Jamie · ${home.name}", link, false)
+            } catch (e: HiveException) {
+                toast.show(e.message ?: "Could not start the call.", ToastType.Error)
+            } catch (e: Exception) {
+                toast.show("Could not start the call.", ToastType.Error)
+            }
+        }
     }
 
     fun leaveCall() {
@@ -235,6 +283,22 @@ fun MainTabs(
         onDispose { (callPhase as? CallPhase.Active)?.session?.leave() }
     }
 
+    pendingCall?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingCall = null },
+            title = { Text("Leave the current call?") },
+            text = { Text("You're on a call in ${callPhase?.title ?: "another chat"}. Leave it and join the call in ${pending.title}?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingCall = null
+                    leaveCall()
+                    connectNow(pending.chat, pending.title, pending.link, pending.camera)
+                }) { Text("Leave and join") }
+            },
+            dismissButton = { TextButton(onClick = { pendingCall = null }) { Text("Stay") } },
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         val phase = callPhase
         if (callScreenShown && phase != null) {
@@ -246,7 +310,7 @@ fun MainTabs(
             if (route != null && chat == null) {
                 val back = { openRoute = null }
                 when (route) {
-                    DashboardRoute.APPS -> AppsScreen(onBack = back)
+                    DashboardRoute.APPS -> AppsScreen(onBack = back, onTalk = { home -> back(); talkToJamie(home) })
                     DashboardRoute.THREADS -> ThreadsScreen(engine, storage, onBack = back, onOpenThread = { threadChat, root ->
                         openThreadRoot = root
                         openChat = threadChat
@@ -291,7 +355,7 @@ fun MainTabs(
                         openChat = null; openThreadRoot = null; focusMessage = null; focusThread = null
                     },
                     focusMessageUuid = focusMessage, focusThreadUuid = focusThread,
-                    onJoinCall = { joinChat, joinTitle, link, camera -> connect(joinChat, joinTitle, link, camera) },
+                    onJoinCall = { joinChat, joinTitle, link, camera -> request(joinChat, joinTitle, link, camera) },
                 )
             } else {
                 Box(Modifier.weight(1f)) {

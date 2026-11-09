@@ -1,6 +1,28 @@
 package com.sphinx.peel.ui.call
 
+import android.app.Activity
+import android.content.Context
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.PresentToAll
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.StopScreenShare
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Badge
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.sphinx.peel.push.Notifications
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -60,9 +82,9 @@ import io.livekit.android.room.track.VideoTrack
 import kotlinx.coroutines.delay
 
 /// The call screen: the chat and the running time on top, one tile per
-/// person, the control bar — PeelCore's own `IOSCallScreen`, trimmed: no
-/// screen sharing, no device menus, no keep-on-top (this round has none of
-/// what any of those need). A pure renderer of [phase] — fetching the
+/// person (or a big pinned/shared tile with the rest in a strip), the control
+/// bar and the chat side panel — PeelCore's own `IOSCallScreen`, trimmed: no
+/// keep-on-top. A pure renderer of [phase] — fetching the
 /// ticket, owning the [CallSession], and deciding whether a call is even
 /// active at all live above this, in `MainTabs` (`docs/phases/15-call-
 /// background.md`): this screen comes and goes (the chevron hides it, a
@@ -90,9 +112,16 @@ fun CallScreen(phase: CallPhase, onHide: () -> Unit, onLeave: () -> Unit, onRetr
             val session = phase.session
             Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
                 CallHeader(title = session.title, status = CallStatusText(session), onBack = onHide)
-                Box(Modifier.weight(1f).fillMaxSize()) { CallStage(session) }
+                Box(Modifier.weight(1f).fillMaxSize()) {
+                    CallStage(session)
+                    if (session.chatOpen) {
+                        CallChatPanel(session, onClose = { session.showChat(false) }, modifier = Modifier.align(Alignment.CenterEnd))
+                    }
+                }
                 CallControls(session, onLeave = onLeave, onRejoin = onRetry)
             }
+            // Leaving the call screen (hide) shuts the panel: unread counts again.
+            DisposableEffect(session) { onDispose { session.showChat(false) } }
         }
     }
 }
@@ -128,12 +157,24 @@ private fun CallHeader(title: String, status: String, onBack: () -> Unit) {
     }
 }
 
-/// A plain grid of tiles — PeelCore's own `IOSCallStage`, trimmed: no
-/// screen-share focus (nothing here can share one yet), so there is no
-/// large-tile-plus-strip layout to build, just the grid.
+/// The tiles: a grid, or — with a screen share or a pinned tile — that one
+/// large over a strip of the rest (PeelCore's own `IOSCallStage`). Tap a tile
+/// to pin it; tap it again to let go.
 @Composable
 private fun CallStage(session: CallSession) {
     val tiles = session.tiles
+    val focus = session.focusTile
+    if (focus != null && tiles.size > 1) {
+        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            CallTileView(focus, session, pinned = focus.id == session.pinnedId, contain = focus.isScreen, modifier = Modifier.weight(1f).fillMaxWidth())
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(tiles.filter { it.id != focus.id }, key = { it.id }) { tile ->
+                    CallTileView(tile, session, pinned = false, modifier = Modifier.width(120.dp).aspectRatio(1f))
+                }
+            }
+        }
+        return
+    }
     val columns = if (tiles.size <= 2) 1 else 2
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
@@ -142,26 +183,24 @@ private fun CallStage(session: CallSession) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        items(tiles, key = { it.identity }) { tile ->
-            // 4:3 for one or two people (closer to the real app's own
-            // proportions — a tall-ish rectangle, not a wide letterboxed
-            // one) stacked in a single column; square once there are
-            // enough people to need a real grid.
-            CallTileView(tile, session, modifier = Modifier.fillMaxWidth().aspectRatio(if (columns == 1) 4f / 3f else 1f))
+        items(tiles, key = { it.id }) { tile ->
+            // 4:3 for one or two people stacked in a single column; square
+            // once there are enough people to need a real grid.
+            CallTileView(tile, session, pinned = tile.id == session.pinnedId, modifier = Modifier.fillMaxWidth().aspectRatio(if (columns == 1) 4f / 3f else 1f))
         }
     }
 }
 
 @Composable
-private fun CallTileView(tile: CallTile, session: CallSession, modifier: Modifier = Modifier) {
+private fun CallTileView(tile: CallTile, session: CallSession, pinned: Boolean, modifier: Modifier = Modifier, contain: Boolean = false) {
     val shape = RoundedCornerShape(16.dp)
     Box(
-        modifier.clip(shape).background(Theme.colors.fieldFill)
+        modifier.clip(shape).background(Theme.colors.fieldFill).clickable { session.togglePin(tile.id) }
             .then(if (tile.speaking) Modifier.border(2.dp, Theme.colors.accent, shape) else Modifier),
     ) {
         val video = tile.video
         if (video != null) {
-            CallVideoView(video, session, modifier = Modifier.fillMaxSize())
+            CallVideoView(video, session, contain = contain, modifier = Modifier.fillMaxSize())
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Avatar(
@@ -179,8 +218,13 @@ private fun CallTileView(tile: CallTile, session: CallSession, modifier: Modifie
                 Icon(Icons.Filled.MicOff, contentDescription = "Muted", tint = Theme.colors.secondaryText, modifier = Modifier.size(12.dp))
                 Spacer(Modifier.width(4.dp))
             }
+            if (pinned) {
+                Icon(Icons.Filled.PushPin, contentDescription = "Pinned", tint = Theme.colors.secondaryText, modifier = Modifier.size(12.dp))
+                Spacer(Modifier.width(4.dp))
+            }
+            val who = if (tile.isYou) "You" else tile.person.nickname.ifEmpty { tile.person.identity }
             Text(
-                if (tile.isYou) "You" else tile.person.nickname.ifEmpty { tile.person.identity },
+                if (tile.isScreen) "$who · screen" else who,
                 style = MaterialTheme.typography.labelSmall, color = Theme.colors.text, maxLines = 1,
             )
         }
@@ -192,7 +236,7 @@ private fun CallTileView(tile: CallTile, session: CallSession, modifier: Modifie
 /// composed, detaches and releases when it leaves, same lifecycle the
 /// renderer itself expects on either platform's SDK.
 @Composable
-private fun CallVideoView(video: VideoTrack, session: CallSession, modifier: Modifier = Modifier) {
+private fun CallVideoView(video: VideoTrack, session: CallSession, modifier: Modifier = Modifier, contain: Boolean = false) {
     // `update` runs on every recomposition of this tile (a sibling tile's
     // speaking state changing is enough), not just when `video` itself
     // changes — re-adding the same renderer to the same track on every one
@@ -206,11 +250,16 @@ private fun CallVideoView(video: VideoTrack, session: CallSession, modifier: Mod
         factory = { context ->
             SurfaceViewRenderer(context).also { renderer ->
                 session.initVideoRenderer(renderer)
+                // A shared screen is shown whole (letterboxed), not cropped to fill.
+                if (contain) renderer.setScalingType(livekit.org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                 renderer.tag = video
                 video.addRenderer(renderer)
             }
         },
         update = { renderer ->
+            renderer.setScalingType(
+                if (contain) livekit.org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT else livekit.org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FILL,
+            )
             val attached = renderer.tag as? VideoTrack
             if (attached !== video) {
                 attached?.removeRenderer(renderer)
@@ -230,7 +279,15 @@ private fun CallVideoView(video: VideoTrack, session: CallSession, modifier: Mod
 private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: () -> Unit) {
     val context = LocalContext.current
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            var shareMenu by remember { mutableStateOf(false) }
+            var moreMenu by remember { mutableStateOf(false) }
+            val projection = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                val data = result.data
+                if (result.resultCode == Activity.RESULT_OK && data != null) {
+                    session.startScreenShare(data, Notifications.sharingScreen(context, session.title))
+                }
+            }
             RoundControlButton(
                 icon = if (session.micOn) Icons.Filled.Mic else Icons.Filled.MicOff,
                 on = session.micOn, refused = session.micRefused, label = if (session.micOn) "Mute" else "Unmute",
@@ -242,8 +299,63 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
                 label = if (session.cameraOn) "Turn camera off" else "Turn camera on",
                 onClick = session::toggleCamera,
             )
-            if (session.cameraOn) {
-                RoundControlButton(icon = Icons.Filled.Cameraswitch, on = true, refused = false, label = "Flip camera", onClick = session::flipCamera)
+            Box {
+                RoundControlButton(
+                    icon = if (session.sharing) Icons.Filled.StopScreenShare else Icons.Filled.PresentToAll,
+                    on = session.sharing, refused = false,
+                    label = if (session.sharing) "Stop sharing" else "Share",
+                    onClick = { if (session.sharing) session.stopScreenShare() else shareMenu = true },
+                )
+                DropdownMenu(expanded = shareMenu, onDismissRequest = { shareMenu = false }) {
+                    DropdownMenuItem(text = { Text("Share your screen") }, onClick = {
+                        shareMenu = false
+                        val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                        projection.launch(manager.createScreenCaptureIntent())
+                    })
+                    // A camera as the share (not the one that is your own video).
+                    session.cameras().filter { !(session.cameraOn && it.selected) }.forEach { camera ->
+                        DropdownMenuItem(text = { Text("Share ${camera.label.lowercase()}") }, onClick = {
+                            shareMenu = false
+                            session.startCameraShare(camera.id)
+                        })
+                    }
+                }
+            }
+            Box {
+                RoundControlButton(icon = Icons.Filled.Chat, on = session.chatOpen, refused = false, label = "Chat", onClick = { session.showChat(!session.chatOpen) })
+                if (session.chatUnread > 0 && !session.chatOpen) {
+                    Badge(Modifier.align(Alignment.TopEnd)) { Text(if (session.chatUnread > 9) "9+" else session.chatUnread.toString()) }
+                }
+            }
+            Box {
+                RoundControlButton(icon = Icons.Filled.MoreHoriz, on = true, refused = false, label = "Devices", onClick = { moreMenu = true })
+                DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                    val cameras = session.cameras()
+                    val routes = session.audioRoutes()
+                    if (cameras.isNotEmpty()) {
+                        Text("Camera", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                        cameras.forEach { d ->
+                            DropdownMenuItem(
+                                text = { Text(d.label) },
+                                trailingIcon = { if (d.selected) Icon(Icons.Filled.Check, contentDescription = "In use") },
+                                onClick = { moreMenu = false; session.selectCamera(d.id) },
+                            )
+                        }
+                    }
+                    if (routes.isNotEmpty()) {
+                        Text("Microphone and speaker", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                        routes.forEach { d ->
+                            DropdownMenuItem(
+                                text = { Text(d.label) },
+                                trailingIcon = { if (d.selected) Icon(Icons.Filled.Check, contentDescription = "In use") },
+                                onClick = { moreMenu = false; session.selectAudioRoute(d.id) },
+                            )
+                        }
+                    }
+                    if (session.cameraOn) {
+                        DropdownMenuItem(text = { Text("Flip camera") }, onClick = { moreMenu = false; session.flipCamera() })
+                    }
+                }
             }
             IconButton(
                 onClick = onLeave,
@@ -290,7 +402,7 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
 private fun RoundControlButton(icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, refused: Boolean, label: String, onClick: () -> Unit) {
     IconButton(
         onClick = onClick, enabled = !refused,
-        modifier = Modifier.size(52.dp).clip(CircleShape).background(Theme.colors.fieldFill),
+        modifier = Modifier.size(46.dp).clip(CircleShape).background(Theme.colors.fieldFill),
     ) {
         Icon(icon, contentDescription = label, tint = if (on) Theme.colors.text else Theme.colors.secondaryText)
     }

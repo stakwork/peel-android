@@ -20,8 +20,8 @@ import org.json.JSONObject
 
 /// How long a call message may still be live (PeelCore's `CallLink.liveAge`)
 /// and how many calls are watched at once (`WatchedCall.limit`).
-private const val LIVE_AGE_MS = 12L * 60 * 60 * 1000
-private const val CLOCK_SKEW_MS = 5L * 60 * 1000
+private const val LIVE_AGE_MS = CallLink.LIVE_AGE_MS
+private const val CLOCK_SKEW_MS = CallLink.CLOCK_SKEW_MS
 private const val WATCH_LIMIT = 8
 
 /// How many people are on a call in each chat now, from the call server's
