@@ -15,7 +15,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
-// Talk to Jamie (iOS `TalkCall.swift`, `TalkStore.swift`; docs/phases/25-talk-to-jamie.md):
+// Talk to Jamie (iOS `TalkCall.swift`, `TalkStore.swift`; docs/phases/26-talk-to-jamie.md):
 // a live voice call with an org's agent. Peel asks the org's own strut, its
 // home, with the person's token (`POST /voice/calls`), and joins the LiveKit
 // room the home names. Not a call link: no call server, no chat message, no

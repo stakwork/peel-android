@@ -196,7 +196,7 @@ fun MainTabs(
     }
 
     val toast = LocalToast.current
-    // Talk to Jamie (`docs/phases/25-talk-to-jamie.md`): the voice call with
+    // Talk to Jamie (`docs/phases/26-talk-to-jamie.md`): the voice call with
     // an org's agent, beside the group call held here, never with it.
     val talk = remember { TalkStore(appContext) }
     talk.askMicPermission = ::askMic

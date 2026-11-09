@@ -58,7 +58,7 @@ sections for code that isn't written yet.
   - `engine/ContactRemoval.kt` — remove a contact (`Engine.deleteContact`, pure `ContactRemoval.delete`, refusals);
     `Engine.forgetContact` and `Storage.deleteContact`/`hasPendingPayment`/`serverIndexes`
     (`docs/phases/24-delete-contact.md`); UI in `ui/details/ChatDetailsScreen.kt`.
-  - `engine/Talk.kt`, `TalkWave.kt` — Talk to Jamie (`docs/phases/25-talk-to-jamie.md`): `TalkHome`/`TalkTicket`/`TalkRefusal`/`TalkVoice`,
+  - `engine/Talk.kt`, `TalkWave.kt` — Talk to Jamie (`docs/phases/26-talk-to-jamie.md`): `TalkHome`/`TalkTicket`/`TalkRefusal`/`TalkVoice`,
     `TalkPhase`, `TalkTranscript`, `TalkArtifacts` (pure, JVM-tested, HTTP behind `TalkHttp`); session and screen in `ui/talk/`
     (`TalkStore`, `TalkSession`, `TalkScreen`), held by `MainTabs` beside the group call (one call at a time).
   - `ui/` — Compose screens and the pieces they share.

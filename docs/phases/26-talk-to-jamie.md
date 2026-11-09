@@ -1,4 +1,4 @@
-# Phase 25 — Talk to Jamie
+# Phase 26 — Talk to Jamie
 
 Status: written **without a build**: not compiled, not run, not device-tested, not tried against a real home or voice agent
 (the pod had no JDK, Android SDK or device). Ported from `peel`'s `docs/talk.md`, `Sources/PeelCore/TalkCall.swift`,
