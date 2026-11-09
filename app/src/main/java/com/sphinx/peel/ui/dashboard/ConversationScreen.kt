@@ -1395,7 +1395,7 @@ private fun MessageRowView(
             } else if (!row.deleted && row.type == INVOICE_MESSAGE_TYPE) {
                 RequestMessage(row, name, engine, engine.storage, onError = onMoneyError)
             } else if (!row.deleted && callLink != null) {
-                CallBlock(callLink, engine, onJoinCall)
+                CallBlock(callLink, engine, row.timestamp, onJoinCall)
             } else if (!row.deleted && (content.isNotEmpty() || row.type != ATTACHMENT_MESSAGE_TYPE)) {
                 // Markdown as the iOS app reads it; an @mention of this
                 // account (or @all) lights up. None in the agent chat.
@@ -1473,12 +1473,15 @@ private fun MessageRowView(
 /// banner to spend it on yet.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> Unit) {
+private fun CallBlock(link: CallLink, engine: Engine, timestamp: Long?, onJoinCall: (CallLink) -> Unit) {
+    // PeelCore's `CallLink.isRecent`: a call message older than 12 hours is
+    // history, not a way in — it stays a card, without Join.
+    val recent = CallLink.isRecent(timestamp)
     var presence by remember(link.room) { mutableStateOf<CallPresence>(CallPresence.Unknown) }
-    LaunchedEffect(link.room) {
-        engine.callPresence(link).collect { presence = it }
+    LaunchedEffect(link.room, recent) {
+        if (recent) engine.callPresence(link).collect { presence = it }
     }
-    val people = presence.people().orEmpty()
+    val people = if (recent) presence.people().orEmpty() else emptyList()
     var showParticipants by remember(link.room) { mutableStateOf(false) }
     if (showParticipants && people.isNotEmpty()) {
         ModalBottomSheet(
@@ -1525,6 +1528,7 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
                 Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
             }
             when {
+                !recent -> Text("Call ended", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
                 people.isNotEmpty() -> Row(
                     Modifier
                         .clip(RoundedCornerShape(8.dp))
@@ -1562,7 +1566,7 @@ private fun CallBlock(link: CallLink, engine: Engine, onJoinCall: (CallLink) -> 
                 else -> {}
             }
         }
-        OutlinedButton(onClick = { onJoinCall(link) }) { Text("Join") }
+        if (recent) OutlinedButton(onClick = { onJoinCall(link) }) { Text("Join") }
     }
 }
 

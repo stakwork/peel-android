@@ -124,4 +124,36 @@ class CallLinkTest {
         assertEquals(link, CallLink.inMessage(link.url, isCallType = false, server = server))
         assertNull(CallLink.inMessage("just chatting, no call here", isCallType = false, server = server))
     }
+
+    @Test
+    fun `a call is recent for twelve hours and not from the future`() {
+        val now = 1_000_000_000_000L
+        val hour = 60L * 60 * 1000
+        assertTrue(CallLink.isRecent(now - 11 * hour, now))
+        assertTrue(CallLink.isRecent(now - 12 * hour, now))
+        assertFalse(CallLink.isRecent(now - 12 * hour - 1, now))
+        assertTrue(CallLink.isRecent(now + 4 * 60 * 1000, now))
+        assertFalse(CallLink.isRecent(now + 6 * 60 * 1000, now))
+        assertTrue(CallLink.isRecent(null, now))
+    }
+
+    @Test
+    fun `a hive call link is the account's call server and a hive room`() {
+        val link = CallLink.hive("https://$server/rooms/acme.sphinx.chat-.1730000000", server)
+        assertNotNull(link)
+        assertEquals("acme.sphinx.chat-.1730000000", link!!.room)
+        assertTrue(CallLink.isRoom(link.room))
+        // Also without /rooms/ in Hive's base URL.
+        assertNotNull(CallLink.hive("https://$server/acme.sphinx.chat-.1730000000", server))
+    }
+
+    @Test
+    fun `a hive call link on another host or with a odd room is refused`() {
+        assertNull(CallLink.hive("https://evil.example/rooms/acme.sphinx.chat-.1730000000", server))
+        assertNull(CallLink.hive("https://$server/rooms/anything", server))
+        assertNull(CallLink.hive("https://$server/rooms/acme.sphinx.chat-.1730000000?x=1", server))
+        assertNull(CallLink.hive("https://user@$server/rooms/acme.sphinx.chat-.1730000000", server))
+        // A message's link is still only a Peel room.
+        assertNull(CallLink.parse("https://$server/rooms/acme.sphinx.chat-.1730000000", server))
+    }
 }

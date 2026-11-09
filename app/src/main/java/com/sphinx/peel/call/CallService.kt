@@ -29,7 +29,7 @@ class CallService : Service() {
             return START_NOT_STICKY
         }
         val title = intent?.getStringExtra(EXTRA_TITLE) ?: "Peel"
-        val chat = intent?.getStringExtra(EXTRA_CHAT)
+        val chat = intent?.getStringExtra(EXTRA_CHAT)?.ifEmpty { null }
         Notifications.createChannels(this)
         val notification = Notifications.ongoingCall(this, title, chat)
         // The type must be one whose permission is held (Android 14).

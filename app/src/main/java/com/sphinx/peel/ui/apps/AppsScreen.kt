@@ -74,7 +74,7 @@ import kotlinx.coroutines.coroutineScope
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
 @Composable
-fun AppsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -151,11 +151,7 @@ fun AppsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     item { Text("Talk to Jamie", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
                     items(homes, key = { "talk-${it.id}" }) { home ->
                         TalkRow(home) {
-                            // TODO(jamie-voice): start a call with Jamie on `home`. Needs Hive's call
-                            // endpoint (iOS Hive.swift ~393, docs/talk.md) to return a room + hive
-                            // token, then `MainTabs.connect(...)` with a `CallLink` carrying
-                            // `hiveToken` (CallLink already round-trips it).
-                            toast.show("Talking to Jamie is coming soon on Android.", ToastType.Info)
+                            onTalk(home)
                         }
                     }
                     item { Spacer(Modifier.size(12.dp)) }

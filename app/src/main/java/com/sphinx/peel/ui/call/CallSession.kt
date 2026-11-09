@@ -4,13 +4,22 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import android.content.Intent
+import com.sphinx.peel.engine.CallChat
+import com.sphinx.peel.engine.CallChatMessage
 import com.sphinx.peel.engine.CallLink
 import com.sphinx.peel.engine.CallParticipant
 import com.sphinx.peel.engine.CallServer
 import com.sphinx.peel.engine.CallTicket
 import io.livekit.android.LiveKit
 import io.livekit.android.RoomOptions
+import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
+import io.livekit.android.room.participant.VideoTrackPublishOptions
+import io.livekit.android.room.track.DataPublishReliability
+import io.livekit.android.room.track.LocalVideoTrackOptions
+import io.livekit.android.room.track.screencapture.ScreenCaptureParams
+import java.util.UUID
 import io.livekit.android.room.Room
 import io.livekit.android.renderer.SurfaceViewRenderer
 import io.livekit.android.room.participant.Participant
@@ -27,10 +36,13 @@ import kotlinx.coroutines.launch
 /// never came) and LiveKit gave up — PeelCore's own `IOSCallSession.State`.
 enum class CallConnectionState { CONNECTING, CONNECTED, RECONNECTING, LOST }
 
-/// One person in the grid. Names and photos are what each joiner sent — not
-/// an identity. Ported from PeelCore's `IOSCallSession.Tile`, trimmed: no
-/// screen-share tile (this round has none to share) and so no `isScreen`/
-/// focus to go with it.
+/// A camera or an audio route the person can pick in the call.
+data class CallDevice(val id: String, val label: String, val selected: Boolean)
+
+/// One tile in the grid: a person, or (isScreen) what a person is sharing.
+/// Names and photos are what each joiner sent — not an identity. Ported from
+/// PeelCore's `IOSCallSession.Tile`. [id] is unique per tile (a person who
+/// shares has two); [identity] is the person's.
 data class CallTile(
     val identity: String,
     val person: CallParticipant,
@@ -38,12 +50,15 @@ data class CallTile(
     val speaking: Boolean,
     val muted: Boolean,
     val video: VideoTrack?,
-)
+    val isScreen: Boolean = false,
+) {
+    val id: String get() = if (isScreen) "$identity#screen" else identity
+}
 
 /// The call this device is on: owns the LiveKit room for one call, its
-/// microphone and camera, and what the call screen shows of it. Ported from
-/// PeelCore's `IOSCallSession`, trimmed: no screen sharing, no device-menu
-/// camera/mic picker, no audio-session management (LiveKit's own Android
+/// microphone, camera and screen share, the in-call chat, and what the call
+/// screen shows of it. Ported from PeelCore's `IOSCallSession`, trimmed: no
+/// audio-session management (LiveKit's own Android
 /// SDK already handles Bluetooth/speaker routing itself, through the same
 /// `audioswitch` dependency its own `Room` pulls in — nothing here needs to
 /// configure `AudioManager` by hand the way `AVAudioSession` needs asking
@@ -67,6 +82,7 @@ class CallSession(
     private val askMicPermission: suspend () -> Boolean,
     private val askCameraPermission: suspend () -> Boolean,
 ) {
+    private val context = appContext
     private val room: Room = LiveKit.create(appContext, RoomOptions(adaptiveStream = true, dynacast = true))
 
     var state by mutableStateOf(CallConnectionState.CONNECTING)
@@ -102,6 +118,37 @@ class CallSession(
     var cameraRefused by mutableStateOf(false)
         private set
 
+    /// You are sharing your screen, or a camera as a share.
+    var sharing by mutableStateOf(false)
+        private set
+
+    /// The tile you pinned to the big spot (a tile [CallTile.id]); null: none,
+    /// and a screen share takes the spot by itself.
+    var pinnedId by mutableStateOf<String?>(null)
+        private set
+
+    /// The big tile: the one you pinned, else the first screen share.
+    val focusTile: CallTile?
+        get() = tiles.firstOrNull { it.id == pinnedId } ?: tiles.firstOrNull { it.isScreen }
+
+    fun togglePin(id: String) {
+        pinnedId = if (pinnedId == id) null else id
+    }
+
+    /// The in-call chat: lines in order, how many arrived while the panel was
+    /// shut, and whether it is open (set by the screen).
+    var chatMessages by mutableStateOf<List<CallChatMessage>>(emptyList())
+        private set
+    var chatUnread by mutableStateOf(0)
+        private set
+    var chatOpen by mutableStateOf(false)
+        private set
+
+    fun showChat(open: Boolean) {
+        chatOpen = open
+        if (open) chatUnread = 0
+    }
+
     /// Something that went wrong mid-call, said quietly under the bar.
     var deviceNotice by mutableStateOf<String?>(null)
         private set
@@ -119,7 +166,12 @@ class CallSession(
     private var everConnected = false
 
     init {
-        scope.launch { room.events.collect { refresh() } }
+        scope.launch {
+            room.events.collect { event ->
+                if (event is RoomEvent.DataReceived && event.topic == CallChat.TOPIC) received(event)
+                refresh()
+            }
+        }
         scope.launch {
             try {
                 room.connect(ticket.serverUrl, ticket.token)
@@ -156,6 +208,8 @@ class CallSession(
     }
 
     companion object {
+        private const val SHARE_NOTIFICATION_ID = 4107
+
         /// The call's start: the earliest known join time (epoch ms) of
         /// anyone in the room. Never later than [current] (so it survives
         /// the first participant leaving); with nothing known and no
@@ -197,6 +251,138 @@ class CallSession(
 
     fun toggleCamera() {
         scope.launch { setCamera(!cameraOn) }
+    }
+
+    // MARK: - Chat
+
+    private fun received(event: RoomEvent.DataReceived) {
+        val participant = event.participant ?: return
+        val (id, timestamp, text) = CallChat.decode(event.data) ?: return
+        val identity = participant.identity?.value ?: return
+        val name = CallServer.fromLiveKitRoom(identity, participant.name, participant.metadata)?.nickname?.ifEmpty { null } ?: "Guest"
+        val line = CallChatMessage(
+            id = id.ifEmpty { UUID.randomUUID().toString() }, identity = identity, name = name, text = text,
+            timestampMs = if (timestamp > 0) timestamp else System.currentTimeMillis(), isYou = false,
+        )
+        val next = CallChat.append(chatMessages, line)
+        if (next !== chatMessages) {
+            chatMessages = next
+            if (!chatOpen) chatUnread += 1
+        }
+    }
+
+    /// Sends what was typed to everyone in the room, and shows it as yours.
+    fun sendChat(typed: String) {
+        val text = CallChat.outgoing(typed) ?: return
+        val now = System.currentTimeMillis()
+        val id = UUID.randomUUID().toString()
+        chatMessages = CallChat.append(
+            chatMessages, CallChatMessage(id, ticket.identity, "You", text, now, isYou = true),
+        )
+        scope.launch {
+            val result = room.localParticipant.publishData(CallChat.encode(id, now, text), DataPublishReliability.RELIABLE, CallChat.TOPIC)
+            if (result.isFailure) deviceNotice = "Could not send the message"
+        }
+    }
+
+    // MARK: - Screen share
+
+    private var shareTrack: LocalVideoTrack? = null
+
+    /// Shares the screen: [data] is the system's MediaProjection consent
+    /// result, [notification] the one the capture's foreground service shows.
+    fun startScreenShare(data: Intent, notification: android.app.Notification) {
+        if (sharing || leaving) return
+        scope.launch {
+            try {
+                val params = ScreenCaptureParams(data, SHARE_NOTIFICATION_ID, notification, onStop = { scope.launch { stopShare() } })
+                room.localParticipant.setScreenShareEnabled(true, params)
+            } catch (e: Exception) {
+                deviceNotice = "Could not share the screen"
+            }
+            refresh()
+        }
+    }
+
+    /// Shares a camera (not the one that is your own video) as a share tile.
+    fun startCameraShare(deviceId: String) {
+        if (sharing || leaving) return
+        scope.launch {
+            if (!askCameraPermission()) {
+                cameraRefused = true
+                return@launch
+            }
+            try {
+                val track = room.localParticipant.createVideoTrack("camera-share", LocalVideoTrackOptions(deviceId = deviceId))
+                track.startCapture()
+                shareTrack = track
+                room.localParticipant.publishVideoTrack(track, VideoTrackPublishOptions(name = "camera-share", source = Track.Source.SCREEN_SHARE))
+            } catch (e: Exception) {
+                stopShare()
+                deviceNotice = "Could not share the camera"
+            }
+            refresh()
+        }
+    }
+
+    fun stopScreenShare() {
+        scope.launch { stopShare() }
+    }
+
+    private suspend fun stopShare() {
+        if (leaving) return
+        shareTrack?.let { track ->
+            shareTrack = null
+            room.localParticipant.unpublishTrack(track, true)
+        }
+        try { room.localParticipant.setScreenShareEnabled(false) } catch (e: Exception) { /* nothing was being shared */ }
+        refresh()
+    }
+
+    // MARK: - Devices
+
+    /// The cameras this phone has, the one in use marked.
+    fun cameras(): List<CallDevice> {
+        val enumerator = livekit.org.webrtc.Camera2Enumerator(context)
+        val chosen = selectedCameraId ?: room.videoTrackCaptureDefaults.deviceId
+        return enumerator.deviceNames.mapIndexed { i, id ->
+            val label = when {
+                enumerator.isFrontFacing(id) -> "Front camera"
+                enumerator.isBackFacing(id) -> "Back camera"
+                else -> "Camera ${i + 1}"
+            }
+            CallDevice(id, label, selected = id == chosen)
+        }.let { list ->
+            // Two on the same side get numbers, so they can be told apart.
+            list.groupBy { it.label }.flatMap { (label, same) ->
+                if (same.size == 1) same else same.mapIndexed { n, d -> d.copy(label = "$label ${n + 1}") }
+            }.sortedBy { d -> list.indexOfFirst { it.id == d.id } }
+        }
+    }
+
+    private var selectedCameraId: String? = null
+
+    /// Uses [id] for your video now (if it is on) and the next time.
+    fun selectCamera(id: String) {
+        selectedCameraId = id
+        room.videoTrackCaptureDefaults = room.videoTrackCaptureDefaults.copy(deviceId = id)
+        val track = room.localParticipant.getTrackPublication(Track.Source.CAMERA)?.track as? LocalVideoTrack
+        if (track != null && cameraOn) {
+            try { track.switchCamera(deviceId = id) } catch (e: Exception) { deviceNotice = "Could not switch the camera" }
+        }
+    }
+
+    /// Where the call's audio goes and the microphone comes from (a phone has
+    /// one route at a time: the earpiece, speaker, a headset or Bluetooth).
+    fun audioRoutes(): List<CallDevice> {
+        val handler = room.audioSwitchHandler ?: return emptyList()
+        val chosen = handler.selectedAudioDevice
+        return handler.availableAudioDevices.map { CallDevice(it.name, it.name, selected = it == chosen) }
+    }
+
+    fun selectAudioRoute(id: String) {
+        val handler = room.audioSwitchHandler ?: return
+        handler.availableAudioDevices.firstOrNull { it.name == id }?.let { handler.selectDevice(it) }
     }
 
     /// Front and back cameras.
@@ -266,7 +452,10 @@ class CallSession(
             compareBy({ it.joinedAt ?: Long.MAX_VALUE }, { it.identity?.value ?: "" }),
         )
         val everyone: List<Pair<Participant, Boolean>> = others.map { it to false } + (local to true)
-        val next = everyone.mapNotNull { (participant, isYou) -> tile(participant, isYou) }
+        val next = everyone.flatMap { (participant, isYou) -> listOfNotNull(tile(participant, isYou), screenTile(participant, isYou)) }
+        if (pinnedId != null && next.none { it.id == pinnedId }) pinnedId = null
+        val shared = local.getTrackPublication(Track.Source.SCREEN_SHARE)?.let { !it.muted } == true
+        if (shared != sharing) sharing = shared
         if (next != tiles) tiles = next
 
         val micPublication = local.getTrackPublication(Track.Source.MICROPHONE)
@@ -304,6 +493,13 @@ class CallSession(
             ?.takeIf { !it.muted }
             ?.track as? VideoTrack
         return CallTile(identity, person, isYou, speaking = participant.isSpeaking, muted = muted, video = video)
+    }
+
+    /// What a person is sharing, as its own tile; null when nothing is.
+    private fun screenTile(participant: Participant, isYou: Boolean): CallTile? {
+        val video = participant.getTrackPublication(Track.Source.SCREEN_SHARE)?.takeIf { !it.muted }?.track as? VideoTrack ?: return null
+        val base = tile(participant, isYou) ?: return null
+        return base.copy(speaking = false, muted = false, video = video, isScreen = true)
     }
 
     /// For rendering: a renderer attaches to this (and detaches with
@@ -347,3 +543,6 @@ val CallPhase.chat: String get() = when (this) { is CallPhase.Connecting -> chat
 val CallPhase.title: String get() = when (this) { is CallPhase.Connecting -> title; is CallPhase.Failed -> title; is CallPhase.Active -> session.title }
 val CallPhase.link: CallLink get() = when (this) { is CallPhase.Connecting -> link; is CallPhase.Failed -> link; is CallPhase.Active -> session.link }
 val CallPhase.camera: Boolean get() = when (this) { is CallPhase.Connecting -> camera; is CallPhase.Failed -> camera; is CallPhase.Active -> session.wantsCamera }
+
+/// A call waiting on the person's yes to leave the one they are on.
+data class PendingCall(val chat: String, val title: String, val link: CallLink, val camera: Boolean)

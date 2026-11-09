@@ -192,4 +192,27 @@ class StadeumTest {
         assertTrue(m.reconnectHint)
         m.close()
     }
+
+    @Test
+    fun `a call with Jamie posts the workspace with the device credential and returns Hive's url`() = runBlocking {
+        var seen: Triple<String, String?, String?>? = null
+        val http = HiveHttp { method, url, json, bearer, _ ->
+            seen = Triple("$method $url", json, bearer)
+            HiveResponse(200, """{"url":"https://call.test/rooms/acme.sphinx.chat-.1730000000"}""")
+        }
+        val url = HiveClient("https://hive.test", http).startCall(link(), "acme")
+        assertEquals("https://call.test/rooms/acme.sphinx.chat-.1730000000", url)
+        assertEquals("POST https://hive.test/api/strut-devices/calls", seen!!.first)
+        assertEquals("""{"workspace":"acme"}""", seen!!.second)
+        assertEquals("hivedev_secret", seen!!.third)
+    }
+
+    @Test
+    fun `a call with Jamie says why Hive refused, and is not tried on a revoked pairing`() = runBlocking {
+        val refusing = HiveHttp { _, _, _, _, _ -> HiveResponse(403, """{"error":"Access denied"}""") }
+        val e = runCatching { HiveClient("https://hive.test", refusing).startCall(link(), "acme") }.exceptionOrNull()
+        assertTrue(e is HiveException && e.message!!.contains("Access denied"))
+        val none = HiveHttp { _, _, _, _, _ -> error("must not be called") }
+        assertTrue(runCatching { HiveClient("https://hive.test", none).startCall(link(revoked = true), "acme") }.exceptionOrNull() is HiveException)
+    }
 }
