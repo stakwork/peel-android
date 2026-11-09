@@ -895,6 +895,20 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         return memes.publicUrl(muid)
     }
 
+    /// The photo others see beside this account's messages: an https link, or empty for none
+    /// (iOS `setPhotoURL`). It travels like the name: every message sent from now on carries it.
+    fun setPhotoUrl(url: String) {
+        val clean = ProfilePhoto.clean(url).getOrThrow()
+        storage.apply(Storage.Commit(settings = mapOf(Setting.PHOTO_URL to clean)))
+    }
+
+    /// Makes `jpeg` this account's photo (iOS `uploadPhoto`): uploads it, then stores its link.
+    suspend fun uploadPhoto(jpeg: ByteArray): String {
+        val url = uploadPicture(jpeg)
+        setPhotoUrl(url)
+        return url
+    }
+
     /// The people seen posting in a tribe (not this account), as iOS `tribeSenders`.
     fun tribeSeenCount(chat: String): Int = storage.tribeSenderCount(chat)
 
