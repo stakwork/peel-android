@@ -29,7 +29,11 @@ object ContactRemoval {
     /// Whether the core's JSON for a contact (`get_contact`) shows the key exchange completed
     /// (`contact_key` present and not empty).
     fun hasContactKey(contactJson: String): Boolean =
-        runCatching { JSONObject(contactJson).optString("contact_key", "").isNotEmpty() }.getOrDefault(false)
+        runCatching {
+            // A JSON null is no key: `optString` would give it back as the text "null".
+            val json = JSONObject(contactJson)
+            !json.isNull("contact_key") && json.optString("contact_key", "").isNotEmpty()
+        }.getOrDefault(false)
 
     /// The steps, in PeelCore's order. [isContact] is the core knowing them as a person (a tribe or
     /// a stranger is not one); [hasPendingPayment] sats still on their way; [connected] registered
