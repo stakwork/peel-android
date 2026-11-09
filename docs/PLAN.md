@@ -184,6 +184,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 20 | Push and reliability: FCM under its own app id, data-only pushes named like iOS from a Keystore-sealed child-index map, reconnect on network change/foreground, call foreground service | built, not device-tested; see the file | [phases/20-push-and-reliability.md](phases/20-push-and-reliability.md) |
 | 21 | Invites (signup only with an invite, make/cancel invites) and add contact, key exchange, ported from `Account.signup`/`Engine+Contacts.swift` | built, unit-tested, not device-tested; see the file | [phases/21-invites.md](phases/21-invites.md) |
 | 22 | Tribe details parity (QR link, hero, Seen here) and per-chat time zone sharing, synced as the preferences file `timezone` item | built, unit-tested, not compiled or device-tested; see the file | [phases/22-tribe-details-parity.md](phases/22-tribe-details-parity.md) |
+| 23 | Tribe management: join (link / pubkey@host / uuid), create, edit, leave, delete, members and join requests, approve / reject, kick, pin | written without a build; not compiled, run or device-tested; see the file | [phases/23-tribe-management.md](phases/23-tribe-management.md) |
 
 ## Open questions
 

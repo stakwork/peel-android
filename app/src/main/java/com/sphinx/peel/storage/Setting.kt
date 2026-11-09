@@ -133,4 +133,8 @@ enum class Setting(val key: String) {
     /// How this account appears in each tribe (`TribeIdentity.encode`):
     /// `{tribe pubkey: {a: alias, p: https photo}}`. Local to this device.
     TRIBE_IDENTITIES("tribeIdentities"),
+
+    /// The tribes this account created (`OwnedTribes.encode`, comma-separated pubkeys): owner
+    /// actions are offered for them even where the registry's owner key is not the account's.
+    OWNED_TRIBES("ownedTribes"),
 }

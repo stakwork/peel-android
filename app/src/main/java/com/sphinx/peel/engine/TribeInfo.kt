@@ -41,6 +41,18 @@ data class TribeInfo(
     val priceToJoinMsat: Long = 0,
     /// `"escrow_millis"`: how long escrow is held before it is paid back.
     val escrowMillis: Long? = null,
+    /// The registry's `"uuid"`: what an older tribe link names the tribe by.
+    val uuid: String? = null,
+    /// `"unlisted"`, `"app_url"`, `"feed_url"`: the edit form's own fields.
+    val unlisted: Boolean = false,
+    val appUrl: String? = null,
+    val feedUrl: String? = null,
+    /// `"pin"`: the uuid of the message pinned in the tribe, if any.
+    val pin: String? = null,
+    /// `"owner_pubkey"` and `"owner_route_hint"`: who runs the tribe, and how to reach
+    /// them (what a join needs as its route hint).
+    val ownerPubkey: String? = null,
+    val ownerRouteHint: String? = null,
 ) {
     companion object {
         /// `pubkey` doesn't match what the registry actually answered —
@@ -53,6 +65,48 @@ data class TribeInfo(
         /// tribe's own row, charging every later send to it accordingly.
         class MismatchException(pubkey: String) : Exception("the tribes registry answered for a different tribe than $pubkey")
 
+        /// A registry answer read: `GET /tribes/<pubkey or uuid>`'s body.
+        fun parse(body: String): TribeInfo {
+            val root = JSONObject(body)
+            fun text(key: String): String? = root.optString(key).trim().takeIf { it.isNotEmpty() }
+            return TribeInfo(
+                pubkey = root.getString("pubkey"),
+                name = root.getString("name"),
+                img = root.optString("img").takeIf { it.isNotEmpty() },
+                pricePerMessageMsat = root.optLong("price_per_message", 0L).coerceAtLeast(0L),
+                escrowMsat = root.optLong("escrow_amount", 0L).coerceAtLeast(0L),
+                description = text("description"),
+                tags = root.optJSONArray("tags")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).trim().takeIf { t -> t.isNotEmpty() } } } ?: emptyList(),
+                ownerAlias = text("owner_alias"),
+                memberCount = if (root.has("member_count")) root.optLong("member_count").takeIf { it > 0 } else null,
+                isPrivate = if (root.has("private") && !root.isNull("private")) root.optBoolean("private") else null,
+                priceToJoinMsat = root.optLong("price_to_join", 0L).coerceAtLeast(0L),
+                escrowMillis = if (root.has("escrow_millis") && !root.isNull("escrow_millis")) root.optLong("escrow_millis") else null,
+                created = text("created"),
+                uuid = text("uuid"),
+                unlisted = root.optBoolean("unlisted", false),
+                appUrl = text("app_url"),
+                feedUrl = text("feed_url"),
+                pin = text("pin"),
+                ownerPubkey = text("owner_pubkey"),
+                ownerRouteHint = text("owner_route_hint"),
+            )
+        }
+
+        /// The registry's answer for a tribe named by pubkey *or uuid*, not checked
+        /// against the name asked for: for a join, which learns the pubkey from it.
+        suspend fun lookup(id: String, host: String): TribeInfo = withContext(Dispatchers.IO) {
+            val url = URL("https://$host/tribes/$id")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            try {
+                parse(connection.inputStream.bufferedReader().use { it.readText() })
+            } finally {
+                connection.disconnect()
+            }
+        }
+
         suspend fun fetch(pubkey: String, host: String): TribeInfo = withContext(Dispatchers.IO) {
             val url = URL("https://$host/tribes/$pubkey")
             val connection = url.openConnection() as HttpURLConnection
@@ -63,22 +117,7 @@ data class TribeInfo(
             } finally {
                 connection.disconnect()
             }
-            val root = JSONObject(body)
-            val info = TribeInfo(
-                pubkey = root.getString("pubkey"),
-                name = root.getString("name"),
-                img = root.optString("img").takeIf { it.isNotEmpty() },
-                pricePerMessageMsat = root.optLong("price_per_message", 0L).coerceAtLeast(0L),
-                escrowMsat = root.optLong("escrow_amount", 0L).coerceAtLeast(0L),
-                description = root.optString("description").trim().takeIf { it.isNotEmpty() },
-                tags = root.optJSONArray("tags")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).trim().takeIf { t -> t.isNotEmpty() } } } ?: emptyList(),
-                ownerAlias = root.optString("owner_alias").trim().takeIf { it.isNotEmpty() },
-                memberCount = if (root.has("member_count")) root.optLong("member_count").takeIf { it > 0 } else null,
-                isPrivate = if (root.has("private") && !root.isNull("private")) root.optBoolean("private") else null,
-                priceToJoinMsat = root.optLong("price_to_join", 0L).coerceAtLeast(0L),
-                escrowMillis = if (root.has("escrow_millis") && !root.isNull("escrow_millis")) root.optLong("escrow_millis") else null,
-                created = root.optString("created").trim().takeIf { it.isNotEmpty() },
-            )
+            val info = parse(body)
             if (info.pubkey != pubkey) throw MismatchException(pubkey)
             info
         }

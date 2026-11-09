@@ -52,6 +52,9 @@ sections for code that isn't written yet.
   - `engine/Invite*.kt`, `ContactCode.kt`, `InviterFlow.kt`, `Invites.kt` and `account/Signup.kt` — invites and
     contacts (`docs/phases/21-invites.md`): a new account only signs up with an invite; `addContact`,
     `makeInvite`, `cancelInvite`; `run(ordered = true)` publishes in PeelCore's `publishPlan` order.
+  - `engine/TribeLink.kt`, `TribeForm.kt`, `TribeMembers.kt`, `Tribes.kt` — tribe join/create/edit/leave/delete,
+    members and requests, kick, pin (`docs/phases/23-tribe-management.md`): pure parsers/builders (JVM-tested) and
+    `Engine` extensions over the core's tribe calls; UI in `ui/tribes/`.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

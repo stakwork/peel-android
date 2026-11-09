@@ -711,7 +711,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// requires. 0 for a DM, or a tribe whose price was never fetched
     /// (`ContactRow.pricePerMessageMsat`'s own doc comment) — treated
     /// the same as "no price", not an error.
-    private fun tribeMessageAmountMsat(chat: String): Long {
+    internal fun tribeMessageAmountMsat(chat: String): Long {
         val tribe = storage.contact(chat) ?: return MESSAGE_FLOOR_MSAT
         return saturatingTribePrice(tribe).coerceAtLeast(MESSAGE_FLOOR_MSAT)
     }
@@ -1654,6 +1654,26 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             val waiter = async(start = CoroutineStart.UNDISPATCHED) { inboundResults.first(expect) }
             ask()
             waiter.await()
+        }
+    }
+
+    /// [askAndAwait] for a core call whose answer may come back in the call's own `RunReturn`
+    /// (`create_tribe`, `list_tribe_members`) as well as later, from the server: whichever
+    /// matches `expect` first. Null on [timeoutMs] with nothing matching.
+    internal suspend fun askAndAwaitOrNow(
+        timeoutMs: Long,
+        expect: (RunReturn) -> Boolean,
+        ask: suspend () -> RunReturn,
+    ): RunReturn? = withTimeoutOrNull(timeoutMs) {
+        coroutineScope {
+            val waiter = async(start = CoroutineStart.UNDISPATCHED) { inboundResults.first(expect) }
+            val now = ask()
+            if (expect(now)) {
+                waiter.cancel()
+                now
+            } else {
+                waiter.await()
+            }
         }
     }
 

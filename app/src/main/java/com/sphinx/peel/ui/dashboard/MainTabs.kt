@@ -256,6 +256,17 @@ fun MainTabs(
                         onBack = back,
                         onOpenChat = { contactChat -> openRoute = null; openChat = contactChat },
                     )
+                    DashboardRoute.JOIN_TRIBE -> com.sphinx.peel.ui.tribes.JoinTribeScreen(
+                        engine,
+                        onBack = back,
+                        onOpenChat = { tribeChat -> openRoute = null; openChat = tribeChat },
+                    )
+                    DashboardRoute.CREATE_TRIBE -> com.sphinx.peel.ui.tribes.TribeFormScreen(
+                        engine,
+                        chat = null,
+                        onBack = back,
+                        onDone = { tribeChat -> openRoute = null; openChat = tribeChat },
+                    )
                     DashboardRoute.INVITES -> com.sphinx.peel.ui.invites.InvitesScreen(engine, storage, onBack = back)
                     DashboardRoute.MENTIONS -> MentionsScreen(
                         storage,

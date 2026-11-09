@@ -121,6 +121,10 @@ import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.DownloadedAttachment
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.TimeZones
+import com.sphinx.peel.engine.TribeInfo
+import com.sphinx.peel.engine.ownsTribe
+import com.sphinx.peel.engine.pinMessage
+import com.sphinx.peel.engine.tribeInfo
 import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.storage.MessageRow
 import com.sphinx.peel.storage.Storage
@@ -425,8 +429,27 @@ fun ConversationScreen(
 
     val detailsConversation = conversation
     if (showDetails && detailsConversation != null) {
-        com.sphinx.peel.ui.details.ChatDetailsScreen(engine, storage, detailsConversation, onBack = { showDetails = false })
+        com.sphinx.peel.ui.details.ChatDetailsScreen(engine, storage, detailsConversation, onBack = { showDetails = false }, onLeftTribe = onBack)
         return
+    }
+
+    // A tribe's registry entry: who owns it (the owner can pin) and which message is pinned.
+    val registry by produceState<TribeInfo?>(null, chat, isTribe) {
+        value = if (isTribe) withContext(Dispatchers.IO) { runCatching { engine.tribeInfo(chat) }.getOrNull() } else null
+    }
+    val isTribeOwner = isTribe && engine.ownsTribe(chat, registry)
+    var pinned by remember(chat) { mutableStateOf<String?>(null) }
+    LaunchedEffect(registry) { registry?.let { pinned = it.pin } }
+    fun setPin(uuid: String?) {
+        scope.launch {
+            error = null
+            try {
+                engine.pinMessage(chat, uuid)
+                pinned = uuid
+            } catch (e: Exception) {
+                error = e.message ?: "Could not pin that message."
+            }
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -492,6 +515,27 @@ fun ConversationScreen(
                             onClick = { callMenuOpen = false; startCall(audioOnly = false) },
                         )
                     }
+                }
+            }
+        }
+
+        // A tribe's pinned message, when it is among the messages loaded here.
+        val pinnedRow = pinned?.takeIf { it.isNotEmpty() }?.let { uuid -> messages.firstOrNull { it.uuid == uuid && !it.deleted } }
+        if (pinnedRow != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Pinned: ${previewContent(pinnedRow).ifBlank { "message" }}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Theme.colors.secondaryText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (isTribeOwner) {
+                    TextButton(onClick = { setPin(null) }) { Text("Unpin", color = Theme.colors.accent) }
                 }
             }
         }
@@ -608,6 +652,8 @@ fun ConversationScreen(
                     onBoost = { sendBoost(row) }.takeIf { canBoost(row, rowBoosts) },
                     onJoinCall = { link -> onJoinCall(chat, title, link, false) },
                     onDelete = { deleteMessage(row) },
+                    pinned = row.uuid != null && row.uuid == pinned,
+                    onPin = if (isTribeOwner && row.type == 0) ({ setPin(if (row.uuid == pinned) null else row.uuid) }) else null,
                     onMoneyError = { error = it },
                     highlight = highlight.alphaFor(row.uuid),
                 )
@@ -1258,6 +1304,9 @@ private fun MessageRowView(
     onBoost: (() -> Unit)? = null,
     onJoinCall: (CallLink) -> Unit = {},
     onDelete: (() -> Unit)? = null,
+    /// Pin / Unpin in a tribe this account owns; `pinned` is whether this row is the pinned one.
+    pinned: Boolean = false,
+    onPin: (() -> Unit)? = null,
     onMoneyError: (String) -> Unit = {},
     deleteReplyCount: Int = threadSummary?.replyCount ?: 0,
     /// Alpha of the focus flash drawn behind the row; 0 for none.
@@ -1399,6 +1448,9 @@ private fun MessageRowView(
                     text = { Text("Copy link") },
                     onClick = { menuOpen = false; com.sphinx.peel.ClipboardUtil.copySensitive(clipboardContext, "link", linkToCopy) },
                 )
+            }
+            if (onPin != null) {
+                DropdownMenuItem(text = { Text(if (pinned) "Unpin" else "Pin") }, onClick = { menuOpen = false; onPin() })
             }
             if (onDelete != null && canDelete(row, deleteReplyCount)) {
                 DropdownMenuItem(
