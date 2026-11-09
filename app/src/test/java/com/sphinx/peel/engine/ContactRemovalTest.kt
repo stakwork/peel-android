@@ -36,7 +36,6 @@ class ContactRemovalTest {
             runBlocking { run.block() }
             throw AssertionError("expected a refusal")
         } catch (e: Exception) {
-            if (e is AssertionError) throw e
             e
         }
 
