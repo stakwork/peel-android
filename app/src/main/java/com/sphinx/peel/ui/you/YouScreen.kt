@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.you
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -68,6 +71,8 @@ import com.sphinx.peel.account.PinTimeout
 import com.sphinx.peel.account.SecretStoreFailure
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.ProfilePhoto
+import com.sphinx.peel.ui.components.prepareImageForSending
 import com.sphinx.peel.engine.PaymentRules
 import com.sphinx.peel.engine.Sats
 import com.sphinx.peel.engine.Stadeum
@@ -156,6 +161,37 @@ private fun YouMain(
     // screen gets to "live" without its own poll.
     var balanceMsat by remember { mutableStateOf(engine.balanceMsat()) }
     LaunchedEffect(connection) { balanceMsat = engine.balanceMsat() }
+    var photoUrl by remember { mutableStateOf(storage.value(Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() }) }
+    var uploadingPhoto by remember { mutableStateOf(false) }
+    var photoProblem by remember { mutableStateOf<String?>(null) }
+    var confirmingRemovePhoto by remember { mutableStateOf(false) }
+    // Choose, redraw as a small JPEG (iOS `ProfilePhoto.jpeg`), upload to the public route and
+    // store the link; the photo changes only once all of that worked.
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        uploadingPhoto = true
+        photoProblem = null
+        scope.launch {
+            try {
+                val jpeg = withContext(Dispatchers.IO) {
+                    val size = runCatching { context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } }.getOrNull()
+                        ?.takeIf { it >= 0 }
+                    ProfilePhoto.refusal(size)?.let { throw IllegalStateException(it) }
+                    try {
+                        prepareImageForSending(context, uri, ProfilePhoto.MAX_PIXELS, ProfilePhoto.JPEG_QUALITY)
+                    } catch (e: OutOfMemoryError) {
+                        throw IllegalStateException("That picture is too large.")
+                    }
+                } ?: throw IllegalStateException("That is not a picture.")
+                engine.uploadPhoto(jpeg)
+                photoUrl = storage.value(Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() }
+            } catch (e: Exception) {
+                photoProblem = ProfilePhoto.message(e)
+            } finally {
+                uploadingPhoto = false
+            }
+        }
+    }
     val hasAgent = remember { storage.contact(engine.agentPubkey) != null }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -169,9 +205,21 @@ private fun YouMain(
         item {
             Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Avatar(
-                    name = alias ?: "You", url = storage.value(Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() },
+                    name = alias ?: "You", url = photoUrl,
                     size = 88.dp, hue = PersonHue.of(engine.accountKey), shape = AvatarShape.CIRCLE,
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        enabled = !uploadingPhoto,
+                    ) { Text(if (uploadingPhoto) "Uploading…" else if (photoUrl == null) "Add photo" else "Change photo") }
+                    if (photoUrl != null && !uploadingPhoto) {
+                        TextButton(onClick = { confirmingRemovePhoto = true }) { Text("Remove photo", color = Theme.colors.destructive) }
+                    }
+                }
+                photoProblem?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.destructive, textAlign = TextAlign.Center)
+                }
                 Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier.clickable { editingName = true },
@@ -324,6 +372,23 @@ private fun YouMain(
             }
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    if (confirmingRemovePhoto) {
+        AlertDialog(
+            onDismissRequest = { confirmingRemovePhoto = false },
+            title = { Text("Remove your photo?") },
+            text = { Text("Others see your initials instead, from your next message on.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingRemovePhoto = false
+                    runCatching { engine.setPhotoUrl("") }
+                        .onSuccess { photoUrl = null; photoProblem = null }
+                        .onFailure { photoProblem = ProfilePhoto.message(it) }
+                }) { Text("Remove", color = Theme.colors.destructive) }
+            },
+            dismissButton = { TextButton(onClick = { confirmingRemovePhoto = false }) { Text("Cancel") } },
+        )
     }
 
     if (editingName) {

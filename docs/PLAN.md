@@ -186,6 +186,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 22 | Tribe details parity (QR link, hero, Seen here) and per-chat time zone sharing, synced as the preferences file `timezone` item | built, unit-tested, not compiled or device-tested; see the file | [phases/22-tribe-details-parity.md](phases/22-tribe-details-parity.md) |
 | 23 | Tribe management: join (link / pubkey@host / uuid), create, edit, leave, delete, members and join requests, approve / reject, kick, pin | written without a build; not compiled, run or device-tested; see the file | [phases/23-tribe-management.md](phases/23-tribe-management.md) |
 | 24 | Remove a contact: server copy first, then the core and local rows, refused offline / for a tribe / with a payment pending, ported from `Engine+Contacts.swift` `deleteContact` | written without a build; not compiled, run or device-tested; see the file | [phases/24-delete-contact.md](phases/24-delete-contact.md) |
+| 25 | Own profile photo: pick, redraw as a small JPEG, upload to the memes server's public route, store the link, remove; ported from `Engine+Account.swift` `uploadPhoto`/`setPhotoURL` | see the file | [phases/25-profile-photo.md](phases/25-profile-photo.md) |
 
 ## Open questions
 
