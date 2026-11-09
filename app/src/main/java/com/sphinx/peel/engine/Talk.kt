@@ -237,7 +237,7 @@ sealed class TalkRefusal(message: String) : Exception(message) {
 
     /// Any other status, with the home's `error` cleaned, if it gave one.
     class Refused(val status: Int, val words: String?, val home: String) : TalkRefusal(
-        lead(status, home).let { lead -> words?.let { "$lead: $it" } ?: "$lead." },
+        lead(status, home).let { lead -> words?.let { "$lead: $it." } ?: "$lead." },
     )
 
     companion object {
