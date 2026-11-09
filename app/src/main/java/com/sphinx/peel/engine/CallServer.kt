@@ -205,27 +205,7 @@ class CallServer(val host: String) {
     /// payload decode, not a general JWT library: this account did not
     /// issue the token, the call server did, and nothing here trusts it
     /// for anything beyond "which room, whose identity, until when."
-    internal fun claimsOf(token: String): Claims {
-        val parts = token.split(".")
-        if (parts.size < 2) throw TicketException.MalformedToken
-        val json = try {
-            JSONObject(String(base64UrlDecode(parts[1]), Charsets.UTF_8))
-        } catch (e: Exception) {
-            throw TicketException.MalformedToken
-        }
-        val sub = json.optString("sub").takeIf { it.isNotEmpty() }
-        val exp = if (json.has("exp")) json.optDouble("exp") else null
-        val expMs = exp?.let { (it * 1000).toLong() }
-        val video = json.optJSONObject("video")
-        val room = video?.optString("room")?.takeIf { it.isNotEmpty() }
-        val roomAdmin = video?.optBoolean("roomAdmin", false) ?: false
-        return Claims(sub, expMs, room, roomAdmin)
-    }
-
-    private fun base64UrlDecode(text: String): ByteArray {
-        val padded = text.replace('-', '+').replace('_', '/').let { it + "=".repeat((4 - it.length % 4) % 4) }
-        return java.util.Base64.getDecoder().decode(padded)
-    }
+    internal fun claimsOf(token: String): Claims = parseClaims(token)
 
     /// An identity is matched exactly (a leave names it), so one with a
     /// control character is refused rather than cleaned.
@@ -440,6 +420,29 @@ class CallServer(val host: String) {
         private const val MAX_PARTICIPANTS = 500
         private const val MAX_NAME = 100
 
+        /// [claimsOf] without a server: Talk (`Talk.kt`) reads a home's token the same way.
+        internal fun parseClaims(token: String): Claims {
+            val parts = token.split(".")
+            if (parts.size < 2) throw TicketException.MalformedToken
+            val json = try {
+                JSONObject(String(base64UrlDecode(parts[1]), Charsets.UTF_8))
+            } catch (e: Exception) {
+                throw TicketException.MalformedToken
+            }
+            val sub = json.optString("sub").takeIf { it.isNotEmpty() }
+            val exp = if (json.has("exp")) json.optDouble("exp") else null
+            val expMs = exp?.let { (it * 1000).toLong() }
+            val video = json.optJSONObject("video")
+            val room = video?.optString("room")?.takeIf { it.isNotEmpty() }
+            val roomAdmin = video?.optBoolean("roomAdmin", false) ?: false
+            return Claims(sub, expMs, room, roomAdmin)
+        }
+
+        private fun base64UrlDecode(text: String): ByteArray {
+            val padded = text.replace('-', '+').replace('_', '/').let { it + "=".repeat((4 - it.length % 4) % 4) }
+            return java.util.Base64.getDecoder().decode(padded)
+        }
+
         /// One message of the presence feed, as the official Mac app reads
         /// it: `current_participants`, `participant_joined` (the
         /// participant nested or at the top level), `participant_left` and
@@ -507,7 +510,7 @@ class CallServer(val host: String) {
 
         /// An identity is matched exactly (a leave names it), so one with a
         /// control character is refused rather than cleaned.
-        private fun isIdentity(identity: String): Boolean =
+        internal fun isIdentity(identity: String): Boolean =
             identity.length in 1..256 && identity == withoutControlCharacters(identity)
 
         private fun withoutControlCharacters(text: String): String = text.filter { !it.isISOControl() }
