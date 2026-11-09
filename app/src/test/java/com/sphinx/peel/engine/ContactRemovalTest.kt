@@ -5,9 +5,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /// Mirrors the engine half of PeelCore's `ContactDeleteTests` with the core, connection and storage
-/// as fakes: `Engine` itself needs the native library (docs/phases/01-foundation.md).
+/// as fakes: `Engine` itself needs the native library (docs/phases/01-foundation.md). Robolectric because
+/// `hasContactKey` reads JSON with `org.json`, which is only a stub on a plain JVM (as in `TribeFormTest`).
+@RunWith(RobolectricTestRunner::class)
 class ContactRemovalTest {
     private class Run {
         val log = mutableListOf<String>()
