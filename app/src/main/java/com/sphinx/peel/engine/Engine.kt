@@ -41,6 +41,7 @@ import uniffi.sphinxrs.RunReturn
 import uniffi.sphinxrs.agentSeed as coreAgentSeed
 import uniffi.sphinxrs.fetchFirstMsgsPerKey as coreFetchFirstMsgsPerKey
 import uniffi.sphinxrs.fetchMsgsBatch as coreFetchMsgsBatch
+import uniffi.sphinxrs.getContact as coreGetContact
 import uniffi.sphinxrs.getMsgsCounts as coreGetMsgsCounts
 import uniffi.sphinxrs.getMutes as coreGetMutes
 import uniffi.sphinxrs.mute as coreMute
@@ -2150,6 +2151,44 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             result[pubkey] = index
         }
         return result
+    }
+
+    /// The core's JSON for one contact (`get_contact` over just its `c/` entry), or null when the
+    /// state has none (PeelCore's `Engine.contact(_:in:)`).
+    internal fun contactEntryJson(pubkey: String): String? {
+        val key = "c/$pubkey"
+        val entry = state[key] ?: return null
+        return runCatching { coreGetContact(StateCodec.encode(mapOf(key to entry)), pubkey) }.getOrNull()
+    }
+
+    /// Forgets a contact, the one state change no core call makes: the core's `c/` entry goes as the
+    /// official apps drop it (`deleteContactFromState`), with the chat's rows in the same transaction
+    /// ([Storage.deleteContact]); then the per-chat caches and the attachments' files (decrypted
+    /// copies in the cache). Android keeps no outbox of uploads by message id, so there are none to
+    /// remove. PeelCore's `forgetContact`.
+    internal suspend fun forgetContact(pubkey: String) {
+        val attachments = mutex.withLock {
+            val next = state - "c/$pubkey"
+            // Read first, like iOS: a state the core cannot list throws before anything is removed.
+            val people = parseContactPubkeys(coreListContacts(StateCodec.encode(next))).toSet()
+            val removed = storage.deleteContact(pubkey)
+            state = next
+            personKeys = people
+            removed
+        }
+        synchronized(readsSentSinceGetReads) { readsSentSinceGetReads -= pubkey }
+        synchronized(mutesSetSinceGetMutes) { mutesSetSinceGetMutes -= pubkey }
+        removeAttachmentFiles(attachments)
+    }
+
+    private fun removeAttachmentFiles(rows: List<com.sphinx.peel.storage.MessageRow>) {
+        val dir = storage.attachmentCacheDir()
+        for (row in rows) {
+            val muid = AttachmentFields.decode(row.body)?.mediaToken?.let { MediaToken.parse(it) }
+                ?.takeIf { MediaToken.isSafeMuid(it.muid) }?.muid ?: continue
+            runCatching { java.io.File(dir, muid).delete() }
+            runCatching { java.io.File(dir, "$muid.name").delete() }
+        }
     }
 
     @Volatile private var personKeys: Set<String> = emptySet()

@@ -27,6 +27,10 @@ import org.json.JSONObject
 private const val attachmentMessageType = 6
 private const val deleteMessageType = 17
 
+/// The messages of ours that carry sats and are tracked until the server says how it went
+/// (PeelCore's `MessageType.moneySends`: direct payment 5, boost 29, purchase 7, purchase deny 9).
+private val MONEY_SEND_TYPES = listOf(5, 29, 7, 9)
+
 /// The first message of a key exchange: someone adding this account (PeelCore's `MessageType.contactKey`).
 const val CONTACT_KEY_MESSAGE_TYPE = 10
 
@@ -1531,6 +1535,56 @@ class Storage(context: Context, account: String = "default") {
             db.endTransaction()
         }
         contactsVersionFlow.value += 1
+    }
+
+    /// Removes a contact and their chat in one transaction (PeelCore's `Storage.deleteContact`): the
+    /// core's `c/<pubkey>` state row, every message in the chat, its read marker and mute level, and
+    /// the contact row. Kept: the money tables (invoices, payment history: history, and what is
+    /// still settling keeps its record), the chat's time zone switch (the account's preference,
+    /// back if they are added again), tribes and the other chats. Returns the removed attachment
+    /// messages so their files can go too.
+    fun deleteContact(pubkey: String): List<MessageRow> {
+        val db = helper.writableDatabase
+        val attachments: List<MessageRow>
+        db.beginTransaction()
+        try {
+            attachments = readMessages("chat = ? AND type = $attachmentMessageType", arrayOf(pubkey), "id ASC")
+            db.delete("coreState", "key = ?", arrayOf("c/$pubkey"))
+            db.delete("message", "chat = ?", arrayOf(pubkey))
+            db.delete("chatState", "chat = ?", arrayOf(pubkey))
+            db.delete("contact", "pubkey = ?", arrayOf(pubkey))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        contactsVersionFlow.value += 1
+        return attachments
+    }
+
+    /// Whether sats with this chat are still on their way (PeelCore's `hasPendingPayment`): a
+    /// payment, boost or purchase of ours, or an invoice of theirs we are paying, that the server
+    /// has neither confirmed nor refused.
+    fun hasPendingPayment(chat: String): Boolean {
+        val types = MONEY_SEND_TYPES.joinToString(",")
+        helper.readableDatabase.rawQuery(
+            """
+            SELECT EXISTS (SELECT 1 FROM message WHERE chat = ?1 AND fromMe = 1 AND status = 'PENDING' AND type IN ($types))
+                OR EXISTS (SELECT 1 FROM invoice WHERE chat = ?1 AND incoming = 0 AND status = 'PENDING')
+            """.trimIndent(),
+            arrayOf(chat),
+        ).use { return it.moveToFirst() && it.getInt(0) == 1 }
+    }
+
+    /// The server indexes of a chat's messages of these [types] (PeelCore's `serverIndexes`).
+    fun serverIndexes(chat: String, types: List<Int>): List<Long> {
+        helper.readableDatabase.rawQuery(
+            "SELECT serverIndex FROM message WHERE chat = ? AND serverIndex IS NOT NULL AND type IN (${types.joinToString(",")}) ORDER BY serverIndex",
+            arrayOf(chat),
+        ).use { c ->
+            val out = mutableListOf<Long>()
+            while (c.moveToNext()) c.getLong(0).takeIf { it >= 0 }?.let(out::add)
+            return out
+        }
     }
 
     fun deleteAccount() {

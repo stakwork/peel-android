@@ -283,6 +283,13 @@ fun MainTabs(
                     engine, storage, chat,
                     onBack = { openChat = null; openThreadRoot = null; focusMessage = null; focusThread = null },
                     initialThreadRoot = openThreadRoot,
+                    onContactRemoved = {
+                        // What this window kept for their chat: a call in it is left, its notifications go
+                        // (the draft, reply and open thread are the chat screen's own and leave with it).
+                        if (callPhase?.chat == chat) leaveCall()
+                        com.sphinx.peel.push.Notifications.cancelChat(appContext, chat)
+                        openChat = null; openThreadRoot = null; focusMessage = null; focusThread = null
+                    },
                     focusMessageUuid = focusMessage, focusThreadUuid = focusThread,
                     onJoinCall = { joinChat, joinTitle, link, camera -> connect(joinChat, joinTitle, link, camera) },
                 )
