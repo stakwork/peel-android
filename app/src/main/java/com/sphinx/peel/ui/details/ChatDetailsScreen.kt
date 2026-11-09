@@ -65,6 +65,7 @@ import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.TimeZoneSharing
 import com.sphinx.peel.engine.TimeZones
 import com.sphinx.peel.engine.TribeInfo
+import com.sphinx.peel.engine.deleteContact
 import com.sphinx.peel.engine.deleteTribe
 import com.sphinx.peel.engine.leaveTribe
 import com.sphinx.peel.engine.ownsTribe
@@ -99,12 +100,14 @@ fun ChatDetailsScreen(
     onBack: () -> Unit,
     /// Called once a tribe has been left or deleted: its chat is gone, so not back to it.
     onLeftTribe: () -> Unit = onBack,
+    /// Called once a contact has been removed: their chat is gone, so not back to it.
+    onRemovedContact: () -> Unit = onBack,
 ) {
     BackHandler(onBack = onBack)
     if (conversation.isTribe) {
         TribeDetails(engine, storage, conversation, onBack, onLeftTribe)
     } else {
-        ContactDetails(engine, storage, conversation, onBack)
+        ContactDetails(engine, storage, conversation, onBack, onRemovedContact)
     }
 }
 
@@ -265,7 +268,7 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
 private enum class TribePage { DETAILS, EDIT, MEMBERS }
 
 @Composable
-private fun ContactDetails(engine: Engine, storage: Storage, conversation: ConversationRow, onBack: () -> Unit) {
+private fun ContactDetails(engine: Engine, storage: Storage, conversation: ConversationRow, onBack: () -> Unit, onRemoved: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val toast = LocalToast.current
@@ -280,6 +283,10 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
             value = Instant.now()
         }
     }
+    var confirmRemove by remember(conversation.chat) { mutableStateOf(false) }
+    var removing by remember(conversation.chat) { mutableStateOf(false) }
+    var removeProblem by remember(conversation.chat) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     PageFrame("Details", onBack) {
         Hero(conversation, conversation.name, null)
         // Under the name, like the iPhone: since when, and their time when it is not yours.
@@ -321,6 +328,39 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
         Spacer(Modifier.height(24.dp))
         TimeZoneSection(engine, conversation.chat, conversation.name)
         Spacer(Modifier.height(24.dp))
+        removeProblem?.let {
+            Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+        }
+        OutlinedButton(onClick = { confirmRemove = true }, enabled = !removing, modifier = Modifier.fillMaxWidth()) {
+            Text(if (removing) "Removing…" else "Remove contact", color = Theme.colors.destructive)
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+
+    if (confirmRemove) {
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            title = { Text("Remove ${conversation.name} and delete your chat?") },
+            text = { Text("They keep their copy of the chat, and either of you can add the other again.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemove = false
+                    removing = true
+                    removeProblem = null
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { engine.deleteContact(conversation.chat) }
+                            onRemoved()
+                        } catch (e: Exception) {
+                            removeProblem = e.message ?: "That did not go through."
+                        } finally {
+                            removing = false
+                        }
+                    }
+                }) { Text("Remove", color = Theme.colors.destructive) }
+            },
+            dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
+        )
     }
 }
 

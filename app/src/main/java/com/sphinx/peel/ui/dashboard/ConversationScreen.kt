@@ -175,6 +175,9 @@ fun ConversationScreen(
     /// A thread's root uuid to open straight into (the Threads list) —
     /// closing the thread shows the chat as usual.
     initialThreadRoot: String? = null,
+    /// Called once this chat's contact has been removed, after the chat is gone: the host leaves a
+    /// call in it and clears its notifications (PeelUI `AppModel.deleteContact`), then closes it.
+    onContactRemoved: () -> Unit = onBack,
 ) {
     val isAgent = chat == engine.agentPubkey
     var conversation by remember(chat) { mutableStateOf<com.sphinx.peel.storage.ConversationRow?>(null) }
@@ -429,7 +432,7 @@ fun ConversationScreen(
 
     val detailsConversation = conversation
     if (showDetails && detailsConversation != null) {
-        com.sphinx.peel.ui.details.ChatDetailsScreen(engine, storage, detailsConversation, onBack = { showDetails = false }, onLeftTribe = onBack)
+        com.sphinx.peel.ui.details.ChatDetailsScreen(engine, storage, detailsConversation, onBack = { showDetails = false }, onLeftTribe = onBack, onRemovedContact = onContactRemoved)
         return
     }
 

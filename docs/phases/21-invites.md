@@ -47,7 +47,7 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
   as iOS). A core refusal (`SphinxException`) is the one failure that restores the invite.
 - `handle` results are published only for a live key exchange (type 10, not while restoring); PeelCore
   publishes every handled result (settle of received payments, pings). Not widened here.
-- Not ported: `contact.isNew` badge, `deleteContact`, tribe links in add-contact, waiting-sats accounting.
+- Not ported: `contact.isNew` badge, tribe links in add-contact, waiting-sats accounting. (`deleteContact` is phase 24.)
 - Contact "ready" on Android comes from the core's `listContacts` (`Engine.markPeopleReady`), after an add
   and after a type 10/11 message.
 - Tests: `InviteLinkTest`, `ContactCodeTest`, `InviterFlowTest` (clear-first/restore, keep/delete matrix,

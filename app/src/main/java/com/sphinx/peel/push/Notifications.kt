@@ -108,6 +108,11 @@ object Notifications {
             .build())
     }
 
+    /// Takes down what is still showing for a chat (its message notification, which `showMessage` and
+    /// `showPush` post under the chat's id): a removed contact's (PeelUI `notifier.removeDelivered`).
+    fun cancelChat(context: Context, chat: String) =
+        NotificationManagerCompat.from(context).cancel(chat.hashCode())
+
     fun cancelIncomingCall(context: Context) =
         NotificationManagerCompat.from(context).cancel(CALL_NOTIFICATION_ID)
 
