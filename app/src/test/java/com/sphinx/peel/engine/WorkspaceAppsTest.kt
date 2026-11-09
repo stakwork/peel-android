@@ -64,6 +64,6 @@ class WorkspaceAppsTest {
     fun `gate follows live workspaces or a development home`() {
         assertTrue(!Stadeum.showsApps(emptyList(), null))
         assertTrue(Stadeum.showsApps(listOf(HivePeer("w1", "https://w1.example.com", "t", null)), null))
-        assertTrue(Stadeum.showsApps(emptyList(), TalkHome(TalkHome.DEVELOPMENT, "Dev", "https://dev.example.com")))
+        assertTrue(Stadeum.showsApps(emptyList(), TalkHome(TalkHome.DEVELOPMENT, "Dev", "https://dev.example.com", "t")))
     }
 }

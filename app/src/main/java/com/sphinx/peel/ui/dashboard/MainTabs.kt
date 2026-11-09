@@ -3,10 +3,6 @@ package com.sphinx.peel.ui.dashboard
 import com.sphinx.peel.ui.call.CallConnectionState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import com.sphinx.peel.engine.HiveClient
-import com.sphinx.peel.engine.HiveException
-import com.sphinx.peel.engine.Stadeum
-import com.sphinx.peel.engine.StadeumModel
 import com.sphinx.peel.engine.TalkHome
 import com.sphinx.peel.engine.CallSwitch
 import com.sphinx.peel.ui.call.PendingCall
@@ -70,6 +66,8 @@ import com.sphinx.peel.ui.call.chat
 import com.sphinx.peel.ui.call.link
 import com.sphinx.peel.ui.call.title
 import com.sphinx.peel.ui.apps.AppsScreen
+import com.sphinx.peel.ui.talk.TalkScreen
+import com.sphinx.peel.ui.talk.TalkStore
 import com.sphinx.peel.ui.mentions.MentionsScreen
 import com.sphinx.peel.ui.threads.ThreadsScreen
 import com.sphinx.peel.ui.theme.Theme
@@ -197,7 +195,19 @@ fun MainTabs(
         }
     }
 
+    val toast = LocalToast.current
+    // Talk to Jamie (`docs/phases/26-talk-to-jamie.md`): the voice call with
+    // an org's agent, beside the group call held here, never with it.
+    val talk = remember { TalkStore(appContext) }
+    talk.askMicPermission = ::askMic
+    talk.otherCall = { callPhase?.title }
+
     fun request(chat: String, title: String, link: CallLink, camera: Boolean) {
+        // One call at a time: a group call waits until Talk is hung up.
+        if (talk.isOn) {
+            toast.show("Hang up on Jamie first, then join the call.", ToastType.Warning)
+            return
+        }
         val current = callPhase
         when (CallSwitch.action(current?.link?.room, link.room)) {
             CallSwitch.Action.JOIN -> connectNow(chat, title, link, camera)
@@ -211,32 +221,15 @@ fun MainTabs(
         connectNow(phase.chat, phase.title, phase.link, phase.camera)
     }
 
-    // A call with Jamie, started by Stadeum (Hive's strut-device call
-    // endpoint) in the workspace picked on Apps, then joined like any call.
-    val toast = LocalToast.current
+    // Talk to Jamie, picked on Apps: `POST /voice/calls` on the workspace's
+    // own strut, then its LiveKit room (not a call link). Never while a group call is on.
     fun talkToJamie(home: TalkHome) {
-        if (home.id == TalkHome.DEVELOPMENT) {
-            toast.show("Talking to Jamie on a development workspace is not available on Android.", ToastType.Info)
+        val other = callPhase
+        if (other != null) {
+            toast.show("Leave the call in ${other.title} first, then talk to Jamie.", ToastType.Warning)
             return
         }
-        val paired = Stadeum.model.link
-        val server = engine.callServer()
-        if (paired == null || Stadeum.model.status != StadeumModel.Status.Connected || server == null) {
-            toast.show("Connect Stadeum in You to talk to Jamie.", ToastType.Warning)
-            return
-        }
-        scope.launch {
-            try {
-                val url = HiveClient(paired.hive).startCall(paired, home.id)
-                val link = CallLink.hive(url, server)
-                    ?: throw HiveException("Stadeum started the call on a server this account's calls do not use.")
-                request("", "Jamie · ${home.name}", link, false)
-            } catch (e: HiveException) {
-                toast.show(e.message ?: "Could not start the call.", ToastType.Error)
-            } catch (e: Exception) {
-                toast.show("Could not start the call.", ToastType.Error)
-            }
-        }
+        talk.talk(home)
     }
 
     fun leaveCall() {
@@ -276,11 +269,40 @@ fun MainTabs(
         }
     }
 
+    // Talk holds the same foreground service, so the call survives Peel in
+    // the background; Leave in its notification hangs up.
+    val talkSession = (talk.state as? TalkStore.State.On)?.session
+    val talkTitle = "Jamie · ${talk.home?.name ?: ""}"
+    DisposableEffect(talkSession) {
+        if (talkSession == null) return@DisposableEffect onDispose { }
+        CallService.start(appContext, talkTitle, "")
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) { talk.hangUp() }
+        }
+        ContextCompat.registerReceiver(
+            appContext, receiver, IntentFilter(CallService.ACTION_LEFT), ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose {
+            appContext.unregisterReceiver(receiver)
+            CallService.stop(appContext)
+        }
+    }
+
+    // The microphone is asked for once the room is joined; the service's type
+    // needs that permission, so start it again after.
+    val talkMicReady = talkSession?.micReady
+    LaunchedEffect(talkMicReady) {
+        if (talkSession != null && talkMicReady == true) CallService.start(appContext, talkTitle, "")
+    }
+
     // "Forget this account" (or any other path that tears MainTabs down
     // entirely) must not orphan a running Room — nothing else would ever
     // call `leave()` on it once this composable itself is gone.
     DisposableEffect(Unit) {
-        onDispose { (callPhase as? CallPhase.Active)?.session?.leave() }
+        onDispose {
+            (callPhase as? CallPhase.Active)?.session?.leave()
+            talk.hangUp()
+        }
     }
 
     pendingCall?.let { pending ->
@@ -299,7 +321,8 @@ fun MainTabs(
         )
     }
 
-    Column(Modifier.fillMaxSize()) {
+    val talkHome = talk.home
+    if (talkHome != null) TalkScreen(talk, onClose = talk::hangUp) else Column(Modifier.fillMaxSize()) {
         val phase = callPhase
         if (callScreenShown && phase != null) {
             CallScreen(phase, onHide = { callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)

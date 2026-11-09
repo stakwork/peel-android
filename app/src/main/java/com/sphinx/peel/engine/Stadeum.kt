@@ -344,7 +344,7 @@ object Stadeum {
     val model = StadeumModel()
 
     val live: List<HivePeer> get() = model.live
-    /// A development workspace to talk to Jamie on; none is configured here.
+    /// A development workspace to talk to Jamie on; none is configured here (Android has no dev setting).
     @Volatile var developmentHome: TalkHome? = null
 
     /// The Dashboard's Apps row shows only with something to show (iOS
@@ -353,7 +353,7 @@ object Stadeum {
 
     /// One Talk to Jamie row per live workspace, then the development home.
     val talkHomes: List<TalkHome>
-        get() = live.map { TalkHome(it.id, it.name, it.baseUrl) } + listOfNotNull(developmentHome)
+        get() = live.mapNotNull { TalkHome.of(it) } + listOfNotNull(developmentHome)
 
     /// What the Stadeum rows say once Stadeum knows the person's Sphinx account.
     const val IDENTIFIED_LINE =

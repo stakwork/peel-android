@@ -18,11 +18,6 @@ data class HivePeer(val id: String, val baseUrl: String, val token: String, val 
     override fun toString() = "HivePeer(id=$id, baseUrl=$baseUrl, token=<redacted>)"
 }
 
-/// A workspace to talk to Jamie on (iOS `TalkHome`).
-data class TalkHome(val id: String, val name: String, val url: String) {
-    companion object { const val DEVELOPMENT = "development" }
-}
-
 /// An app a Stadeum workspace pinned as a tab. Ported from PeelCore's
 /// `WorkspaceApps.swift`; not ported: the icon table, `waiting`/own-strut apps
 /// (the Mac's), and `AgentArtifact.Handle.isAppName` (approximated by [isAppName]).
