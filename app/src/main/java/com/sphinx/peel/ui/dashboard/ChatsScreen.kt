@@ -72,7 +72,7 @@ import kotlinx.coroutines.withContext
 
 /// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
 /// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
-enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITES }
+enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITES, JOIN_TRIBE, CREATE_TRIBE }
 
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
 /// the large title with the connection bolt, then `ChatListBody` for
@@ -206,8 +206,8 @@ private fun ChatListBody(
                             item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
                         }
                         if (!searching) {
-                            item { ActionRow("Join a tribe") { /* not wired yet */ } }
-                            item { ActionRow("Create a tribe") { /* not wired yet */ } }
+                            item { ActionRow("Join a tribe") { onOpenRoute(DashboardRoute.JOIN_TRIBE) } }
+                            item { ActionRow("Create a tribe") { onOpenRoute(DashboardRoute.CREATE_TRIBE) } }
                         }
                     }
                     item { Spacer(Modifier.height(16.dp)) }
@@ -540,8 +540,7 @@ private fun ShowAllRow(count: Int, noun: String, expanded: Boolean, onToggle: ()
 }
 
 /// "Join a tribe", "Add contact" and the rest — PeelCore's `ActionRow`.
-/// "Add contact" and "Invite someone" open their screens; "Join a tribe" and "Create a tribe" are
-/// present, same place as the real app, not wired to anything yet.
+/// "Add contact", "Invite someone", "Join a tribe" and "Create a tribe" open their screens.
 @Composable
 private fun ActionRow(title: String, onClick: () -> Unit) {
     Row(

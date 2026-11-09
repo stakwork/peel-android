@@ -65,6 +65,9 @@ import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.TimeZoneSharing
 import com.sphinx.peel.engine.TimeZones
 import com.sphinx.peel.engine.TribeInfo
+import com.sphinx.peel.engine.deleteTribe
+import com.sphinx.peel.engine.leaveTribe
+import com.sphinx.peel.engine.ownsTribe
 import com.sphinx.peel.storage.ConversationRow
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
@@ -89,17 +92,24 @@ import java.time.format.FormatStyle
 /// only where Android already has the function (copy, share a link, the
 /// time zone choice).
 @Composable
-fun ChatDetailsScreen(engine: Engine, storage: Storage, conversation: ConversationRow, onBack: () -> Unit) {
+fun ChatDetailsScreen(
+    engine: Engine,
+    storage: Storage,
+    conversation: ConversationRow,
+    onBack: () -> Unit,
+    /// Called once a tribe has been left or deleted: its chat is gone, so not back to it.
+    onLeftTribe: () -> Unit = onBack,
+) {
     BackHandler(onBack = onBack)
     if (conversation.isTribe) {
-        TribeDetails(engine, storage, conversation, onBack)
+        TribeDetails(engine, storage, conversation, onBack, onLeftTribe)
     } else {
         ContactDetails(engine, storage, conversation, onBack)
     }
 }
 
 @Composable
-private fun TribeDetails(engine: Engine, storage: Storage, conversation: ConversationRow, onBack: () -> Unit) {
+private fun TribeDetails(engine: Engine, storage: Storage, conversation: ConversationRow, onBack: () -> Unit, onLeftTribe: () -> Unit) {
     val host = remember { storage.value(Setting.TRIBE_HOST)?.takeIf { it.isNotEmpty() } }
     // What the registry says now (description, tags, owner, members); the
     // stored name, photo and prices show at once and stay if it can't be read.
@@ -124,6 +134,33 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
             offersTimeZone = it
         }
     }
+
+    // The sub-pages a tribe's details open: edit (owner), members. System Back returns to the details.
+    var page by remember(conversation.chat) { mutableStateOf(TribePage.DETAILS) }
+    BackHandler(enabled = page != TribePage.DETAILS) { page = TribePage.DETAILS }
+    val isOwner = engine.ownsTribe(conversation.chat, info)
+    when (page) {
+        TribePage.EDIT -> {
+            com.sphinx.peel.ui.tribes.TribeFormScreen(
+                engine, conversation.chat,
+                onBack = { page = TribePage.DETAILS },
+                onDone = { page = TribePage.DETAILS },
+            )
+            return
+        }
+        TribePage.MEMBERS -> {
+            com.sphinx.peel.ui.tribes.TribeMembersScreen(
+                engine, conversation.chat, info?.name ?: conversation.name, isOwner,
+                onBack = { page = TribePage.DETAILS },
+            )
+            return
+        }
+        TribePage.DETAILS -> Unit
+    }
+    var confirmLeave by remember(conversation.chat) { mutableStateOf(false) }
+    var leaving by remember(conversation.chat) { mutableStateOf(false) }
+    var leaveProblem by remember(conversation.chat) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     PageFrame("Tribe details", onBack) {
         Hero(conversation, info?.name ?: conversation.name, ChatDetails.heroSubtitle(info))
@@ -176,6 +213,11 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
             Spacer(Modifier.height(12.dp))
             MonoValue(link)
         }
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
+            OutlinedButton(onClick = { page = TribePage.MEMBERS }) { Text("Members") }
+            if (isOwner) OutlinedButton(onClick = { page = TribePage.EDIT }) { Text("Edit tribe") }
+        }
         Spacer(Modifier.height(24.dp))
         TribeIdentitySection(engine, storage, conversation.chat, info?.name ?: conversation.name)
         if (offersTimeZone) {
@@ -183,8 +225,44 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
             TimeZoneSection(engine, conversation.chat, "#${info?.name ?: conversation.name}")
         }
         Spacer(Modifier.height(24.dp))
+        leaveProblem?.let {
+            Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+        }
+        OutlinedButton(onClick = { confirmLeave = true }, enabled = !leaving, modifier = Modifier.fillMaxWidth()) {
+            Text(if (isOwner) "Delete tribe" else "Leave tribe", color = Theme.colors.destructive)
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+
+    if (confirmLeave) {
+        val name = info?.name ?: conversation.name
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            title = { Text(if (isOwner) "Delete #$name?" else "Leave #$name?") },
+            text = { Text(if (isOwner) "The tribe is deleted for everyone." else "You can join again later, and may pay its price to join again.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLeave = false
+                    leaving = true
+                    leaveProblem = null
+                    scope.launch {
+                        try {
+                            if (isOwner) engine.deleteTribe(conversation.chat) else engine.leaveTribe(conversation.chat)
+                            onLeftTribe()
+                        } catch (e: Exception) {
+                            leaveProblem = e.message ?: "That did not go through."
+                        } finally {
+                            leaving = false
+                        }
+                    }
+                }) { Text(if (isOwner) "Delete" else "Leave", color = Theme.colors.destructive) }
+            },
+            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Cancel") } },
+        )
     }
 }
+
+private enum class TribePage { DETAILS, EDIT, MEMBERS }
 
 @Composable
 private fun ContactDetails(engine: Engine, storage: Storage, conversation: ConversationRow, onBack: () -> Unit) {

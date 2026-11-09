@@ -1517,6 +1517,22 @@ class Storage(context: Context, account: String = "default") {
     /// needs this, not just `SecretStore.deleteMnemonic`: without it, the
     /// next account made on this device would start from the previous
     /// one's `coreState` (a different seed entirely), rather than empty.
+    /// A chat taken off this device: its contact row, its messages and its read/mute state.
+    /// What leaving or deleting a tribe does locally; nothing is sent from here.
+    fun removeChat(pubkey: String) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("message", "chat = ?", arrayOf(pubkey))
+            db.delete("chatState", "chat = ?", arrayOf(pubkey))
+            db.delete("contact", "pubkey = ?", arrayOf(pubkey))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        contactsVersionFlow.value += 1
+    }
+
     fun deleteAccount() {
         helper.close()
         appContext.deleteDatabase(dbName)

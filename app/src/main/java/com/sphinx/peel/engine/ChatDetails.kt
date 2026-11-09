@@ -14,8 +14,8 @@ import java.util.Locale
 /// "To join" fact, the hero subtitle and the time zone switch/picker
 /// (`TimeZoneSharing`), and on a contact the key's QR with its share button
 /// and "since"/local-time lines (`TimeZones.kt`). Not ported (no backing functionality on Android
-/// yet): leave tribe, delete contact, edit tribe, members list, editing
-/// "How you appear in #<tribe>"; see `docs/phases/22-tribe-details-parity.md`.
+/// yet): delete contact; leave/edit/members are in `Tribes.kt`
+/// (`docs/phases/23-tribe-management.md`); see `docs/phases/22-tribe-details-parity.md`.
 object ChatDetails {
     /// A tribe's link in the official apps' format (`Tribe.link`).
     fun tribeLink(pubkey: String, host: String?): String? =
