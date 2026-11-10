@@ -9,12 +9,12 @@ class ReadAllPolicyTest {
     private val policy = ReadAllPolicy({ now })
     private val window = ReadAllPolicy.DEFAULT_INTERVAL_MS
 
-    private fun ok() = policy.shouldCall(localUnread = 0, connected = true, restoring = false)
+    private fun ok() = policy.shouldCall(localUnread = 0, connected = true, restoring = false, caughtUp = true)
 
     @Test fun `zero unread is allowed`() = assertTrue(ok())
 
     @Test fun `nonzero unread is blocked`() =
-        assertFalse(policy.shouldCall(localUnread = 1, connected = true, restoring = false))
+        assertFalse(policy.shouldCall(localUnread = 1, connected = true, restoring = false, caughtUp = true))
 
     @Test fun `throttled within the window and allowed after`() {
         policy.recordSuccess()
@@ -32,8 +32,24 @@ class ReadAllPolicyTest {
     }
 
     @Test fun `restoring is blocked`() =
-        assertFalse(policy.shouldCall(localUnread = 0, connected = true, restoring = true))
+        assertFalse(policy.shouldCall(localUnread = 0, connected = true, restoring = true, caughtUp = true))
 
     @Test fun `offline is blocked`() =
-        assertFalse(policy.shouldCall(localUnread = 0, connected = false, restoring = false))
+        assertFalse(policy.shouldCall(localUnread = 0, connected = false, restoring = false, caughtUp = true))
+
+    @Test fun `not caught up is blocked even with zero unread and connected`() =
+        assertFalse(policy.shouldCall(localUnread = 0, connected = true, restoring = false, caughtUp = false))
+
+    @Test fun `a completed catch-up sends once then the throttle holds`() {
+        assertTrue(ok())
+        policy.recordSuccess()
+        now += 1
+        assertFalse(ok())
+    }
+
+    @Test fun `an index that moved skips and none recorded skips`() {
+        assertFalse(ReadAllPolicy.arrivedSince(5L, 5L))
+        assertTrue(ReadAllPolicy.arrivedSince(5L, 6L))
+        assertTrue(ReadAllPolicy.arrivedSince(null, -1L))
+    }
 }
