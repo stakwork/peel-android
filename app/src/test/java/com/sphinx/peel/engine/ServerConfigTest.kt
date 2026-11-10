@@ -26,4 +26,10 @@ class ServerConfigTest {
         val config = ServerConfig.parse("""{"default_lsp":"host:8883","tribe_host":""}""")
         assertNull(config.tribeHost)
     }
+
+    @Test
+    fun `bitcoin fallback matches the production defaults`() {
+        assertEquals("mqtt-broker.v2.sphinx.chat:8883", ServerConfig.bitcoinFallback.defaultLsp)
+        assertEquals("tribes.v2.sphinx.chat", ServerConfig.bitcoinFallback.tribeHost)
+    }
 }

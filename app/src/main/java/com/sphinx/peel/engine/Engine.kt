@@ -1794,7 +1794,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
             return server
         }
-        val config = ServerConfig.fetch(network)
+        val config = ServerConfig.fetchOrFallback(network)
         config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
         return ServerAddress.named(config.defaultLsp)
     }
