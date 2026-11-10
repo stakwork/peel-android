@@ -290,3 +290,4 @@ Call/Message deleted. `Storage.conversations()` joins a separate newest-message
 row for it (it also takes deleted messages and invoices, which the `lastContent`
 row skips). Android has no `tertiaryText` colour, so the read colour is
 `secondaryText` at 80% alpha. Not ported: Giphy's host allowlist.
+- Chats list rows show the last message's date label (time today, short date otherwise) right-aligned on the preview line (`dateLabel` in `engine/ConversationPreview.kt`, JVM-tested); not compiled or run.

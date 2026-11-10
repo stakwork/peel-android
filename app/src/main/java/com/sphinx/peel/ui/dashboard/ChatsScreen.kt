@@ -57,7 +57,11 @@ import androidx.compose.ui.unit.sp
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.Stadeum
+import com.sphinx.peel.engine.dateLabel
 import com.sphinx.peel.storage.ConversationRow
+import java.time.Instant
+import java.time.ZoneId
+import java.util.Locale
 import com.sphinx.peel.ui.call.rememberLiveCallCounts
 import androidx.compose.material.icons.filled.Call
 import com.sphinx.peel.storage.Setting
@@ -438,7 +442,12 @@ private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onLo
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            conversation.previewLine?.let { PreviewLine(it, unread = unread > 0) }
+            conversation.previewLine?.let {
+                val label = remember(conversation.lastTimestamp) {
+                    dateLabel(conversation.lastTimestamp, Instant.now(), ZoneId.systemDefault(), Locale.getDefault())
+                }
+                PreviewLine(it, label, unread = unread > 0)
+            }
         }
         if (onCall) {
             Spacer(Modifier.width(8.dp))
@@ -472,7 +481,7 @@ private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onLo
 /// `PreviewLine`): muted and regular when read; primary text, semibold,
 /// with an accent dot in front when unread.
 @Composable
-private fun PreviewLine(line: String, unread: Boolean) {
+private fun PreviewLine(line: String, label: String?, unread: Boolean) {
     Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         if (unread) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(Theme.colors.accent))
@@ -485,7 +494,18 @@ private fun PreviewLine(line: String, unread: Boolean) {
             color = if (unread) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.8f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
         )
+        if (label != null) {
+            Text(
+                label,
+                fontSize = 12.sp,
+                color = Theme.colors.secondaryText.copy(alpha = 0.8f),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
     }
 }
 
