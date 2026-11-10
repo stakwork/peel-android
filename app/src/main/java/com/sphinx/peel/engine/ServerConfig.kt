@@ -1,5 +1,7 @@
 package com.sphinx.peel.engine
 
+import android.os.SystemClock
+import android.util.Log
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -25,15 +27,25 @@ data class ServerConfig(val defaultLsp: String, val tribeHost: String?) {
         }
 
         suspend fun fetch(network: String = "bitcoin"): ServerConfig = withContext(Dispatchers.IO) {
-            val connection = URL("$baseUrl/$network").openConnection() as HttpURLConnection
+            val url = "$baseUrl/$network"
+            val startedAt = SystemClock.elapsedRealtime()
+            Log.d(PeelLog.TAG, "ServerConfig.fetch: GET $url")
+            val connection = URL(url).openConnection() as HttpURLConnection
             connection.connectTimeout = 10_000
             connection.readTimeout = 10_000
-            val body = try {
-                connection.inputStream.bufferedReader().use { it.readText() }
-            } finally {
-                connection.disconnect()
+            try {
+                val body = try {
+                    val code = connection.responseCode
+                    Log.d(PeelLog.TAG, "ServerConfig.fetch: HTTP $code after ${SystemClock.elapsedRealtime() - startedAt}ms")
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    connection.disconnect()
+                }
+                parse(body)
+            } catch (e: Exception) {
+                Log.e(PeelLog.TAG, "ServerConfig.fetch failed after ${SystemClock.elapsedRealtime() - startedAt}ms: ${e.javaClass.simpleName}: ${e.message}", e)
+                throw e
             }
-            parse(body)
         }
     }
 }

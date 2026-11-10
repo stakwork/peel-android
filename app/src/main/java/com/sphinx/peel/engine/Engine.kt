@@ -168,6 +168,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     private val connectionStateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = connectionStateFlow.asStateFlow()
 
+    /// Why the last connect attempt failed (shown on [ConnectionState.Offline]); cleared on success.
+    @Volatile private var lastConnectError: String? = null
+
+    private fun setConnection(state: ConnectionState, reason: String) {
+        val old = connectionStateFlow.value
+        Log.i(PeelLog.TAG, "connection: $old -> $state ($reason)")
+        connectionStateFlow.value = state
+    }
+
     private val restoreProgressFlow = MutableStateFlow(
         RestoreProgress(restoring = storage.value(Setting.NEEDS_RESTORE) == "1"),
     )
@@ -440,6 +449,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `establish()` does past registering — `cameOnline`'s ping/read-sync
     /// half, the keep-alive loop, reconnect-on-drop — is not here.
     suspend fun connect(server: ServerAddress, inviteCode: String? = null): RunReturn {
+        Log.d(PeelLog.TAG, "connect: ${server.host}:${server.port} tls=${server.tls} invite=${inviteCode != null}")
+        val connectStartedAt = SystemClock.elapsedRealtime()
         val setup = mutex.withLock {
             val networkTime = clock.next()
             commitLocked(coreSetNetwork(network), networkTime)
@@ -464,6 +475,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // Set before the publish, not after: a register that failed part-way may still have gone.
             if (inviteCode != null) inviteMayBeRedeemed = true
             publishLocked(setup)
+            Log.d(PeelLog.TAG, "connect: register publish sent")
 
             val tribeTopicTime = clock.next()
             val tribeTopic = coreGetTribeManagementTopic(seed, tribeTopicTime, StateCodec.encode(state))
@@ -473,7 +485,14 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
 
         // An invite's register is waited for as long as PeelCore does (a refused one is never answered).
-        withTimeoutOrNull(if (inviteCode != null) INVITE_REGISTER_WAIT_MS else registerWaitMs) { inboundResults.first { isRegistered } }
+        val waitMs = if (inviteCode != null) INVITE_REGISTER_WAIT_MS else registerWaitMs
+        Log.d(PeelLog.TAG, "connect: waiting for isRegistered, timeout ${waitMs / 1000.0}s (already registered=$isRegistered)")
+        val answered = withTimeoutOrNull(waitMs) { inboundResults.first { isRegistered } }
+        Log.d(
+            PeelLog.TAG,
+            "connect: register wait ${if (answered != null) "succeeded" else "TIMED OUT"} after ${SystemClock.elapsedRealtime() - connectStartedAt}ms " +
+                "isRegistered=$isRegistered my_scid present=${state["my_scid"] != null} server_pubkey present=${state["server_pubkey"] != null}",
+        )
         return setup
     }
 
@@ -1737,9 +1756,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (started) return
         started = true
         keepConnected = true
+        Log.i(PeelLog.TAG, "Engine.start: entered; app ${com.sphinx.peel.BuildConfig.VERSION_NAME} (${com.sphinx.peel.BuildConfig.VERSION_CODE}) " +
+            "buildType=${com.sphinx.peel.BuildConfig.BUILD_TYPE} debug=${com.sphinx.peel.BuildConfig.DEBUG}; sphinxrs: version not exposed")
         scope.launch {
+            Log.d(PeelLog.TAG, "Engine.start: backfill")
             backfillContactsIfNeeded()
-            if (!connectAndRegister()) {
+            val firstOk = connectAndRegister()
+            Log.i(PeelLog.TAG, "Engine.start: first connect ${if (firstOk) "succeeded" else "failed"}")
+            if (!firstOk) {
+                Log.i(PeelLog.TAG, "Engine.start: entering reconnectLoop")
                 // The first connect failed: keep trying with backoff instead of staying offline.
                 if (keepConnected && reconnectJob?.isActive != true) reconnectJob = scope.launch { reconnectLoop() }
                 return@launch
@@ -1757,24 +1782,33 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// on any failure (already reported through [connectionState]), so
     /// the caller knows not to go on to a catch-up with nothing to ask.
     private suspend fun connectAndRegister(): Boolean {
-        connectionStateFlow.value = ConnectionState.Connecting
+        setConnection(ConnectionState.Connecting, "connectAndRegister")
         // The invite a new account registers with, until the register is known to have worked
         // (the server answers `already_registered` if an earlier one landed, and needs the
         // invite if it did not).
         val invite = if (isRegistered) null else pendingInvites.peek()
+        Log.d(PeelLog.TAG, "connectAndRegister: invite present=${invite != null} isRegistered=$isRegistered")
         return try {
             val server = resolveServer(invite)
+            Log.d(PeelLog.TAG, "connectAndRegister: server ${server.host}:${server.port} tls=${server.tls}")
             storage.apply(Storage.Commit(settings = mapOf(Setting.SERVER to server.toString())))
             connect(server, inviteCode = invite?.code)
             registeredWithInvite = invite != null && isRegistered
-            connectionStateFlow.value = if (isRegistered) {
-                ConnectionState.Connected
+            if (isRegistered) {
+                lastConnectError = null
+                setConnection(ConnectionState.Connected, "registered")
+                Log.i(PeelLog.TAG, "connectAndRegister: success")
             } else {
-                ConnectionState.Failed(if (invite != null) SignupRules.NOT_CONFIRMED else "No registration answer came back in time.")
+                val message = if (invite != null) SignupRules.NOT_CONFIRMED else "No registration answer came back in time."
+                lastConnectError = message
+                Log.w(PeelLog.TAG, "connectAndRegister: failed: $message")
+                setConnection(ConnectionState.Failed(message), "not registered")
             }
             isRegistered
         } catch (e: Exception) {
-            connectionStateFlow.value = ConnectionState.Failed(e.message ?: "Could not connect to the server.")
+            lastConnectError = e.javaClass.simpleName + ": " + e.message
+            Log.e(PeelLog.TAG, "connectAndRegister: failed: ${e.javaClass.simpleName}: ${e.message}", e)
+            setConnection(ConnectionState.Failed(e.message ?: "Could not connect to the server."), "exception")
             false
         }
     }
@@ -1784,9 +1818,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// default, as ever for a restored account. The tribes host comes from the config
     /// where it is not known yet (never failing the connect for it on a named server).
     private suspend fun resolveServer(invite: Invite?): ServerAddress {
-        invite?.server?.let { return ServerAddress.named(it) }
+        invite?.server?.let {
+            Log.d(PeelLog.TAG, "resolveServer: branch=invite")
+            return ServerAddress.named(it).also { s -> Log.d(PeelLog.TAG, "resolveServer: ${s.host}:${s.port} tls=${s.tls}") }
+        }
         val pinned = if (storage.value(Setting.SERVER_PINNED) == "1") storage.value(Setting.SERVER) else null
         if (pinned != null) {
+            Log.d(PeelLog.TAG, "resolveServer: branch=pinned")
             val server = ServerAddress.parse(pinned) ?: throw IllegalStateException("the stored server address is unreadable")
             if (storage.value(Setting.TRIBE_HOST) == null && !ServerAddress.isLoopback(server.host)) {
                 runCatching { ServerConfig.fetch(network).tribeHost }.getOrNull()
@@ -1794,7 +1832,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
             return server
         }
+        Log.d(PeelLog.TAG, "resolveServer: branch=public config; fetching network=$network")
+        val fetchStartedAt = SystemClock.elapsedRealtime()
         val config = ServerConfig.fetch(network)
+        Log.d(PeelLog.TAG, "resolveServer: config defaultLsp=${config.defaultLsp} tribeHost=${config.tribeHost} in ${SystemClock.elapsedRealtime() - fetchStartedAt}ms")
         config.tribeHost?.let { storage.apply(Storage.Commit(settings = mapOf(Setting.TRIBE_HOST to it))) }
         return ServerAddress.named(config.defaultLsp)
     }
@@ -1842,11 +1883,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         var attempt = 1
         while (keepConnected) {
             val retryInSeconds = minOf(30, 1 shl minOf(attempt - 1, 5))
-            connectionStateFlow.value = ConnectionState.Offline(retryInSeconds)
+            Log.i(PeelLog.TAG, "reconnectLoop: attempt $attempt, retry in ${retryInSeconds}s, last failure: $lastConnectError")
+            setConnection(ConnectionState.Offline(retryInSeconds, lastConnectError), "reconnect attempt $attempt backoff")
             delay(retryInSeconds * 1_000L)
             if (!keepConnected) return
             disconnect()
-            if (connectAndRegister()) {
+            Log.d(PeelLog.TAG, "reconnectLoop: attempt $attempt starting")
+            val ok = connectAndRegister()
+            Log.i(PeelLog.TAG, "reconnectLoop: attempt $attempt ${if (ok) "succeeded" else "failed"}")
+            if (ok) {
                 afterConnect()
                 runCatching { syncPreferences() }
                 return

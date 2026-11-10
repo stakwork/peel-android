@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.onboarding
 
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,7 +61,9 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
                 ConnectionState.Idle -> "Waiting"
                 ConnectionState.Connecting -> "Connecting…"
                 ConnectionState.Connected -> "Connected"
-                is ConnectionState.Offline -> "Offline, retrying in ${(connection as ConnectionState.Offline).retryInSeconds}s…"
+                is ConnectionState.Offline -> (connection as ConnectionState.Offline).let { o ->
+                    "Offline, retrying in ${o.retryInSeconds}s…" + (o.lastError?.let { "\n$it" } ?: "")
+                }
                 is ConnectionState.Failed -> (connection as ConnectionState.Failed).message
             },
             state = if (connection == ConnectionState.Connected) LineState.DONE else LineState.ACTIVE,
@@ -136,7 +139,7 @@ private fun RestoreLineRow(line: Line) {
                     style = MaterialTheme.typography.bodyLarge,
                     color = if (line.state == LineState.WAITING) Theme.colors.secondaryText else Theme.colors.text,
                 )
-                Text(line.detail, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                Text(line.detail, maxLines = 4, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
             }
             if (line.fraction != null && line.state == LineState.ACTIVE) {
                 Spacer(Modifier.height(6.dp))

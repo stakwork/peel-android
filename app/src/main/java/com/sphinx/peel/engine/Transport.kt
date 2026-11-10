@@ -1,5 +1,6 @@
 package com.sphinx.peel.engine
 
+import android.util.Log
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.MqttGlobalPublishFilter
 import com.hivemq.client.mqtt.datatypes.MqttQos
@@ -51,6 +52,7 @@ class Transport(
         // Release builds refuse plaintext MQTT; surfaced as an ordinary
         // exception: Engine.connect() -> connectAndRegister() catches it and
         // reports ConnectionState.Failed(message) to the UI.
+        Log.d(PeelLog.TAG, "Transport: building client ${server.host}:${server.port} tls=${server.tls} debugBuild=${com.sphinx.peel.BuildConfig.DEBUG} buildType=${com.sphinx.peel.BuildConfig.BUILD_TYPE}")
         if (!NetworkPolicy.tlsAllowed(server.tls, com.sphinx.peel.BuildConfig.DEBUG)) {
             throw IllegalStateException("${server.host} is configured without TLS; plaintext MQTT is not allowed in release builds")
         }
@@ -67,7 +69,9 @@ class Transport(
                 // unless automaticReconnect() is called, which this builder
                 // never does), so the socket stays down either way; this
                 // only decides whether Engine hears about it.
-                if (context.source != MqttDisconnectSource.USER) onUnexpectedDisconnect()
+                val unexpected = context.source != MqttDisconnectSource.USER
+                Log.w(PeelLog.TAG, "Transport: disconnected source=${context.source} unexpected=$unexpected cause=${context.cause}", context.cause)
+                if (unexpected) onUnexpectedDisconnect()
             }
         if (server.tls) {
             // Default SSL config: system trust store. Hostname verification
@@ -95,6 +99,17 @@ class Transport(
     }
 
     suspend fun connect() {
+        Log.d(PeelLog.TAG, "Transport.connect: ${server.host}:${server.port} tls=${server.tls}")
+        try {
+            connectInner()
+            Log.d(PeelLog.TAG, "Transport.connect: success")
+        } catch (e: Exception) {
+            Log.e(PeelLog.TAG, "Transport.connect failed (${server.host}:${server.port} tls=${server.tls}): ${e.javaClass.simpleName}: ${e.message}", e)
+            throw e
+        }
+    }
+
+    private suspend fun connectInner() {
         client.connectWith()
             // The MQTT keep-alive: a PINGREQ every 30 seconds, and the
             // client drops the connection (-> onLost) when none is answered.
@@ -109,6 +124,7 @@ class Transport(
 
     suspend fun subscribe(topics: List<String>) {
         check(isConnected) { "MQTT client is not connected." }
+        Log.d(PeelLog.TAG, "Transport.subscribe: ${topics.size} topic(s) on ${server.host}:${server.port}")
         for (topic in topics) {
             client.subscribeWith()
                 .topicFilter(topic)
@@ -116,16 +132,23 @@ class Transport(
                 .send()
                 .await()
         }
+        Log.d(PeelLog.TAG, "Transport.subscribe: success")
     }
 
     suspend fun publish(topic: String, payload: ByteArray) {
         check(isConnected) { "MQTT client is not connected." }
-        client.publishWith()
-            .topic(topic)
-            .payload(payload)
-            .qos(MqttQos.AT_MOST_ONCE)
-            .send()
-            .await()
+        try {
+            client.publishWith()
+                .topic(topic)
+                .payload(payload)
+                .qos(MqttQos.AT_MOST_ONCE)
+                .send()
+                .await()
+            Log.d(PeelLog.TAG, "Transport.publish: success (${payload.size} bytes) to ${server.host}:${server.port}")
+        } catch (e: Exception) {
+            Log.e(PeelLog.TAG, "Transport.publish failed: ${e.javaClass.simpleName}: ${e.message}", e)
+            throw e
+        }
     }
 
     suspend fun close() {

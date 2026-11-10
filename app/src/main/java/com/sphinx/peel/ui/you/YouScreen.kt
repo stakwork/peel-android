@@ -332,6 +332,7 @@ private fun YouMain(
                         )
                         Text(
                             connectionLabel(connection),
+                            maxLines = 4, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
                             textAlign = TextAlign.End,
                         )
@@ -582,7 +583,7 @@ private fun connectionLabel(connection: ConnectionState): String = when (connect
     ConnectionState.Idle -> "Not connected yet"
     ConnectionState.Connecting -> "Connecting…"
     ConnectionState.Connected -> "Connected"
-    is ConnectionState.Offline -> "Offline, retrying in ${connection.retryInSeconds}s…"
+    is ConnectionState.Offline -> "Offline, retrying in ${connection.retryInSeconds}s…" + (connection.lastError?.let { "\n$it" } ?: "")
     is ConnectionState.Failed -> connection.message
 }
 
