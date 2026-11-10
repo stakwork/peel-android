@@ -17,9 +17,10 @@ class ReadAllPolicy(
 ) {
     private var lastSuccess: Long? = null
 
-    /// Whether a `readAll` should be sent now.
-    fun shouldCall(localUnread: Long, connected: Boolean, restoring: Boolean): Boolean {
-        if (localUnread != 0L || !connected || restoring) return false
+    /// Whether a `readAll` should be sent now. [caughtUp]: history finished on
+    /// this connection without error or timeout; false never sends.
+    fun shouldCall(localUnread: Long, connected: Boolean, restoring: Boolean, caughtUp: Boolean): Boolean {
+        if (localUnread != 0L || !connected || restoring || !caughtUp) return false
         val last = lastSuccess ?: return true
         return clock() - last >= intervalMs
     }
@@ -30,6 +31,11 @@ class ReadAllPolicy(
     }
 
     companion object {
+        /// Whether a message was stored beyond the index recorded when the
+        /// catch-up began. No recorded index counts as moved (never sends).
+        fun arrivedSince(recorded: Long?, current: Long): Boolean =
+            recorded == null || current > recorded
+
         const val DEFAULT_INTERVAL_MS = 30L * 60 * 1000
     }
 }

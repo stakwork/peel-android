@@ -1610,13 +1610,21 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// whatever this device moved locally while it had nothing to send it to
     /// run in the background).
     private fun fetchReadsAndMutes() {
+        readsJob = fetchReadsAndMutesJob()
+    }
+
+    /// The reads fetch's own job, so [afterConnect] can join it before
+    /// [maybeReadAll] without delaying the restore or catch-up.
+    @Volatile private var readsJob: Job? = null
+
+    private fun fetchReadsAndMutesJob(): Job {
         // Not awaited by the caller (iOS only sends the two asks): each
         // wait is up to `historyWaitMs`, and a fresh restore has no reads or
         // mutes to answer, so awaiting here stalled the contacts restore for
         // up to a minute after "Connected". Answers land through the listener.
         // Its own independent launch, so [afterConnect]'s own runCatching
         // does not reach a failure in here — caught here instead, same reason.
-        scope.launch {
+        return scope.launch {
             runCatching { fetchReadsAndMutesAwaiting() }
                 .onFailure { Log.w("PeelEngine", "fetchReadsAndMutes failed", it) }
         }
@@ -1703,6 +1711,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // `askAndAwait` calls (`resume`'s catch-up) would wait out their
         // full timeout for an answer nothing was ever listening to deliver.
         listenerStarted = false
+        caughtUp = false
+        catchUpIndex = null
     }
 
     /// Stops whatever `start` has running — "Forget this account" needs
@@ -1855,6 +1865,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// kill the coroutine that called this.
     private suspend fun afterConnect() {
         cameOnlineHere = false
+        caughtUp = false
+        catchUpIndex = null
+        readsJob = null
         runCatching {
             // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
             // an earlier answer cannot be used.
@@ -1866,9 +1879,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // connection only; History does not wait on it.
             transport?.let { connection -> scope.launch { runCatching { resendRecent(connection) } } }
             // A restore that failed or was cut short resumes from its cursor.
-            if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
-        }.onFailure { Log.w("PeelEngine", "catch-up after connect failed", it) }
+            catchUpIndex = storage.maxServerIndex() ?: -1L
+            caughtUp = if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
+        }.onFailure {
+            caughtUp = false
+            Log.w("PeelEngine", "catch-up after connect failed", it)
+        }
         // Local unread is settled (reads synced, history caught up): reset the mixer's badge if it is 0.
+        // Reads must have synced too (failures are only logged by the job).
+        runCatching { readsJob?.join() }
         runCatching { maybeReadAll() }
         // PeelCore's `cameOnline`: whoever sent the invite this account signed up with is
         // added now, as its first contact. Never fails the catch-up it follows.
@@ -1961,6 +1980,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         false
     }
 
+    /// History caught up on this connection with no error or timeout.
+    @Volatile private var caughtUp = false
+
+    /// Highest stored server index when this connection's catch-up began.
+    @Volatile private var catchUpIndex: Long? = null
+
     private val readAllPolicy = ReadAllPolicy(SystemClock::elapsedRealtime)
 
     /// Calls [readAllOnServer] when [ReadAllPolicy] allows: local real unread
@@ -1972,7 +1997,14 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val connected = transport != null
         if (restoring || !connected) return
         val unread = storage.conversations().sumOf { it.unread }
-        if (!readAllPolicy.shouldCall(unread, connected, restoring)) return
+        if (!readAllPolicy.shouldCall(unread, connected, restoring, caughtUp)) return
+        val current = storage.maxServerIndex() ?: -1L
+        if (ReadAllPolicy.arrivedSince(catchUpIndex, current)) {
+            // Messages came in during or after the fetch: not sent, throttle
+            // untouched; a later trigger may proceed once unread is 0 again.
+            catchUpIndex = current
+            return
+        }
         if (readAllOnServer()) readAllPolicy.recordSuccess()
     }
 
@@ -2036,8 +2068,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `NEEDS_RESTORE` set and is reported through [restoreProgress]; the
     /// next `start()`/`resume()` runs it again from the cursor. Everything
     /// after a successful finish is the same for a fresh and a resumed one.
-    private suspend fun runRestore() {
-        if (restoreRunning) return
+    private suspend fun runRestore(): Boolean {
+        if (restoreRunning) return false
         restoreRunning = true
         restoreProgressFlow.update { it.copy(outcome = null) }
         var finished = false
@@ -2076,6 +2108,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             runCatching { checkPendingSends() }.onFailure { Log.w("PeelHistory", "checking restored sends failed", it) }
             runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
         }
+        return finished
     }
 
     /// Asks the server what it holds and plans the restore from that; the
@@ -2253,9 +2286,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `HistoryCursor`, nothing here tracks a gap a live message arriving
     /// ahead of a catch-up might leave below it — not reachable yet
     /// without the reconnect/live-overlap machinery this port doesn't have.
-    private suspend fun catchUpMessages() {
+    private suspend fun catchUpMessages(): Boolean {
         val start = ((storage.maxServerIndex() ?: -1L) + 1L).toULong()
-        page(HistoryPhase.MESSAGES, end = null, start = start) { time, stateBytes, next ->
+        return page(HistoryPhase.MESSAGES, end = null, start = start) { time, stateBytes, next ->
             coreFetchMsgsBatch(seed, time, stateBytes, next, HISTORY_PAGE_SIZE, false)
         }
     }
