@@ -152,8 +152,9 @@ private fun ChatListBody(
     // among the regular rows — PeelCore's `ChatList`: "The agent's DM is
     // its own row, first in Direct messages... never in the sections".
     // While searching it's found by name the same way any other chat is.
+    // Unread, it is in the Unread section like any chat.
     val agentConversation = conversations.firstOrNull { it.chat == engine.agentPubkey }
-        ?.takeIf { ChatSections.matches(it.name, query) }
+        ?.takeIf { ChatSections.matches(it.name, query) && it.shownUnread == 0L }
     val sectionable = if (agentConversation == null) {
         conversations
     } else {
@@ -189,7 +190,12 @@ private fun ChatListBody(
                     item { SectionHeader("Unread", expanded = true, onToggle = null) }
                     items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
                         ChatRowActions(conversation, engine, onChanged = { refresh++ }) { onLongClick ->
-                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0, onLongClick = onLongClick) { onOpenChat(conversation.chat) }
+                            ChatRow(
+                                conversation,
+                                onCall = (liveCalls[conversation.chat] ?: 0) > 0,
+                                onLongClick = onLongClick,
+                                isAgent = conversation.chat == engine.agentPubkey,
+                            ) { onOpenChat(conversation.chat) }
                         }
                     }
                     item { Spacer(Modifier.height(16.dp)) }
@@ -224,7 +230,7 @@ private fun ChatListBody(
                         agentConversation?.let { agent ->
                             item(key = "agent") {
                                 ChatRowActions(agent, engine, onChanged = { refresh++ }) { onLongClick ->
-                                    AgentChatRow(agent.shownUnread, onLongClick = onLongClick) { onOpenChat(engine.agentPubkey) }
+                                    ChatRow(agent, onLongClick = onLongClick, isAgent = true) { onOpenChat(engine.agentPubkey) }
                                 }
                             }
                         }
@@ -425,23 +431,36 @@ private fun SectionHeader(title: String, expanded: Boolean, onToggle: (() -> Uni
 }
 
 @Composable
-private fun ChatRow(conversation: ConversationRow, onCall: Boolean = false, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
+private fun ChatRow(
+    conversation: ConversationRow,
+    onCall: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+    isAgent: Boolean = false,
+    onClick: () -> Unit,
+) {
     val unread = conversation.shownUnread
     Row(
         Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ConversationAvatar(conversation, size = 44.dp)
+        if (isAgent) PeelLogo(size = 44.dp) else ConversationAvatar(conversation, size = 44.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                conversation.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (unread > 0) Theme.colors.text else Theme.colors.secondaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (isAgent) "Peel" else conversation.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (unread > 0) Theme.colors.text else Theme.colors.secondaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (isAgent) {
+                    Spacer(Modifier.width(8.dp))
+                    AgentTag()
+                }
+            }
             conversation.previewLine?.let {
                 val label = remember(conversation.lastTimestamp) {
                     dateLabel(conversation.lastTimestamp, Instant.now(), ZoneId.systemDefault(), Locale.getDefault())
@@ -525,27 +544,6 @@ private fun UnreadBadge(count: Long) {
             .padding(horizontal = 7.dp),
         textAlign = TextAlign.Center,
     )
-}
-
-/// The agent's row: Peel's own logo, never the hashed-colour avatar its
-/// stored alias/photo would otherwise get, and the "AGENT" tag beside its
-/// name — PeelCore's `ChatListRow(isAgent: true)`.
-@Composable
-private fun AgentChatRow(unread: Long, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PeelLogo(size = 44.dp)
-        Spacer(Modifier.width(12.dp))
-        Text("Peel", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
-        Spacer(Modifier.width(8.dp))
-        AgentTag()
-        if (unread > 0) {
-            Spacer(Modifier.weight(1f))
-            UnreadBadge(unread)
-        }
-    }
 }
 
 /// "Show all 14 tribes" / "Show fewer" — PeelCore's `ShowAll`.
