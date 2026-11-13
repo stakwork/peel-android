@@ -13,7 +13,7 @@ internal data class MessageCounts(
 /// so a restart or a failure resumes instead of starting from zero. The
 /// pure half of PeelCore's `HistoryCursor` (its `Run`, `plan` and the
 /// "past the end" rule), trimmed to what a sequential restore needs: no
-/// queue, no live-message gap (`liveAbove`) and no stall watchdog.
+/// queue and no live-message gap (`liveAbove`); the stall watchdog is `Engine`'s.
 ///
 /// A restore is up to two runs back to back, contacts then messages
 /// (`plan`); the cursor names the run in flight (`phase`, `next`, `end`)
@@ -95,5 +95,37 @@ internal data class RestoreCursor(
                 else -> null
             }
         }
+    }
+}
+
+/// What one page's answer means for a run that asked from `next`: the pure
+/// rules `Engine.page` follows, so they can be tested.
+internal enum class PageVerdict {
+    /// Store it and move `next` past `reached`.
+    ADVANCE,
+
+    /// The run is complete.
+    END,
+
+    /// An empty page before the end, or a stale reply: ask again, a few
+    /// times (`RestorePage.MAX_RETRIES`), then fail so the run resumes.
+    RETRY,
+}
+
+internal object RestorePage {
+    /// How many times in a row an empty-before-the-end or stale reply is
+    /// asked again before the run fails (and resumes from its cursor).
+    const val MAX_RETRIES = 2
+
+    /// [reached] is the highest server index on the page (null: none).
+    /// An empty page ends the run only when there is no `end` to reach
+    /// (a catch-up) or `next` is past it: before that it is a page lost,
+    /// never "complete" (it would mark history done with a gap). A reply
+    /// whose highest index is below `next` is stale (the answer to an
+    /// earlier ask): ignored, so `next` never moves backwards.
+    fun verdict(reached: Long?, next: Long, end: Long?): PageVerdict = when {
+        reached == null -> if (end == null || next > end) PageVerdict.END else PageVerdict.RETRY
+        reached < next -> PageVerdict.RETRY
+        else -> PageVerdict.ADVANCE
     }
 }
