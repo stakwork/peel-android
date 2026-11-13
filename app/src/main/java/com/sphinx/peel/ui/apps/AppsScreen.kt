@@ -26,9 +26,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -65,10 +68,11 @@ import kotlinx.coroutines.coroutineScope
 /// each workspace, then the apps the Stadeum workspaces pinned as tabs, A–Z,
 /// each read and opened on its workspace's own strut with the person's token.
 /// Search, a source filter (with several workspaces), Refresh, long-press to
-/// copy a share link. Not ported: pull-to-refresh (Refresh does it), the
-/// Mac-only own-strut apps, the lucide icon table (a generic glyph instead).
+/// copy a share link, pull to refresh, lucide icons (`LucideNames`/`AppIcons`), Talk rows' long-press menu
+/// (New conversation, History). Not ported: the Mac-only own-strut apps.
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
@@ -81,6 +85,9 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     var unread by remember { mutableStateOf<List<String>>(emptyList()) }
     val openPage = LocalPageOpener.current
     var refresh by remember { mutableStateOf(0) }
+    var historyHome by remember { mutableStateOf<TalkHome?>(null) }
+    val context2 = LocalContext.current
+    val history = remember { com.sphinx.peel.engine.TalkHistoryStore(java.io.File(context2.filesDir, "talk_history")) }
 
     // Read again on opening, and when the workspaces (or Refresh) change.
     LaunchedEffect(live.map { it.id }, refresh) {
@@ -100,6 +107,11 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     }
 
     BackHandler(onBack = onBack)
+    // Conversations: a screen over the list (iOS pushes `TalkHistoryScreen`); Back returns to the list.
+    historyHome?.let { home ->
+        com.sphinx.peel.ui.talk.TalkHistoryScreen(home, history, onBack = { historyHome = null }, onTalk = onTalk, modifier = modifier)
+        return
+    }
 
     val liveIds = live.map { it.id }.toSet()
     val apps = read.filter { it.peer in liveIds }
@@ -136,14 +148,17 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
             query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), singleLine = true,
             placeholder = { Text("Search apps") },
         )
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        // Pulling reads again, as Refresh does, and waits for the read (`reading`).
+        PullToRefreshBox(
+            isRefreshing = reading,
+            onRefresh = { if (!reading) refresh++ },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
                 if (homes.isNotEmpty()) {
                     item { Text("Talk to Jamie", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
                     items(homes, key = { "talk-${it.id}" }) { home ->
-                        TalkRow(home) {
-                            onTalk(home)
-                        }
+                        TalkRow(home, onClick = { onTalk(home) }, onHistory = { historyHome = home })
                     }
                     item { Spacer(Modifier.size(12.dp)) }
                 }
@@ -157,7 +172,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                     })
                 }
                 if (unread.isNotEmpty() && apps.isNotEmpty() && !reading) {
-                    item { Note("Couldn't read ${unread.joinToString(", ")} just now. Refresh to try again.") }
+                    item { Note("Couldn't read ${unread.joinToString(", ")} just now. Pull to try again.") }
                 } else if (apps.isEmpty() && homes.isNotEmpty() && !reading) {
                     item { Note(emptyText(live, unread)) }
                 }
@@ -167,7 +182,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                 apps.isEmpty() && homes.isNotEmpty() -> if (reading) Spinner()
                 apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", "Connect Stadeum under You to open the apps your workspaces pin.")
                 apps.isEmpty() && reading -> Spinner()
-                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", "${unread.joinToString(", ")} did not answer. Refresh to try again.")
+                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", "${unread.joinToString(", ")} did not answer. Pull to try again.")
                 apps.isEmpty() -> Centered("No apps yet", "Apps your Stadeum workspaces pin show here.")
             }
         }
@@ -177,7 +192,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
 private fun emptyText(live: List<HivePeer>, unread: List<String>) = when {
     live.isEmpty() -> "Connect Stadeum under You to open the apps your workspaces pin."
     unread.isEmpty() -> "Apps your Stadeum workspaces pin show here."
-    else -> "${unread.joinToString(", ")} did not answer. Refresh to try again."
+    else -> "${unread.joinToString(", ")} did not answer. Pull to try again."
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -190,7 +205,7 @@ private fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, 
             Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = { if (link != null) menu = true }).padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Filled.Apps, null, Modifier.size(26.dp), tint = Theme.colors.secondaryText)
+            WorkspaceAppIcon(app.icon, Theme.colors.secondaryText, Modifier.size(26.dp), 20.dp)
             Column(Modifier.weight(1f)) {
                 Text(app.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
                 app.about?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
@@ -205,10 +220,13 @@ private fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, 
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TalkRow(home: TalkHome, onClick: () -> Unit) {
+private fun TalkRow(home: TalkHome, onClick: () -> Unit, onHistory: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = { menu = true }).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -219,13 +237,18 @@ private fun TalkRow(home: TalkHome, onClick: () -> Unit) {
         }
         Icon(Icons.Filled.Mic, "Talk to Jamie on ${home.name}", tint = Theme.colors.accent)
     }
+    DropdownMenu(menu, { menu = false }) {
+        DropdownMenuItem(text = { Text("New conversation") }, leadingIcon = { Icon(Icons.Filled.Mic, null) }, onClick = { menu = false; onClick() })
+        DropdownMenuItem(text = { Text("History") }, leadingIcon = { Icon(Icons.Filled.History, null) }, onClick = { menu = false; onHistory() })
+    }
+    }
 }
 
 @Composable
-private fun Note(text: String) = Text(text, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+private fun Spinner() = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 
 @Composable
-private fun Spinner() = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+private fun Note(text: String) = Text(text, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
 
 @Composable
 private fun Centered(title: String, body: String) = Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
