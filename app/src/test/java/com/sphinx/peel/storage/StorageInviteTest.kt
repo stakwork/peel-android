@@ -125,6 +125,8 @@ class StorageInviteTest {
         // The schema as of version 10 (the base's latest), as far as an upgrade needs it: one stored setting.
         val old = context.openOrCreateDatabase("peel-$name.db", android.content.Context.MODE_PRIVATE, null)
         old.execSQL("CREATE TABLE setting (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
+        // A version-10 database has its invoice table (v9), which v14 adds wallet columns to.
+        old.execSQL("CREATE TABLE invoice (paymentHash TEXT NOT NULL, incoming INTEGER NOT NULL, PRIMARY KEY (paymentHash, incoming))")
         old.insert("setting", null, ContentValues().apply { put("key", "alias"); put("value", "Old") })
         old.version = 10
         old.close()

@@ -35,4 +35,20 @@ object WalletProtocol {
         if (d.isNaN() || d.isInfinite() || Math.rint(d) != d || Math.abs(d) > MAX_SAFE) return null
         return d.toLong()
     }
+
+    private val HASH = Regex("^[0-9a-fA-F]{64}$")
+
+    /// Whether [text] is 64 hex characters: a payment hash or a preimage.
+    fun isHash(text: String): Boolean = HASH.matches(text)
+
+    /// Whether [preimage] hashes (SHA-256) to [paymentHash]: both 64 hex characters, either in any case (iOS `verifyPreimage`). A page is
+    /// never handed a preimage that proves nothing.
+    fun verifyPreimage(preimage: String, paymentHash: String): Boolean {
+        val p = preimage.lowercase()
+        val h = paymentHash.lowercase()
+        if (!isHash(p) || !isHash(h)) return false
+        val bytes = ByteArray(32) { p.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        return digest.joinToString("") { "%02x".format(it) } == h
+    }
 }

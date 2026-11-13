@@ -14,20 +14,6 @@ import org.json.JSONObject
 // `sign_in`. Android has no app-wallet host, so `buy_credit` and the spending-wallet `call`s are not here
 // (docs/phases/27-sign-in-with-sphinx.md). Pure: storage, signer, the person and the clock are injected; JVM-tested.
 
-/// What a page was allowed to do, kept per [key] (iOS `walletConnection`). A sign-in-only connection has no [methods].
-data class WalletConnection(
-    /// The scope's key ([WalletScope.key]): `origin:<origin>` for a stranger's page Peel opened, `org:<peer>` for an org's.
-    val key: String,
-    val app: String,
-    val title: String,
-    /// Where it lives, as the person reads it (the host).
-    val place: String,
-    val methods: List<String>,
-    /// The key the person chose to sign in to this place with; null = never.
-    val signIn: SignInKey?,
-    val createdAt: Long,
-)
-
 /// Where connections are kept ([com.sphinx.peel.storage.Storage] implements it through [StorageWalletConnections]).
 interface WalletConnections {
     fun connection(key: String): WalletConnection?
@@ -239,7 +225,9 @@ class WalletHost(
         val current = connections.connection(caller.scope.key)
         connections.save(
             current?.copy(signIn = chosen)
-                ?: WalletConnection(caller.scope.key, "/${shown.name}", shown.title, caller.place, emptyList(), chosen, nowMs()),
+                ?: WalletConnection(
+                    key = caller.scope.key, app = "/${shown.name}", title = shown.title, place = caller.place, signIn = chosen, createdAt = nowMs() / 1000,
+                ),
         )
         if (challenge.expiresAtMs <= nowMs()) {
             return error(WalletError.RESTRICTED, "The sign-in ran out of time while you were asked. Sign in again.")
