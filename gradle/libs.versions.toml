@@ -33,8 +33,12 @@ zxing = "3.5.3"
 camerax = "1.4.2"
 # BiometricPrompt (biometric unlock, docs/phases/17-lock-hardening.md).
 biometric = "1.1.0"
+# addWebMessageListener (Sign in with Sphinx, docs/phases/27-sign-in-with-sphinx.md): the only WebView
+# bridge that tells the app which frame and origin a message came from; addJavascriptInterface does not.
+webkit = "1.14.0"
 
 [libraries]
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }

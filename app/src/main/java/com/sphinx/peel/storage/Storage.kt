@@ -5,6 +5,9 @@ import com.sphinx.peel.engine.MuteLevel
 import com.sphinx.peel.engine.ReadToggle
 import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.engine.SendStatus
+import com.sphinx.peel.engine.SignInKey
+import com.sphinx.peel.engine.WalletConnection
+import org.json.JSONArray
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
@@ -1587,6 +1590,54 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
+    /// The connection a page was given (iOS `walletConnection`), by its scope key (`origin:<origin>` for a
+    /// stranger's page). Null when there is none, or it was revoked.
+    fun walletConnection(key: String): WalletConnection? =
+        helper.readableDatabase.query("wallet_connection", null, "key = ?", arrayOf(key), null, null, null)
+            .use { c -> if (c.moveToFirst()) readWalletConnection(c) else null }
+
+    private val walletConnectionsVersionFlow = MutableStateFlow(0)
+
+    /// Moves when a connection is saved or revoked, so a screen listing them follows.
+    val walletConnectionsVersion: StateFlow<Int> = walletConnectionsVersionFlow
+
+    fun walletConnections(): List<WalletConnection> =
+        helper.readableDatabase.query("wallet_connection", null, null, null, null, null, "createdAt DESC")
+            .use { c -> buildList { while (c.moveToNext()) add(readWalletConnection(c)) } }
+
+    fun saveWalletConnection(connection: WalletConnection) {
+        val values = ContentValues().apply {
+            put("key", connection.key)
+            put("app", connection.app)
+            put("title", connection.title)
+            put("place", connection.place)
+            put("methods", JSONArray(connection.methods).toString())
+            put("signIn", connection.signIn?.wire)
+            put("createdAt", connection.createdAt)
+        }
+        helper.writableDatabase.insertWithOnConflict("wallet_connection", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        walletConnectionsVersionFlow.value += 1
+    }
+
+    /// Revokes a connection: the next sign-in asks again.
+    fun deleteWalletConnection(key: String) {
+        helper.writableDatabase.delete("wallet_connection", "key = ?", arrayOf(key))
+        walletConnectionsVersionFlow.value += 1
+    }
+
+    private fun readWalletConnection(c: android.database.Cursor): WalletConnection {
+        fun text(name: String) = c.getString(c.getColumnIndexOrThrow(name))
+        val methods = runCatching {
+            val array = JSONArray(text("methods"))
+            List(array.length()) { array.getString(it) }
+        }.getOrDefault(emptyList())
+        val signIn = c.getColumnIndexOrThrow("signIn").let { if (c.isNull(it)) null else SignInKey.fromWire(c.getString(it)) }
+        return WalletConnection(
+            key = text("key"), app = text("app"), title = text("title"), place = text("place"),
+            methods = methods, signIn = signIn, createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")),
+        )
+    }
+
     fun deleteAccount() {
         helper.close()
         appContext.deleteDatabase(dbName)
@@ -1613,6 +1664,7 @@ class Storage(context: Context, account: String = "default") {
             v10(db)
             v11(db)
             v12(db)
+            v13(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -1630,6 +1682,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 10) v10(db)
             if (oldVersion < 11) v11(db)
             if (oldVersion < 12) v12(db)
+            if (oldVersion < 13) v13(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -1866,8 +1919,27 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("CREATE TABLE chatTimeZone (chat TEXT PRIMARY KEY NOT NULL, enabled INTEGER NOT NULL, identifier TEXT)")
         }
 
+        // `wallet_connection`: what a page was allowed (iOS `walletConnection`, with its v34 `signIn` column folded
+        // in): one row per scope key (`origin:<origin>` for a stranger's page), the methods it may call (none on
+        // Android: no app wallet) and the key it signs in with (`root`/`domain`). Deleting the row revokes it.
+        private fun v13(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE wallet_connection (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    app TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    place TEXT NOT NULL,
+                    methods TEXT NOT NULL,
+                    signIn TEXT,
+                    createdAt INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+        }
+
         companion object {
-            const val VERSION = 12
+            const val VERSION = 13
         }
     }
 }

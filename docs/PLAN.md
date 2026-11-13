@@ -188,6 +188,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 24 | Remove a contact: server copy first, then the core and local rows, refused offline / for a tribe / with a payment pending, ported from `Engine+Contacts.swift` `deleteContact` | written without a build; not compiled, run or device-tested; see the file | [phases/24-delete-contact.md](phases/24-delete-contact.md) |
 | 25 | Own profile photo: pick, redraw as a small JPEG, upload to the memes server's public route, store the link, remove; ported from `Engine+Account.swift` `uploadPhoto`/`setPhotoURL` | see the file | [phases/25-profile-photo.md](phases/25-profile-photo.md) |
 | 26 | Talk to Jamie: the iOS voice call with an org's agent (`POST {home}/voice/calls`, end-to-end encrypted LiveKit room, transcript, artifact cards), started from Apps; replaces the Hive strut-device call | written without a build; not compiled, run or device-tested; see the file | [phases/26-talk-to-jamie.md](phases/26-talk-to-jamie.md) |
+| 27 | Sign in with Sphinx: a stranger's public strut app opened from `peel://open?url=…` in a WebView, with a `strutWallet` bridge answering `host_capability` and `sign_in` (root or per-domain key); Connected apps under You | written without a build; not compiled, run or device-tested; see the file | [phases/27-sign-in-with-sphinx.md](phases/27-sign-in-with-sphinx.md) |
 
 ## Open questions
 
