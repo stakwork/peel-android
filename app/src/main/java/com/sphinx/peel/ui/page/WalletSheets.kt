@@ -51,6 +51,7 @@ import com.sphinx.peel.engine.Sats
 import com.sphinx.peel.engine.WalletConnectAnswer
 import com.sphinx.peel.engine.WalletConnectForm
 import com.sphinx.peel.engine.WalletConnectSheet
+import com.sphinx.peel.engine.WalletCreditSheet
 import com.sphinx.peel.engine.WalletPayStep
 import com.sphinx.peel.engine.WalletPaymentSheet
 import com.sphinx.peel.engine.WalletSheet
@@ -71,6 +72,7 @@ fun WalletSheets(sheets: PhoneWalletSheets) {
         when (shown) {
             is WalletSheet.Connect -> WalletConnectPhoneSheet(shown.sheet) { sheets.answer(WalletSheetAnswer(connect = it)) }
             is WalletSheet.Payment -> WalletPaymentPhoneSheet(shown.sheet) { sheets.answer(WalletSheetAnswer(paid = it)) }
+            is WalletSheet.Credit -> WalletCreditPhoneSheet(shown.sheet) { sheets.answer(WalletSheetAnswer(paid = it)) }
         }
     }
 }
@@ -228,7 +230,64 @@ fun WalletPaymentPhoneSheet(sheet: WalletPaymentSheet, done: (Boolean) -> Unit) 
             }
             val armed = state.armedMsat
             if (armed != null) {
-                Text(WalletPayStep.ARMED_NOTE, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                Text(step.armedNote, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = { step.cancel() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = !state.working) { Text("Cancel") }
+                    Button(
+                        onClick = { tap() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = ready,
+                        colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.attention, contentColor = Theme.colors.buttonText),
+                    ) {
+                        if (state.working) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                        Text("Pay ${Sats.format(armed)}")
+                    }
+                }
+            } else {
+                Button(onClick = { tap() }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    if (state.working) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                    Text("Pay")
+                }
+            }
+            state.problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium) }
+        }
+    }
+}
+
+/// The CREDIT sheet (iOS `WalletCreditPhoneSheet`, specs/WALLET.md §1.2): credit bought on the server Peel loaded for a launch in its public app; the price as
+/// Peel decoded it, the rest marked as the server's, and the touch-safe two-step (the first tap arms the amount; the second, 700 ms later, pays it).
+/// It comes down by itself when the host cancels it (the invoice ended, or the page sent `buy_credit_cancel`).
+@Composable
+fun WalletCreditPhoneSheet(sheet: WalletCreditSheet, done: (Boolean) -> Unit) {
+    val step = remember(sheet) { WalletPayStep(sheet.amountMsat, { SystemClock.elapsedRealtime() }, armedNote = WalletWords.CREDIT_ARMED_NOTE) }
+    val state by step.attempt.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    var ready by remember(sheet) { mutableStateOf(false) }
+    LaunchedEffect(sheet, state.armedMsat) {
+        ready = false
+        if (state.armedMsat != null) {
+            delay(ArmingGate.SETTLE_MS)
+            ready = true
+        }
+    }
+    fun tap() {
+        scope.launch { if (step.tap()) done(true) }
+    }
+    Dialog(onDismissRequest = { done(false) }, properties = sheetProperties) {
+        SheetPage(title = WalletWords.creditTitle(sheet), no = "Decline", onNo = { done(false) }, yes = null) {
+            Text(WalletWords.creditApp(sheet), color = Theme.colors.secondaryText)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(Sats.number(sheet.amountMsat), fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+                Text(" sats", Modifier.padding(bottom = 6.dp), color = Theme.colors.secondaryText)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Runs ${sheet.workflow}", color = Theme.colors.text)
+                Text("Buys " + WalletWords.creditBuys(sheet), color = Theme.colors.text)
+                Text("Fee added on top", color = Theme.colors.secondaryText)
+                Text("The server says: \u201C${sheet.description}\u201D", color = Theme.colors.secondaryText)
+                Text(WalletWords.creditNote(sheet), color = Theme.colors.secondaryText)
+            }
+            val armed = state.armedMsat
+            if (armed != null) {
+                Text(step.armedNote, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = { step.cancel() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = !state.working) { Text("Cancel") }
                     Button(

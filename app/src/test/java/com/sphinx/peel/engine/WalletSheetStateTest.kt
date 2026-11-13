@@ -202,4 +202,19 @@ class WalletSheetStateTest {
         val pay = WalletPaymentSheet("B", "b", "v", "A", true, 2_000, "pk", null, null, null, null, false, false, 0, null)
         assertEquals("pay pk 2000", WalletSheet.Payment(pay).id)
     }
+
+    @Test fun `the credit sheet has its own id and its own armed note`() {
+        val credit = WalletCreditSheet("shop.example.com", "Voxel", "acme/voxel", "v3", "acme/wf", 250_000_000, 250.0, "credit", 1)
+        assertEquals("credit shop.example.com 250000000", WalletSheet.Credit(credit).id)
+        var t = 0L
+        val step = WalletPayStep(250_000_000, { t }, armedNote = WalletWords.CREDIT_ARMED_NOTE)
+        assertEquals("Check the amount, then confirm.", step.armedNote)
+        // The same two-step: the first tap arms, an early second is ignored, a settled second pays exactly that amount.
+        assertFalse(kotlinx.coroutines.runBlocking { step.tap() })
+        assertEquals(250_000_000L, step.attempt.state.value.armedMsat)
+        t = 100
+        assertFalse(kotlinx.coroutines.runBlocking { step.tap() })
+        t = 900
+        assertTrue(kotlinx.coroutines.runBlocking { step.tap() })
+    }
 }
