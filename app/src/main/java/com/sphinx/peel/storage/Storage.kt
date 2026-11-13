@@ -770,6 +770,10 @@ class Storage(context: Context, account: String = "default") {
                     put("replyUuid", extractReplyUuid(row.body))
                     put("threadUuid", extractThreadUuid(row.body))
                 }
+                // The echo of a message this device already stored optimistically, under
+                // no uuid or another one (a call, say): it takes that row over rather than
+                // adding a second one beside it.
+                if (adoptPending(db, row)) continue
                 val inserted = db.insertWithOnConflict("message", null, values, SQLiteDatabase.CONFLICT_IGNORE)
                 // Someone who joined with one of our invites adds us with its code
                 // (a key exchange, type 10, whose sender names it): the invite is used.
@@ -794,6 +798,33 @@ class Storage(context: Context, account: String = "default") {
         } finally {
             db.endTransaction()
         }
+    }
+
+    /// Whether [row], an echo of our own message (it has a server index), was folded into the
+    /// optimistic row this device stored when sending: a pending row with no server index
+    /// that has the same tag, or - when it was stored with no uuid - the same chat, type
+    /// and body. The row then carries the echo's uuid and index and is delivered. A row
+    /// already stored under the echo's own uuid is left to the normal conflict path.
+    private fun adoptPending(db: SQLiteDatabase, row: MessageRow): Boolean {
+        if (!row.fromMe || row.serverIndex == null || row.uuid == null) return false
+        db.rawQuery("SELECT 1 FROM message WHERE uuid = ?", arrayOf(row.uuid)).use { if (it.moveToFirst()) return false }
+        val id = pendingMatch(db, "tag = ?", row.tag?.let { arrayOf(row.chat, row.type.toString(), it) })
+            ?: pendingMatch(db, "uuid IS NULL AND body = ?", row.body?.let { arrayOf(row.chat, row.type.toString(), it) })
+            ?: return false
+        db.execSQL(
+            "UPDATE message SET uuid = ?, serverIndex = ?, status = 'DELIVERED' WHERE id = ?",
+            arrayOf<Any?>(row.uuid, row.serverIndex, id),
+        )
+        return true
+    }
+
+    private fun pendingMatch(db: SQLiteDatabase, clause: String, args: Array<String>?): Long? {
+        if (args == null) return null
+        db.rawQuery(
+            "SELECT id FROM message WHERE fromMe = 1 AND serverIndex IS NULL AND status = 'PENDING' " +
+                "AND chat = ? AND type = ? AND $clause ORDER BY id LIMIT 1",
+            args,
+        ).use { return if (it.moveToFirst()) it.getLong(0) else null }
     }
 
     /// A type-17 message in this batch deletes the message it names by

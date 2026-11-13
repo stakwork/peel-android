@@ -24,7 +24,10 @@ import org.json.JSONObject
 /// Everything here is what the joiner sent: names are self-declared and
 /// never an identity, and the photo is kept only when it looks like a
 /// real public https URL. Ported from PeelCore's `CallParticipant`.
-data class CallParticipant(val identity: String, val nickname: String, val avatarUrl: String?)
+data class CallParticipant(val identity: String, val nickname: String, val avatarUrl: String?) {
+    /// Jamie, the call's voice agent, by its name alone (PeelCore's `CallParticipant.isJamie`): not a person on the call.
+    val isJamie: Boolean get() = nickname.trim().equals("Jamie", ignoreCase = true)
+}
 
 /// Who is on a call, as far as the call server says — PeelCore's own
 /// `CallPresence`.
@@ -48,6 +51,9 @@ data class CallTicket(
     val participantName: String,
     val expiresAtMs: Long,
     val roomAdmin: Boolean,
+    /// This account's handoff key, so a device that joins later can take the call over ([CallHandoff]); set by
+    /// `Engine.callTicket`.
+    val handoff: CallHandoff? = null,
 ) {
     override fun toString(): String =
         "CallTicket($serverUrl, room $room, identity $identity, name $participantName, token not shown)"

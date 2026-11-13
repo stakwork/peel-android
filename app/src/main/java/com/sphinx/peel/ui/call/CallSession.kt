@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import android.content.Intent
 import com.sphinx.peel.engine.CallChat
 import com.sphinx.peel.engine.CallChatMessage
+import com.sphinx.peel.engine.CallHandoff
 import com.sphinx.peel.engine.CallLink
 import com.sphinx.peel.engine.CallParticipant
 import com.sphinx.peel.engine.CallServer
@@ -15,10 +16,12 @@ import io.livekit.android.LiveKit
 import io.livekit.android.RoomOptions
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
+import io.livekit.android.room.datastream.StreamTextOptions
 import io.livekit.android.room.participant.VideoTrackPublishOptions
 import io.livekit.android.room.track.DataPublishReliability
 import io.livekit.android.room.track.LocalVideoTrackOptions
 import io.livekit.android.room.track.screencapture.ScreenCaptureParams
+import java.util.Base64
 import java.util.UUID
 import io.livekit.android.room.Room
 import io.livekit.android.renderer.SurfaceViewRenderer
@@ -30,6 +33,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /// Connecting, connected or reconnecting, or the connection is gone (or
@@ -82,6 +86,8 @@ class CallSession(
     camera: Boolean,
     private val askMicPermission: suspend () -> Boolean,
     private val askCameraPermission: suspend () -> Boolean,
+    /// The person chose "Stay on both devices": the announcement says so and the other device keeps the call.
+    private val stay: Boolean = false,
 ) {
     private val context = appContext
     private val room: Room = LiveKit.create(appContext, RoomOptions(adaptiveStream = true, dynacast = true))
@@ -154,6 +160,10 @@ class CallSession(
     /// (connection state, mic, camera wish, call start): `CallController`'s
     /// hook. Called from whichever thread refreshes (main).
     var onStatus: () -> Unit = {}
+
+    /// Another device of this account joined after this one: it keeps the call and this one leaves
+    /// (`CallController`'s hook, PeelCore's `movedAway`).
+    var onMovedAway: () -> Unit = {}
     private var lastStatus: List<Any?> = emptyList()
     private var cameraPausedByBackground = false
 
@@ -180,6 +190,8 @@ class CallSession(
                 refresh()
             }
         }
+        // Before the room connects, so no announcement is missed.
+        listenForHandoff()
         scope.launch {
             try {
                 room.connect(ticket.serverUrl, ticket.token)
@@ -189,6 +201,7 @@ class CallSession(
                 return@launch
             }
             refresh()
+            announce()
             // Not joined by the caller: a microphone prompt nobody answers
             // must not hold up the rest of connecting.
             launch {
@@ -275,6 +288,60 @@ class CallSession(
         if (!cameraPausedByBackground) return
         cameraPausedByBackground = false
         if (wantsCamera && !leaving) scope.launch { setCamera(true) }
+    }
+
+    // MARK: - Handoff
+
+    /// Tells this account's other devices on the call that this one has joined, so they leave it
+    /// ([CallHandoff]): a text stream on [CallHandoff.TOPIC], tried again after 1 s and 2 s until sent.
+    private fun announce() {
+        val handoff = ticket.handoff ?: return
+        val text = handoff.announcementText(link.room, ticket.identity, stay)
+        scope.launch {
+            for (delayMs in listOf<Long?>(null) + CallHandoff.RETRY_DELAYS_MS) {
+                if (delayMs != null) delay(delayMs)
+                if (leaving) return@launch
+                val sent = try {
+                    room.localParticipant.sendText(text, StreamTextOptions(topic = CallHandoff.TOPIC)).isSuccess
+                } catch (e: Exception) {
+                    false
+                }
+                if (sent) return@launch
+            }
+        }
+    }
+
+    /// Leaves when a newer device on this account joins. The announcement can come before the room has added
+    /// its sender, and their join time settles two devices joining at once, so it waits for them up to 10 s;
+    /// unknown after that, the sender counts as newer.
+    private fun listenForHandoff() {
+        val handoff = ticket.handoff ?: return
+        room.registerTextStreamHandler(CallHandoff.TOPIC) { reader, sender ->
+            scope.launch {
+                val text = try {
+                    reader.readAll().joinToString("")
+                } catch (e: Exception) {
+                    return@launch
+                }
+                if (text.toByteArray(Charsets.UTF_8).size > CallHandoff.MAX_TEXT_BYTES) return@launch
+                val data = try {
+                    Base64.getDecoder().decode(text)
+                } catch (e: IllegalArgumentException) {
+                    return@launch
+                }
+                var joinedAt = room.remoteParticipants[sender]?.joinedAt
+                repeat(100) {
+                    if (joinedAt == null) {
+                        delay(100)
+                        joinedAt = room.remoteParticipants[sender]?.joinedAt
+                    }
+                }
+                val leaves = handoff.shouldLeave(
+                    data, link.room, sender.value, joinedAt, ticket.identity, room.localParticipant.joinedAt,
+                )
+                if (leaves && !leaving) onMovedAway()
+            }
+        }
     }
 
     // MARK: - Chat

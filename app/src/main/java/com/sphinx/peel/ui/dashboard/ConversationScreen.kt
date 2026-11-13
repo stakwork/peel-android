@@ -1365,15 +1365,18 @@ private fun MessageRowView(
                     )
                     if (time != null) {
                         Spacer(Modifier.width(6.dp))
-                        Text(time, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
-                        if (row.fromMe && row.status == "DELIVERED") {
-                            Spacer(Modifier.width(3.dp))
-                            Icon(
-                                Icons.Filled.Bolt,
-                                contentDescription = "Delivered",
-                                tint = Theme.colors.confirmed,
-                                modifier = Modifier.size(10.dp),
-                            )
+                        // Time and bolt share a centred row so the bolt sits on the text's middle.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(time, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                            if (row.fromMe && row.status == "DELIVERED") {
+                                Spacer(Modifier.width(2.dp))
+                                Icon(
+                                    Icons.Filled.Bolt,
+                                    contentDescription = "Delivered",
+                                    tint = Theme.colors.confirmed,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
                         }
                     }
                 }
