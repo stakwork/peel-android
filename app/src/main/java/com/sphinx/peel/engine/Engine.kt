@@ -74,7 +74,14 @@ import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 class Engine(mnemonic: CharArray, val storage: Storage) {
     /// The native core takes the seed as a `String`, so one lives as long as
     /// the engine does; the words it came from are zeroed here, right away.
-    val seed: String = try { Account.seedOf(mnemonic) } finally { mnemonic.fill('\u0000') }
+    private val seeds: Pair<String, String> =
+        try { Account.seedOf(mnemonic) to Account.bip39SeedOf(mnemonic) } finally { mnemonic.fill('\u0000') }
+    val seed: String = seeds.first
+
+    /// The words' full BIP39 seed (hex), for the per-domain sign-in key only (LUD-05). iOS makes [seed] its
+    /// first 64 hex characters; that could not be checked here, so Android's own derivation of [seed] is
+    /// unchanged and this is computed beside it (one more PBKDF2 at unlock).
+    private val bip39Seed: String = seeds.second
     constructor(mnemonic: String, storage: Storage) : this(mnemonic.toCharArray(), storage)
 
     val network: String = storage.value(Setting.NETWORK) ?: "bitcoin"
@@ -666,6 +673,25 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val time = maxOf(0L, now - 30_000)
         return SphinxProof(accountKey, uniffi.sphinxrs.signedTimestamp(seed, 0u, time.toString(), network))
     }
+
+    /// Signs a seller's visitor challenge for Sign in with Sphinx (`docs/phases/27-sign-in-with-sphinx.md`): the
+    /// challenge's UTF-8 bytes, by the account's own key (child 0, [accountKey]) for [SignInKey.root], or by the
+    /// key LUD-05 derives for the challenge's host for [SignInKey.domain]. Never changes the account's keys.
+    suspend fun signVisitor(challenge: VisitorChallenge, key: SignInKey): VisitorSignature {
+        val message = challenge.text.toByteArray(Charsets.UTF_8)
+        return when (key) {
+            SignInKey.root -> {
+                val time = mutex.withLock { clock.next() }
+                VisitorSignature(accountKey, uniffi.sphinxrs.signBytes(seed, 0u, time, network, message))
+            }
+            SignInKey.domain -> {
+                val signed = uniffi.sphinxrs.signBytesLud05(bip39Seed, challenge.host, message)
+                VisitorSignature(signed.pubkey, signed.sig)
+            }
+        }
+    }
+
+    val visitorSigner: VisitorSigner = VisitorSigner { challenge, key -> signVisitor(challenge, key) }
 
     suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null): MessageRow {
         check(transport != null) { "Not connected." }

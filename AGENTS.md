@@ -61,6 +61,12 @@ sections for code that isn't written yet.
   - `engine/Talk.kt`, `TalkWave.kt` — Talk to Jamie (`docs/phases/26-talk-to-jamie.md`): `TalkHome`/`TalkTicket`/`TalkRefusal`/`TalkVoice`,
     `TalkPhase`, `TalkTranscript`, `TalkArtifacts` (pure, JVM-tested, HTTP behind `TalkHttp`); session and screen in `ui/talk/`
     (`TalkStore`, `TalkSession`, `TalkScreen`), held by `MainTabs` beside the group call (one call at a time).
+  - `engine/VisitorSignIn.kt`, `PublicApp.kt`, `WalletHost.kt`, `StorageWalletConnections.kt` — Sign in with Sphinx
+    (`docs/phases/27-sign-in-with-sphinx.md`): `VisitorChallenge`/`SignInRequest`/`SignInKey`, `Seller`, `PublicAppLink`
+    (`peel://open?url=…`, HTTP behind `PublicAppHttp`), and the pure `WalletHost` (`host_capability`, `sign_in`) over
+    injected storage/signer/person/clock (all JVM-tested); `Engine.signVisitor`; `Storage` table `wallet_connection` (v13).
+    UI in `ui/page/` (`PublicPageScreen` = WebView + `addWebMessageListener` bridge, `SignInSheet`, `PublicPageRouter`) and
+    You › Connected apps.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

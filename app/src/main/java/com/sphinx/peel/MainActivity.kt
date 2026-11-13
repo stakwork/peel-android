@@ -35,6 +35,9 @@ import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.InviteLink
 import com.sphinx.peel.engine.InviterFlow
+import com.sphinx.peel.engine.PublicAppLink
+import com.sphinx.peel.ui.page.PublicPageRouter
+import com.sphinx.peel.ui.page.PublicPageScreen
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.dashboard.MainTabs
 import com.sphinx.peel.ui.lock.LockScreen
@@ -55,6 +58,10 @@ class MainActivity : FragmentActivity() {
     /// What a tapped notification asked for, until `MainTabs` has opened it.
     private var deepLink by mutableStateOf<DeepLink?>(null)
 
+    /// A `peel://open?url=…` link (a stranger's public strut app to open, docs/phases/27-sign-in-with-sphinx.md),
+    /// until `PeelApp` has taken it: opened at once when the account is unlocked, else once it unlocks.
+    private var publicLink by mutableStateOf<PublicAppLink?>(null)
+
     private val askNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -63,6 +70,14 @@ class MainActivity : FragmentActivity() {
         setIntent(intent)
         deepLink = DeepLink.from(intent)
         takeInviteLink(intent)
+        takePublicLink(intent)
+    }
+
+    /// Only a strictly well-formed `peel://open?url=…`; anything else is ignored. Held in memory only.
+    private fun takePublicLink(intent: Intent?) {
+        val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
+        if (data.scheme?.lowercase() != "peel") return
+        PublicAppLink.parse(data.toString())?.let { publicLink = it }
     }
 
     private fun takeInviteLink(intent: Intent?) {
@@ -73,7 +88,10 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) takeInviteLink(intent)
+        if (savedInstanceState == null) {
+            takeInviteLink(intent)
+            takePublicLink(intent)
+        }
         // No chat contents in the Recents thumbnail (API 33+). Screens that show
         // a secret are additionally FLAG_SECURE (`SecureWindow`).
         if (android.os.Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
@@ -94,7 +112,7 @@ class MainActivity : FragmentActivity() {
                     val toast = rememberToastState()
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                         CompositionLocalProvider(LocalToast provides toast) {
-                            PeelApp(secretStore, storage, inviteLink, { inviteLink = null }, deepLink) { deepLink = null }
+                            PeelApp(secretStore, storage, inviteLink, { inviteLink = null }, deepLink, { deepLink = null }, publicLink) { publicLink = null }
                         }
                         ToastHost(toast, Modifier.align(Alignment.BottomCenter))
                     }
@@ -125,9 +143,21 @@ private sealed class Screen {
 private fun PeelApp(
     secretStore: SecretStore, storage: Storage, inviteLink: String?, onInviteLinkUsed: () -> Unit,
     deepLink: DeepLink?, onDeepLinkHandled: () -> Unit,
+    publicLink: PublicAppLink?, onPublicLinkTaken: () -> Unit,
 ) {
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
+    }
+
+    // A stranger's public app (`peel://open?url=…`): opened when the account is unlocked, kept until it is, and
+    // dropped (page and waiting link both) when the account locks or is signed out.
+    val router = remember { PublicPageRouter() }
+    val unlocked = screen is Screen.Home
+    androidx.compose.runtime.LaunchedEffect(publicLink, unlocked) {
+        publicLink?.let {
+            router.open(it, unlocked)
+            onPublicLinkTaken()
+        }
     }
 
     // The engine keeps running behind the lock, so its connection watcher,
@@ -147,7 +177,14 @@ private fun PeelApp(
             BiometricHousekeeping(current.engine, secretStore)
             StadeumHousekeeping(current.engine)
             InviterNotice(current.engine)
-            MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { screen = Screen.Onboarding }
+            DisposableEffect(Unit) {
+                router.openWaitingLink()
+                onDispose { router.locked() }
+            }
+            Box(Modifier.fillMaxSize()) {
+                MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { screen = Screen.Onboarding }
+                router.page?.let { PublicPageScreen(it, current.engine, storage, onClose = router::close) }
+            }
         }
     }
 }

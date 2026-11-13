@@ -2,6 +2,7 @@ package com.sphinx.peel.account
 
 import java.security.SecureRandom
 import uniffi.sphinxrs.mnemonicFromEntropy
+import uniffi.sphinxrs.mnemonicToBip39Seed
 import uniffi.sphinxrs.mnemonicToSeed
 import uniffi.sphinxrs.nodeKeys
 
@@ -35,6 +36,10 @@ object Account {
     /// The words stay in the caller's array (zero it after); only the
     /// transient `String` the native call needs is created here.
     fun seedOf(mnemonic: CharArray): String = mnemonicToSeed(normalise(String(mnemonic)))
+
+    /// The full BIP39 seed (64 bytes, hex) of the words: what LUD-05's per-domain key derives from
+    /// (`signBytesLud05`). Not the Sphinx seed above, which is what the core takes everywhere else.
+    fun bip39SeedOf(mnemonic: CharArray): String = mnemonicToBip39Seed(normalise(String(mnemonic)))
 
     fun seedOf(mnemonic: String): String = mnemonicToSeed(normalise(mnemonic))
 

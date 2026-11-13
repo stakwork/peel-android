@@ -62,6 +62,15 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="sphinx.chat" />
             </intent-filter>
+            <!-- A stranger's public strut app to open in Peel, peel://open?url=<address>
+                 (docs/phases/27-sign-in-with-sphinx.md). Read strictly by PublicAppLink; opening a link
+                 loads the page and signs nothing: the person is asked, after tapping in the page. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="peel" android:host="open" />
+            </intent-filter>
         </activity>
 
         <!-- FCM: onNewToken re-registers the token, onMessageReceived is the

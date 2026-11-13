@@ -271,6 +271,10 @@ private fun YouMain(
         item { StadeumSection(Stadeum.model) }
         item { Spacer(Modifier.height(24.dp)) }
 
+        item { SectionHeader("Connected apps") }
+        item { ConnectedAppsSection(storage) }
+        item { Spacer(Modifier.height(24.dp)) }
+
         item { SectionHeader("Account") }
         item {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
@@ -1069,4 +1073,43 @@ private fun StadeumButton(label: String, color: Color, onClick: () -> Unit) {
         label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = color,
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 16.dp),
     )
+}
+
+/// You › Connected apps (docs/phases/27-sign-in-with-sphinx.md): the pages a sign-in was agreed to, each with
+/// Disconnect, which deletes the connection so the next sign-in asks again.
+@Composable
+private fun ConnectedAppsSection(storage: Storage) {
+    val version by storage.walletConnectionsVersion.collectAsState()
+    val connections = remember(version) { storage.walletConnections() }
+    Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+        if (connections.isEmpty()) {
+            StadeumNote("Apps you sign in to with your Sphinx account show here.")
+        }
+        connections.forEachIndexed { index, connection ->
+            if (index > 0) AccountDivider()
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        connection.title.ifEmpty { connection.place }, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        connectionLine(connection), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+                    )
+                }
+                TextButton(onClick = { storage.deleteWalletConnection(connection.key) }) {
+                    Text("Disconnect", color = Theme.colors.destructive)
+                }
+            }
+        }
+    }
+}
+
+private fun connectionLine(connection: com.sphinx.peel.engine.WalletConnection): String = when (connection.signIn) {
+    com.sphinx.peel.engine.SignInKey.root -> "Signs you in to ${connection.place} as you"
+    com.sphinx.peel.engine.SignInKey.domain -> "Signs you in to ${connection.place} as a new identity"
+    null -> connection.place
 }
