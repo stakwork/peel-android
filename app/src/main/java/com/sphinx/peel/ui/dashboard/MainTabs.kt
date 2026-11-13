@@ -1,6 +1,5 @@
 package com.sphinx.peel.ui.dashboard
 
-import com.sphinx.peel.ui.call.CallConnectionState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import com.sphinx.peel.engine.TalkHome
@@ -8,14 +7,10 @@ import com.sphinx.peel.engine.CallSwitch
 import com.sphinx.peel.ui.call.PendingCall
 import com.sphinx.peel.ui.toast.LocalToast
 import com.sphinx.peel.ui.toast.ToastType
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import com.sphinx.peel.call.CallService
+import com.sphinx.peel.call.CallController
+import com.sphinx.peel.call.CallNotice
 import androidx.compose.runtime.LaunchedEffect
-import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -40,19 +35,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.CallLink
 import com.sphinx.peel.engine.Engine
@@ -60,22 +53,17 @@ import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.call.CallBanner
 import com.sphinx.peel.ui.call.CallPhase
 import com.sphinx.peel.ui.call.CallScreen
-import com.sphinx.peel.ui.call.CallSession
 import com.sphinx.peel.ui.call.camera
 import com.sphinx.peel.ui.call.chat
 import com.sphinx.peel.ui.call.link
 import com.sphinx.peel.ui.call.title
 import com.sphinx.peel.ui.apps.AppsScreen
 import com.sphinx.peel.ui.talk.TalkScreen
-import com.sphinx.peel.ui.talk.TalkStore
 import com.sphinx.peel.ui.mentions.MentionsScreen
 import com.sphinx.peel.ui.threads.ThreadsScreen
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.payments.PaymentsScreen
 import com.sphinx.peel.ui.you.YouScreen
-import kotlin.coroutines.resume
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 /// What a tapped notification asks `MainTabs` to open: a chat, or Payments.
 /// Read from the intent extras `push/Notifications.openIntent` sets.
@@ -130,43 +118,34 @@ fun MainTabs(
         onDeepLinkHandled()
     }
 
-    var callPhase by remember { mutableStateOf<CallPhase?>(null) }
-    // The full call screen is in front, rather than just the banner (or
-    // nothing, off a call entirely). Independent of `callPhase` itself:
-    // hiding the screen (the chevron) never ends the call, only Leave does.
-    var callScreenShown by remember { mutableStateOf(false) }
+    // The call is `CallController`'s (application-scoped, `docs/phases/15-call-background.md`):
+    // this only observes it, so rotation or a recreated Activity never ends a call. Whether the
+    // full call screen is in front, rather than just the banner, lives there too; hiding the
+    // screen (the chevron) never ends the call, only Leave does.
+    val callPhase = CallController.phase
+    val callScreenShown = CallController.callScreenShown
 
     val context = LocalContext.current
     val appContext = context.applicationContext
-    val scope = rememberCoroutineScope()
+    val toast = LocalToast.current
 
-    // A system permission dialog needs an ActivityResultLauncher, which
-    // only exists here — CallSession only ever calls these two closures,
-    // whether it's the automatic "microphone on after connecting" or an
-    // explicit tap on the control bar or the banner's own mute button.
-    var micContinuation by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
-    var cameraContinuation by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
-    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        micContinuation?.invoke(granted)
-        micContinuation = null
+    // A system permission dialog needs an ActivityResultLauncher, which only exists here. The
+    // controller asks (before connecting, and for a later camera tap); the answer goes back to
+    // it, not into a closure held by a session.
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        CallController.permissionResult(granted)
     }
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        cameraContinuation?.invoke(granted)
-        cameraContinuation = null
+    val permissionRequest = CallController.permissionRequest
+    LaunchedEffect(permissionRequest) {
+        if (permissionRequest != null) permissionLauncher.launch(permissionRequest)
     }
-    suspend fun askMic(): Boolean {
-        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return true
-        return suspendCancellableCoroutine { cont ->
-            micContinuation = { granted -> cont.resume(granted) }
-            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
-    suspend fun askCamera(): Boolean {
-        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) return true
-        return suspendCancellableCoroutine { cont ->
-            cameraContinuation = { granted -> cont.resume(granted) }
-            cameraLauncher.launch(Manifest.permission.CAMERA)
-        }
+
+    // Notifications are off: the call still runs, said once.
+    val nudge = CallController.notificationNudge
+    LaunchedEffect(nudge) {
+        if (!nudge) return@LaunchedEffect
+        toast.show("Notifications are off, so the call's controls won't show on the lock screen. The call still runs.", ToastType.Warning)
+        CallController.nudgeShown()
     }
 
     // Joining or starting a call while on a different one asks first, as
@@ -175,32 +154,12 @@ fun MainTabs(
     // back to the front.
     var pendingCall by remember { mutableStateOf<PendingCall?>(null) }
 
-    fun connectNow(chat: String, title: String, link: CallLink, camera: Boolean) {
-        (callPhase as? CallPhase.Active)?.session?.leave()
-        callPhase = CallPhase.Connecting(chat, title, link, camera)
-        callScreenShown = true
-        val requested = callPhase as CallPhase.Connecting
-        scope.launch {
-            try {
-                val ticket = engine.callTicket(link)
-                // Stale by the time the ticket came back (left, or moved
-                // on to a different call before this one connected).
-                if (callPhase !== requested) return@launch
-                val session = CallSession(appContext, ticket, link, chat, title, camera, askMicPermission = ::askMic, askCameraPermission = ::askCamera)
-                callPhase = CallPhase.Active(session)
-            } catch (e: Exception) {
-                if (callPhase !== requested) return@launch
-                callPhase = CallPhase.Failed(chat, title, link, camera, e.message ?: "Could not join the call.")
-            }
-        }
-    }
+    fun connectNow(chat: String, title: String, link: CallLink, camera: Boolean) =
+        CallController.connect(engine, chat, title, link, camera)
 
-    val toast = LocalToast.current
     // Talk to Jamie (`docs/phases/26-talk-to-jamie.md`): the voice call with
-    // an org's agent, beside the group call held here, never with it.
-    val talk = remember { TalkStore(appContext) }
-    talk.askMicPermission = ::askMic
-    talk.otherCall = { callPhase?.title }
+    // an org's agent, beside the group call, never with it. Held by the controller too.
+    val talk = CallController.talk
 
     fun request(chat: String, title: String, link: CallLink, camera: Boolean) {
         // One call at a time: a group call waits until Talk is hung up.
@@ -211,15 +170,12 @@ fun MainTabs(
         val current = callPhase
         when (CallSwitch.action(current?.link?.room, link.room)) {
             CallSwitch.Action.JOIN -> connectNow(chat, title, link, camera)
-            CallSwitch.Action.SHOW_CURRENT -> callScreenShown = true
+            CallSwitch.Action.SHOW_CURRENT -> CallController.callScreenShown = true
             CallSwitch.Action.CONFIRM -> pendingCall = PendingCall(chat, title, link, camera)
         }
     }
 
-    fun retryCall() {
-        val phase = callPhase ?: return
-        connectNow(phase.chat, phase.title, phase.link, phase.camera)
-    }
+    fun retryCall() = CallController.retry(engine)
 
     // Talk to Jamie, picked on Apps: `POST /voice/calls` on the workspace's
     // own strut, then its LiveKit room (not a call link). Never while a group call is on.
@@ -229,81 +185,13 @@ fun MainTabs(
             toast.show("Leave the call in ${other.title} first, then talk to Jamie.", ToastType.Warning)
             return
         }
-        talk.talk(home)
+        CallController.talkTo(home)
     }
 
-    fun leaveCall() {
-        (callPhase as? CallPhase.Active)?.session?.leave()
-        callPhase = null
-        callScreenShown = false
-    }
+    fun leaveCall() = CallController.leave()
 
-    // A running call holds a foreground service, so Android keeps the
-    // process (and its LiveKit room) while Peel is in the background; Leave
-    // in its notification comes back here as a broadcast.
-    val activeCall = (callPhase as? CallPhase.Active)?.session
-    val activeTitle = activeCall?.title
-    val activeChat = activeCall?.chat
-    DisposableEffect(activeCall) {
-        if (activeCall == null) return@DisposableEffect onDispose { }
-        com.sphinx.peel.push.Notifications.cancelIncomingCall(appContext)
-        CallService.start(appContext, activeTitle ?: "Call", activeChat ?: "")
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, intent: Intent?) { leaveCall() }
-        }
-        ContextCompat.registerReceiver(
-            appContext, receiver, IntentFilter(CallService.ACTION_LEFT), ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-        onDispose {
-            appContext.unregisterReceiver(receiver)
-            CallService.stop(appContext)
-        }
-    }
-
-    // The microphone is asked for after the call connects; the service's
-    // type needs that permission, so start it again once connected.
-    val activeState = activeCall?.state
-    LaunchedEffect(activeState) {
-        if (activeCall != null && activeState == CallConnectionState.CONNECTED) {
-            CallService.start(appContext, activeTitle ?: "Call", activeChat ?: "")
-        }
-    }
-
-    // Talk holds the same foreground service, so the call survives Peel in
-    // the background; Leave in its notification hangs up.
-    val talkSession = (talk.state as? TalkStore.State.On)?.session
-    val talkTitle = "Jamie · ${talk.home?.name ?: ""}"
-    DisposableEffect(talkSession) {
-        if (talkSession == null) return@DisposableEffect onDispose { }
-        CallService.start(appContext, talkTitle, "")
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, intent: Intent?) { talk.hangUp() }
-        }
-        ContextCompat.registerReceiver(
-            appContext, receiver, IntentFilter(CallService.ACTION_LEFT), ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-        onDispose {
-            appContext.unregisterReceiver(receiver)
-            CallService.stop(appContext)
-        }
-    }
-
-    // The microphone is asked for once the room is joined; the service's type
-    // needs that permission, so start it again after.
-    val talkMicReady = talkSession?.micReady
-    LaunchedEffect(talkMicReady) {
-        if (talkSession != null && talkMicReady == true) CallService.start(appContext, talkTitle, "")
-    }
-
-    // "Forget this account" (or any other path that tears MainTabs down
-    // entirely) must not orphan a running Room — nothing else would ever
-    // call `leave()` on it once this composable itself is gone.
-    DisposableEffect(Unit) {
-        onDispose {
-            (callPhase as? CallPhase.Active)?.session?.leave()
-            talk.hangUp()
-        }
-    }
+    // "Forget this account" ends any call for good; the Activity going away does not.
+    val forget = { CallController.endAll(); onForgotten() }
 
     pendingCall?.let { pending ->
         AlertDialog(
@@ -322,12 +210,13 @@ fun MainTabs(
     }
 
     val talkHome = talk.home
-    if (talkHome != null) TalkScreen(talk, onClose = talk::hangUp) else Column(Modifier.fillMaxSize()) {
+    if (talkHome != null) TalkScreen(talk, onClose = CallController::hangUpTalk) else Column(Modifier.fillMaxSize()) {
+        CallController.notice?.let { CallNoticeBar(it, onDismiss = CallController::dismissNotice) }
         val phase = callPhase
         if (callScreenShown && phase != null) {
-            CallScreen(phase, onHide = { callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)
+            CallScreen(phase, onHide = { CallController.callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)
         } else {
-            if (phase != null) CallBanner(phase, onTap = { callScreenShown = true }, onLeave = ::leaveCall)
+            if (phase != null) CallBanner(phase, onTap = { CallController.callScreenShown = true }, onLeave = ::leaveCall)
             val chat = openChat
             val route = openRoute
             if (route != null && chat == null) {
@@ -385,13 +274,27 @@ fun MainTabs(
                     when (tab) {
                         MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }) { openChat = it }
                         MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
-                        MainTab.YOU -> YouScreen(engine, storage, secretStore, onForgotten)
+                        MainTab.YOU -> YouScreen(engine, storage, secretStore, forget)
                         MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                     }
                 }
                 BottomBar(tab) { tab = it }
             }
         }
+    }
+}
+
+/// A line about the call (it ended in the background, the service could not start), dismissable.
+@Composable
+private fun CallNoticeBar(notice: CallNotice, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(if (notice.error) Theme.colors.destructive else Theme.colors.fieldFill)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(notice.message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = if (notice.error) Color.White else Theme.colors.text)
+        Text("Dismiss", Modifier.clickable(onClick = onDismiss), style = MaterialTheme.typography.labelLarge, color = if (notice.error) Color.White else Theme.colors.accent)
     }
 }
 

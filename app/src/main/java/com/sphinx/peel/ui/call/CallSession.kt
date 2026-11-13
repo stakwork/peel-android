@@ -67,11 +67,12 @@ data class CallTile(
 /// The microphone starts on and the camera off; only the person who started
 /// a video call (or explicitly turns theirs on) starts with the camera on.
 ///
-/// [askMicPermission]/[askCameraPermission] are owned by the Composable
-/// that creates this session — launching a system permission dialog needs
-/// an `ActivityResultLauncher`, which only exists at that layer. This class
-/// only ever calls them before actually turning a device on, whether that
-/// is the automatic "microphone on after connecting" or an explicit tap.
+/// [askMicPermission]/[askCameraPermission] are `CallController`'s (the
+/// application-scoped owner of this session), never an Activity's: the
+/// session outlives the Activity, so it must not hold anything of one. The
+/// controller has already asked for the microphone (and the camera, for a
+/// video call) before this session exists; they are asked again only before
+/// turning a device on later, an explicit tap or the camera restored.
 class CallSession(
     appContext: Context,
     val ticket: CallTicket,
@@ -148,6 +149,13 @@ class CallSession(
         chatOpen = open
         if (open) chatUnread = 0
     }
+
+    /// Told whenever what the call service and its notification show changes
+    /// (connection state, mic, camera wish, call start): `CallController`'s
+    /// hook. Called from whichever thread refreshes (main).
+    var onStatus: () -> Unit = {}
+    private var lastStatus: List<Any?> = emptyList()
+    private var cameraPausedByBackground = false
 
     /// Something that went wrong mid-call, said quietly under the bar.
     var deviceNotice by mutableStateOf<String?>(null)
@@ -251,6 +259,22 @@ class CallSession(
 
     fun toggleCamera() {
         scope.launch { setCamera(!cameraOn) }
+    }
+
+    /// The app left the screen (process ON_STOP): the camera goes off, the
+    /// wish for it ([wantsCamera]) stays. The microphone is not touched.
+    fun pauseCameraForBackground() {
+        if (leaving || !cameraOn) return
+        cameraPausedByBackground = true
+        scope.launch { setCamera(false, keepWish = true) }
+    }
+
+    /// The app is back (process ON_START): the camera returns if it was
+    /// turned off by [pauseCameraForBackground] and is still wanted.
+    fun resumeCameraFromBackground() {
+        if (!cameraPausedByBackground) return
+        cameraPausedByBackground = false
+        if (wantsCamera && !leaving) scope.launch { setCamera(true) }
     }
 
     // MARK: - Chat
@@ -419,7 +443,7 @@ class CallSession(
     /// `setCameraEnabled(false)` already releases the capture device for
     /// other apps on mute, the same thing PeelCore's own explicit
     /// unpublish-on-off exists to get.
-    private suspend fun setCamera(on: Boolean) {
+    private suspend fun setCamera(on: Boolean, keepWish: Boolean = false) {
         if (switchingCamera || leaving) return
         switchingCamera = true
         try {
@@ -433,7 +457,7 @@ class CallSession(
             if (leaving) return
             try {
                 room.localParticipant.setCameraEnabled(on)
-                if (on) wantsCamera = true else wantsCamera = false
+                if (!keepWish) wantsCamera = on
             } catch (e: Exception) {
                 if (on) deviceNotice = "Could not turn the camera on"
             }
@@ -482,6 +506,11 @@ class CallSession(
             Room.State.DISCONNECTED -> if (!everConnected && !failed) CallConnectionState.CONNECTING else CallConnectionState.LOST
         }
         if (now != state) state = now
+        val status = listOf(state, micOn, wantsCamera, connectedAtMs)
+        if (status != lastStatus) {
+            lastStatus = status
+            onStatus()
+        }
     }
 
     private fun tile(participant: Participant, isYou: Boolean): CallTile? {

@@ -1,6 +1,10 @@
 # Phase 15 — Calls keep running in the background
 
-## Status (2026-11-02)
+## Status (2026-11-13)
+
+**Update:** calls now continue with Peel in the background or the screen locked, through an application-scoped `CallController` and the `CallService` foreground service — see "Update — the call outlives the Activity" at the end. Written and unit-tested for its pure part; **nothing has been run on a device** (`docs/call-background-device-checklist.md`).
+
+Original status of the in-app phase:
 
 **Built:** the piece Phase 13 named and deliberately left out — a call
 survives leaving the screen that started or joined it. The chevron on
@@ -48,19 +52,8 @@ to `MainTabs` right along with everything else that used to live in
   run shape `PendingCall`/`callSwitchConfirmation` are in PeelCore).
   Worth adding once this port's calls feel real enough that silently
   dropping one to join another actually surprises someone.
-- **No foreground service — this is "survives switching screens
-  inside Peel," not "survives Android backgrounding the whole app."**
-  The screenshots this phase was built from all show the banner across
-  *in-app* screens (Chats, a conversation, You); that's what's built.
-  Once Android itself backgrounds the app (the user presses Home, locks
-  the screen, switches to another app), nothing here keeps the process
-  a priority the OS won't eventually throttle or kill — no persistent
-  notification, no `Service`, none of what a real calling app needs to
-  survive that. A real further gap, not a trim: building it needs a
-  foreground service (with the `microphone`/`camera` foreground-service
-  types newer Android requires), its own notification, and deciding
-  what "the call ended while backgrounded" should even look like when
-  the user comes back — its own piece of work.
+- **Backgrounding the whole app: built, see "Update — the call outlives the Activity" below.**
+  (This phase originally stopped at in-app screens; that gap is closed there, not device-tested.)
 - **No tap-to-focus / pinned speaker.** Unchanged from Phase 13 — still
   no screen share, so still nothing a focus layout would be for.
 - **The banner's mute button has no "refused" visual state of its
@@ -113,10 +106,8 @@ what's next):**
   edge-case coverage already favors: the simplest check that is
   actually correct, not the first one that happens to work.
 - `MainTabs` gained a `DisposableEffect` that leaves any active call
-  if `MainTabs` itself is ever torn down (account forgotten) — a small
-  addition, but the one place in this whole change where skipping it
-  would have silently orphaned a running `Room` with nothing left to
-  ever call `leave()` on it again.
+  if `MainTabs` itself is ever torn down (account forgotten). *Superseded:* that tied the call to the
+  composition, so rotation ended it. Teardown is now explicit, on "Forget this account" (`CallController.endAll`).
 
 ## Journal
 
@@ -208,3 +199,46 @@ Join hidden on call cards older than 12 h (`CallLink.isRecent`); call with Jamie
 (`HiveClient.startCall` -> `POST /api/strut-devices/calls {workspace}`, `CallLink.hive`). The sidebar green phone already existed.
 Assumptions (the iOS `peel` source was not available): chat wire format, `workspace` = the peer id, Hive room
 must be on the account's call server, "camera picker for share" = share a second camera. Untested on a device.
+
+## Update — the call outlives the Activity
+
+**Built (not device-tested).**
+
+- **`call/CallController`** (an `object`, installed by `PeelApplication`) owns the group call's `CallPhase`/`CallSession`,
+  `callScreenShown`, Talk to Jamie's `TalkStore`, the banner `notice` and the permission request. `MainTabs` only observes it
+  (`CallController.phase`, …) and calls `connect`/`leave`/`retry`/`talkTo`/`hangUpTalk`. The old `remember`ed call state and the
+  `onDispose` teardown are gone: rotation, a recreated Activity or a relock (Home → Relock) no longer end the call. The only
+  teardown is `endAll()`, from "Forget this account", Leave, a swipe from Recents, or a call lost in the background.
+- **Permissions before connecting.** `connect` asks for `RECORD_AUDIO` (and `CAMERA` for a video call) first; the service starts
+  only after. The launcher stays in `MainTabs` (an Activity thing): the controller publishes `permissionRequest`, `MainTabs`
+  launches it and returns the answer with `permissionResult`, so a recreated Activity does not strand the wait. Sessions get
+  controller methods for the later asks (a camera tap), never an Activity closure. Microphone denied = the call does not start
+  (a Failed state with a Try again), because an FGS of the microphone type cannot start without it; camera denied on a video
+  call = joined audio-only. Talk does the same through `TalkStore.preflight`.
+- **`call/CallService`** is the lifecycle anchor: started once at call start while Peel is on screen, never re-promoted from the
+  background. `ForegroundTypes.select` (pure, `ForegroundTypesTest`) picks the types per call: microphone always, camera only
+  while video is wanted (`wantsCamera`) and granted; chosen at runtime with `ServiceCompat.startForeground` (the manifest declares
+  `microphone|camera` as the allowed set, `stopWithTask="false"`). `ForegroundServiceStartNotAllowedException` and
+  `SecurityException` are caught and reported to `CallController.serviceRefused` (a red banner, plus a notification if Peel is not on screen) — the call
+  carries on while the app is visible. Adding the camera type later is only tried while visible. It holds a `PARTIAL_WAKE_LOCK` and
+  a `WifiLock` (`WIFI_MODE_FULL_LOW_LATENCY`, `WAKE_LOCK` permission), released in `onDestroy`.
+- **The notification** (`Notifications.ongoingCall`): chronometer from the call's start (`connectedAtMs`), Mute/Unmute and Leave,
+  `FOREGROUND_SERVICE_IMMEDIATE`. Both actions go to the service, which calls `CallController.toggleMute`/`leaveAll` directly; the
+  `ACTION_LEFT` broadcast and the receivers in `MainTabs` are removed. Sessions tell the controller what changed through an
+  `onStatus` hook (not `snapshotFlow`, which does not run with no Activity composing).
+- **Camera and the background** (iOS parity): the process lifecycle's ON_STOP turns the local camera off but keeps `wantsCamera`;
+  ON_START turns it back on if it was paused that way. The microphone is untouched.
+- **Talk to Jamie** uses the same controller and service (audio only).
+- **Swipe from Recents** (`Service.onTaskRemoved`) ends the call.
+- **Notifications denied:** the call runs; a one-time toast says the controls will not show (`notification_nudge_shown` preference).
+- **A call that died:** lost in the background (LiveKit gives up) the call is ended, a notification is posted (`callEnded`) and a banner
+  waits in the app. If the process itself is killed, a `call_background` preference flag (written at call start, cleared on every clean
+  end) is found at the next start: the same banner and notification.
+
+**Decided.** One controller object, not a ViewModel (a ViewModel dies with the task; the service is the anchor). Mic denied blocks
+the call rather than a listen-only join, because the FGS type needs the permission. Service types follow the wish for video, not
+the camera's momentary state, so ON_STOP/ON_START never changes the type.
+
+**Not done / known gaps.** No device run. A permission dialog open while the Activity is recreated may show twice. A relocked
+account keeps its call running behind the PIN (the engine does too); the call screen is shown again afterwards. No Picture-in-Picture,
+no battery-optimisation prompt, no Telecom/ConnectionService, incoming calls unchanged, no Play Console FGS declaration (all out of scope on purpose).

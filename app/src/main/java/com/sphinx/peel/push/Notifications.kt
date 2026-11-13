@@ -40,6 +40,7 @@ object Notifications {
     private val GENERIC_ID = "generic".hashCode()
     const val CALL_NOTIFICATION_ID = 7001
     const val ONGOING_CALL_NOTIFICATION_ID = 7002
+    const val CALL_ENDED_NOTIFICATION_ID = 7003
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -133,17 +134,48 @@ object Notifications {
             .build())
     }
 
-    fun ongoingCall(context: Context, title: String, chat: String?): Notification {
-        val hangUp = PendingIntent.getService(
-            context, 3, Intent(context, com.sphinx.peel.call.CallService::class.java).setAction(com.sphinx.peel.call.CallService.ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    /// The quiet, ongoing notification the call service holds: a running
+    /// clock from [whenMs], Mute/Unmute (only with a microphone to mute: [micOn]
+    /// is null before the call has one) and Leave, both handled by `CallService`
+    /// straight into `CallController`.
+    fun ongoingCall(context: Context, title: String, chat: String?, whenMs: Long, micOn: Boolean?): Notification {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        fun action(code: Int, name: String) = PendingIntent.getService(
+            context, code, Intent(context, com.sphinx.peel.call.CallService::class.java).setAction(name), flags,
         )
-        return builder(context, NotificationKind.ONGOING_CALL, title, "Call in progress")
+        val builder = builder(context, NotificationKind.ONGOING_CALL, title, "Call in progress")
             .setContentIntent(openIntent(context, chat = chat, requestCode = 2))
             .setOngoing(true)
+            .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
+            .setWhen(whenMs)
+            .setShowWhen(true)
+            .setUsesChronometer(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .addAction(0, "Leave", hangUp)
-            .build()
+        if (micOn != null) {
+            builder.addAction(0, if (micOn) "Mute" else "Unmute", action(4, com.sphinx.peel.call.CallService.ACTION_MUTE))
+        }
+        return builder.addAction(0, "Leave", action(3, com.sphinx.peel.call.CallService.ACTION_STOP)).build()
+    }
+
+    /// A call that ended while Peel was in the background (or with the process):
+    /// said once, a tap opens the app (which shows the same line as a banner).
+    fun callEnded(context: Context, text: String) {
+        post(context, CALL_ENDED_NOTIFICATION_ID, builder(context, NotificationKind.CALLS, "Call ended", text)
+            .setContentIntent(openIntent(context, requestCode = 5))
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .build())
+    }
+
+    fun cancelCallEnded(context: Context) =
+        NotificationManagerCompat.from(context).cancel(CALL_ENDED_NOTIFICATION_ID)
+
+    /// Quietly updates the ongoing-call notification the foreground service holds.
+    @android.annotation.SuppressLint("MissingPermission") // `permitted` checks POST_NOTIFICATIONS
+    fun updateOngoingCall(context: Context, notification: Notification) {
+        if (!permitted(context)) return
+        runCatching { NotificationManagerCompat.from(context).notify(ONGOING_CALL_NOTIFICATION_ID, notification) }
     }
 
     /// The notification a screen share's capture service shows (Android

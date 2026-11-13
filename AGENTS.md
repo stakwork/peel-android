@@ -69,6 +69,9 @@ sections for code that isn't written yet.
     show); `Engine.signVisitor`; `Storage` table `wallet_connection` (v13).
     UI in `ui/page/` (`PublicPageScreen` = WebView + `addWebMessageListener` bridge, `SignInSheet`, `PublicPageRouter`) and
     You › Connected apps.
+  - `call/` — `CallController` (application-scoped owner of the group call and Talk to Jamie; `MainTabs` only observes it),
+    `CallService` (foreground service, the lifecycle anchor), `ForegroundTypes` (pure type selection, JVM-tested);
+    `PeelApplication` installs the controller (`docs/phases/15-call-background.md`).
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
