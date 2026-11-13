@@ -38,7 +38,7 @@ data class PeelPalette(
     val codeFill: Color,
 )
 
-private val LightPeelPalette = PeelPalette(
+internal val LightPeelPalette = PeelPalette(
     background = Color(0xFFFFFFFF),
     text = Color(0xFF292C33),
     secondaryText = Color(0xFF646C73),

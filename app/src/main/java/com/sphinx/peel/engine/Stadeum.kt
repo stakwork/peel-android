@@ -61,6 +61,9 @@ class StadeumModel(
     val revoked: Boolean get() = link?.revokedAt != null
     /// The orgs in use: none once revoked.
     val live: List<HivePeer> get() = if (revoked) emptyList() else link?.peers ?: emptyList()
+    /// The ways things open over the workspaces in use (`Openings`): a page of an org, a deliverable, an app, a tapped Hive link.
+    val openings: Openings get() = Openings(live, link != null && !revoked)
+
     /// Whether Stadeum knows the person's Sphinx account (a tribe that tells Jamie who is speaking runs their `@jamie` as them).
     val identified: Boolean get() = link?.identified == true
     val isOpen: Boolean get() = store != null
@@ -344,6 +347,8 @@ object Stadeum {
     val model = StadeumModel()
 
     val live: List<HivePeer> get() = model.live
+    val openings: Openings get() = model.openings
+
     /// A development workspace to talk to Jamie on; none is configured here (Android has no dev setting).
     @Volatile var developmentHome: TalkHome? = null
 

@@ -262,44 +262,36 @@ sealed class TalkRefusal(message: String) : Exception(message) {
     }
 }
 
-/// What Jamie made or found in a turn of a Talk call, as the voice agent
-/// sends it to the member alone: one text stream on [TOPIC] (in the room's
-/// end-to-end encryption, as the transcript is) whose text is
-/// `{ "id", "timestamp" (epoch ms), "artifacts": [strut's ArtifactRef…] }`.
-/// Android has no artifact model beyond this (iOS `AgentArtifact`): each entry
-/// is its title, summary and an https link; see the phase doc.
+/// What Jamie made or found in a turn of a Talk call, as the voice agent sends it to the member alone: one text stream on [TOPIC] (in
+/// the room's end-to-end encryption, as the transcript is) whose text is `{ "id", "timestamp" (epoch ms), "artifacts": [strut's
+/// ArtifactRef…] }`. Each entry is resolved against the call's home, the org's strut ([AgentArtifact.strutEntry], iOS
+/// `AgentArtifact(strutEntry:workspace:)`): a card opens on its org's strut in the page host, else its https link.
 object TalkArtifacts {
     const val TOPIC = "sphinx.artifacts"
     /// The most entries read from one stream.
-    const val MOST = 20
+    const val MOST = AgentArtifact.MOST
     /// The most cards a call keeps.
     const val MAX_CARDS = 30
     /// The longest payload read, in bytes.
     const val MAX_PAYLOAD = 256 * 1024
 
-    /// One of Jamie's artifacts: shown as a row; [url] is set only for an absolute https link.
-    data class Card(val id: String, val title: String, val summary: String?, val url: String?)
+    /// One of Jamie's artifacts: shown as a row ([AgentArtifact]).
+    typealias Card = AgentArtifact
 
     /// A stream's payload: its id and its entries, capped.
     data class Batch(val id: String, val artifacts: List<Card>)
 
-    /// The payload in [text]; null for malformed JSON or a payload with no id or list.
-    fun batch(text: String): Batch? {
+    /// The payload in [text], its entries resolved against [workspace] (the home's id); null for malformed JSON or a payload with no id or list.
+    fun batch(text: String, workspace: String): Batch? {
         val json = runCatching { JSONObject(text) }.getOrNull() ?: return null
         val id = (json.opt("id") as? String)?.takeIf { it.isNotEmpty() } ?: return null
         val entries = json.opt("artifacts") as? JSONArray ?: return null
-        val cards = (0 until minOf(entries.length(), MOST)).mapNotNull { i -> card(entries.optJSONObject(i), "$id/$i") }
+        val cards = (0 until minOf(entries.length(), MOST)).mapNotNull { i -> AgentArtifact.strutEntry(entries.opt(i), workspace) }
         return Batch(id, cards)
     }
 
-    /// An entry with a title (strut's `ArtifactRef`: `title` or `label`, `summary`, `url`); null for one without.
-    private fun card(entry: JSONObject?, id: String): Card? {
-        entry ?: return null
-        fun text(key: String, max: Int) = (entry.opt(key) as? String)?.let { WorkspaceApp.clean(it, max) }?.ifEmpty { null }
-        val title = text("title", 200) ?: text("label", 200) ?: return null
-        val url = text("url", 2048)?.takeIf { it.startsWith("https://", ignoreCase = true) && runCatching { URI(it).host }.getOrNull() != null }
-        return Card(id, title, text("summary", 400), url)
-    }
+    /// The entries in [text], at most [MOST]; none for anything malformed.
+    fun decode(text: String, workspace: String): List<Card> = batch(text, workspace)?.artifacts ?: emptyList()
 }
 
 /// The agent's turn, as LiveKit Agents publish it on their participant (`lk.agent.state`).

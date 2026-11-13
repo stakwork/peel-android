@@ -49,11 +49,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.sphinx.peel.engine.OrgPageRequest
+import com.sphinx.peel.engine.Opening
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
-import com.sphinx.peel.engine.WalletHost
 import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.toast.LocalToast
@@ -71,7 +70,7 @@ import kotlinx.coroutines.coroutineScope
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
 @Composable
-fun AppsScreen(wallet: WalletHost, onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
+fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -80,7 +79,7 @@ fun AppsScreen(wallet: WalletHost, onBack: () -> Unit, onTalk: (TalkHome) -> Uni
     var read by remember { mutableStateOf<List<WorkspaceApp>>(emptyList()) }
     var reading by remember { mutableStateOf(false) }
     var unread by remember { mutableStateOf<List<String>>(emptyList()) }
-    var page by remember { mutableStateOf<OrgPageRequest?>(null) }
+    val openPage = LocalPageOpener.current
     var refresh by remember { mutableStateOf(0) }
 
     // Read again on opening, and when the workspaces (or Refresh) change.
@@ -100,14 +99,6 @@ fun AppsScreen(wallet: WalletHost, onBack: () -> Unit, onTalk: (TalkHome) -> Uni
         }
     }
 
-    // The page closes, and its token goes, when its workspace is no longer live (iOS `MainTabs`: `.onChange(of: stadeum.live)`).
-    // Checked here as well as in the effect, so not one frame of it is shown past the disconnect.
-    val shownPage = page?.takeIf { it.isLive(live) }
-    LaunchedEffect(live.map { it.id }, page) { if (page != null && shownPage == null) page = null }
-    if (shownPage != null) {
-        OrgPageScreen(shownPage, wallet, onClose = { page = null }, modifier = modifier)
-        return
-    }
     BackHandler(onBack = onBack)
 
     val liveIds = live.map { it.id }.toSet()
@@ -158,8 +149,8 @@ fun AppsScreen(wallet: WalletHost, onBack: () -> Unit, onTalk: (TalkHome) -> Uni
                 }
                 items(shown, key = { it.id }) { app ->
                     AppRow(app, several, onOpen = {
-                        val opening = OrgPageRequest.opening(app, live)
-                        if (opening != null) page = opening else toast.show("Connect ${app.source} to open this app.", ToastType.Warning)
+                        val opening = Stadeum.openings.opening(app)
+                        if (opening is Opening.Page) openPage(opening.request) else toast.show("Connect ${app.source} to open this app.", ToastType.Warning)
                     }, onShare = { link ->
                         copy(context, link)
                         toast.show("Link copied", ToastType.Success)
