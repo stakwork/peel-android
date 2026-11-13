@@ -19,10 +19,11 @@ class FileSecretStoreTest {
     private val dir: File = Files.createTempDirectory("peel-secret").toFile()
     private val wall = FakeWall()
     private val lockout = FakeLockoutStore()
-    private val vault = FakeVault()
+    private var legacyKeyDeleted = false
+    private val remembered = RememberedPIN(FakeWall(), File(dir, "remembered.t.v1"))
     private val clock = TestClock()
 
-    private fun store() = FileSecretStore(dir, "t", wall, lockout, vault, clock, iterations)
+    private fun store() = FileSecretStore(dir, "t", wall, lockout, { legacyKeyDeleted = true }, remembered, clock, iterations)
     private val v1 get() = File(dir, "secret.t.v1")
     private val v2 get() = File(dir, "secret.t.v2")
 
@@ -131,55 +132,36 @@ class FileSecretStoreTest {
         assertThrows(SecretStoreFailure.NoAccount::class.java) { store().loadMnemonic("123456") }
     }
 
-    @Test fun `changePin counts the old PIN, reseals, and drops biometrics`() {
+    @Test fun `changePin counts the old PIN, reseals, and updates the remembered PIN`() {
         val s = store()
         s.save(mnemonic, "123456")
-        enrollBiometric(s, "123456")
-        assertTrue(s.biometricEnrolled)
+        remembered.keep("123456", 100, PinTimeout.NEVER)
         s.changePin("123456", "654321")
-        assertFalse(s.biometricEnrolled)
+        assertEquals("654321", remembered.pin(200))
         assertEquals(mnemonic, s.loadMnemonic("654321"))
         assertThrows(SecretStoreFailure.WrongPin::class.java) { s.loadMnemonic("123456") }
     }
 
-    private fun enrollBiometric(s: FileSecretStore, pin: String) {
-        val enrollment = s.beginBiometric(pin)
-        s.finishBiometric(enrollment, enrollment.cipher) // the "authenticated" cipher from BiometricPrompt
-    }
-
-    @Test fun `biometric unlock opens the words without the PIN or its derivation, and does not touch the counter`() {
+    @Test fun `a legacy biometric item turns the flag on and is deleted unread`() {
         val s = store()
         s.save(mnemonic, "123456")
-        runCatching { s.loadMnemonic("000000") }
-        enrollBiometric(s, "123456")
-        val failuresBefore = lockout.state!!.failures
-        val cipher = s.biometricUnlockCipher()
-        assertEquals(mnemonic, s.loadMnemonicBiometric(cipher))
-        assertEquals(failuresBefore, lockout.state!!.failures)
-    }
-
-    @Test fun `an invalidated biometric key falls back to the PIN and is forgotten`() {
-        val s = store()
-        s.save(mnemonic, "123456")
-        enrollBiometric(s, "123456")
-        vault.key = null // the OS destroyed it on a new enrolment
-        assertThrows(SecretStoreFailure.BiometricUnavailable::class.java) { s.biometricUnlockCipher() }
+        File(dir, "bio.t.v1").writeBytes(byteArrayOf(1, 12, 0))
         assertFalse(s.biometricEnrolled)
-        assertEquals(mnemonic, s.loadMnemonic("123456"))
-    }
-
-    @Test fun `beginBiometric needs the right PIN`() {
-        val s = store()
-        s.save(mnemonic, "123456")
-        assertThrows(SecretStoreFailure.WrongPin::class.java) { s.beginBiometric("000000") }
+        s.migrateLegacyBiometric()
+        assertTrue(s.biometricEnrolled)
+        assertFalse(File(dir, "bio.t.v1").exists())
+        assertTrue(legacyKeyDeleted)
+        s.setBiometricEnabled(false)
         assertFalse(s.biometricEnrolled)
     }
 
     @Test fun `deleting the account removes every artifact`() {
         val s = store()
         s.save(mnemonic, "123456")
-        enrollBiometric(s, "123456")
+        s.setBiometricEnabled(true)
+        remembered.keep("123456", 1, PinTimeout.NEVER)
         s.deleteMnemonic()
+        assertEquals(null, remembered.pin(2))
         assertEquals(emptyList<String>(), dir.list()!!.toList())
         assertFalse(s.hasMnemonic)
         assertEquals(null, lockout.state)

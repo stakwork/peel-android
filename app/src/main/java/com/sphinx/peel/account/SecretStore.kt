@@ -34,24 +34,16 @@ interface SecretStore {
     /// Milliseconds until another PIN try is allowed; 0 when one is.
     fun lockoutRemainingMs(): Long = 0
 
-    /// Whether biometric unlock is set up (a wrapped derived key is stored).
+    /// Whether the "biometrics when Peel opens" flag is on. A simple local
+    /// flag: biometrics are a second check on top of the remembered PIN, they
+    /// hold no secret (see `LockDecision`).
     val biometricEnrolled: Boolean get() = false
+    fun setBiometricEnabled(on: Boolean) {}
+    fun disableBiometric() = setBiometricEnabled(false)
 
-    /// Checks the PIN (a counted attempt), derives the key and returns the
-    /// cipher to hand BiometricPrompt as a CryptoObject; `finishBiometric`
-    /// completes it with the cipher BiometricPrompt returned.
-    fun beginBiometric(pin: String): BiometricEnrollment = throw SecretStoreFailure.BiometricUnavailable
-    fun finishBiometric(enrollment: BiometricEnrollment, authenticated: Cipher) {}
-
-    /// The cipher to hand BiometricPrompt to unlock; throws `BiometricUnavailable`
-    /// (and forgets the biometric key) if it was invalidated by a new enrollment.
-    fun biometricUnlockCipher(): Cipher = throw SecretStoreFailure.BiometricUnavailable
-    fun loadMnemonicBiometric(authenticated: Cipher): String = throw SecretStoreFailure.BiometricUnavailable
-    fun disableBiometric() {}
+    /// The PIN kept while the PIN timeout has not run out; null when not available.
+    val remembered: RememberedPIN? get() = null
 }
-
-/// A PIN-checked, not yet biometric-authorised enrolment (`SecretStore.beginBiometric`).
-class BiometricEnrollment(val cipher: Cipher, internal val derivedKey: ByteArray)
 
 sealed class SecretStoreFailure(message: String) : Exception(message) {
     object NoAccount : SecretStoreFailure("no account stored")
@@ -59,8 +51,6 @@ sealed class SecretStoreFailure(message: String) : Exception(message) {
     object WrongPin : SecretStoreFailure("wrong PIN")
     class LockedOut(val remainingMs: Long) : SecretStoreFailure("too many wrong PINs; try again in ${LockoutPolicy.describe(remainingMs)}")
     object KeystoreUnavailable : SecretStoreFailure("this device's secure key store could not be used")
-    /// Biometric unlock can't be used now (invalidated, stale after a PIN change, cancelled setup): ask for the PIN.
-    object BiometricUnavailable : SecretStoreFailure("biometric unlock is not available; use your PIN")
 }
 
 /// The words sealed under a key derived from the PIN, byte for byte the
@@ -192,8 +182,9 @@ internal object PinBox {
 ///    first use (crash-safe: v2 is written atomically before v1 is deleted, and
 ///    whichever exists is trusted in that order; see `migrate`).
 ///  * `lockout.<account>.v1` — the throttle counter, HMAC'd by a Keystore key.
-///  * `bio.<account>.v1` — the PIN-derived key wrapped by the biometric-gated
-///    Keystore key (only when biometric unlock is on).
+///  * `bio.<account>.on` — the "biometrics when Peel opens" flag. (A legacy
+///    `bio.<account>.v1`, the PIN-derived key behind biometrics, is migrated to
+///    the flag and deleted unread.)
 ///
 /// The Keystore wall is the Android equivalent of iOS's Keychain "real
 /// wall": the PIN blob copied off the device (backup, forensic copy of
@@ -206,7 +197,8 @@ class FileSecretStore internal constructor(
     private val account: String,
     private val wall: KeyWall,
     private val lockoutStore: LockoutStore,
-    private val biometricVault: BiometricKeyVault?,
+    private val deleteLegacyBiometricKey: () -> Unit,
+    override val remembered: RememberedPIN?,
     private val clock: LockoutClock,
     private val iterations: Int = PinBox.ITERATIONS,
 ) : SecretStore {
@@ -214,19 +206,32 @@ class FileSecretStore internal constructor(
         context.filesDir, account,
         AndroidKeyWall("peel.wall.$account"),
         FileLockoutStore(File(context.filesDir, "lockout.$account.v1"), AndroidStateSigner("peel.lockout.$account")),
-        AndroidBiometricKeyVault("peel.bio.$account"),
+        { Keystore.delete("peel.bio.$account") },
+        RememberedPIN.create(context.applicationContext, account),
         AndroidLockoutClock(context.applicationContext),
     )
 
     private val legacyFile = File(dir, "secret.$account.v1")
     private val file = File(dir, "secret.$account.v2")
-    private val bioFile = File(dir, "bio.$account.v1")
+    /// The old design: the PIN-derived key wrapped by a biometric-gated key. Never read again.
+    private val legacyBioFile = File(dir, "bio.$account.v1")
+    private val bioFlagFile = File(dir, "bio.$account.on")
     private val aad = "peel.secret.$account".toByteArray()
     private val lock = Any()
 
     init {
         // Best effort at start; `readInner` retries if the Keystore wasn't ready.
         runCatching { migrate() }
+        runCatching { migrateLegacyBiometric() }
+    }
+
+    /// A legacy "PIN behind biometrics" item means the person had biometrics
+    /// on: turn the flag on and delete the item unread (and its Keystore key).
+    internal fun migrateLegacyBiometric() {
+        if (!legacyBioFile.exists()) return
+        writeOwnerOnly(bioFlagFile, byteArrayOf(1))
+        legacyBioFile.delete()
+        runCatching { deleteLegacyBiometricKey() }
     }
 
     override val hasMnemonic: Boolean get() = file.exists() || legacyFile.exists()
@@ -345,8 +350,7 @@ class FileSecretStore internal constructor(
         val plain = ByteArray(bytes.remaining()).also { bytes.get(it) }
         try {
             writeInner(PinBox.seal(plain, newPin, iterations))
-            // The wrapped derived key belongs to the old PIN's salt: no longer opens anything.
-            disableBiometric()
+            remembered?.pinChanged(newPin)
             // A v1 leftover (migration unavailable) must not keep the old PIN alive.
             legacyFile.delete()
         } finally {
@@ -358,71 +362,19 @@ class FileSecretStore internal constructor(
         file.delete()
         legacyFile.delete()
         disableBiometric()
+        legacyBioFile.delete()
+        runCatching { deleteLegacyBiometricKey() }
+        runCatching { remembered?.forget() }
         runCatching { lockoutStore.clear() }
         runCatching { wall.delete() }
     }
 
-    // --- biometrics ---------------------------------------------------------
+    // --- biometrics flag ------------------------------------------------------
 
-    override val biometricEnrolled: Boolean get() = bioFile.exists() && biometricVault != null
+    override val biometricEnrolled: Boolean get() = bioFlagFile.exists()
 
-    override fun beginBiometric(pin: String): BiometricEnrollment {
-        val vault = biometricVault ?: throw SecretStoreFailure.BiometricUnavailable
-        beginAttempt()
-        val inner = readInner()
-        val key = PinBox.deriveKey(inner, pin, iterations)
-        PinBox.openWithKeyBytes(inner, key, iterations).fill(0) // WrongPin if it is not the PIN
-        succeeded()
-        val cipher = try { vault.newEncryptCipher() } catch (e: Exception) { throw SecretStoreFailure.BiometricUnavailable }
-        return BiometricEnrollment(cipher, key.encoded)
-    }
-
-    override fun finishBiometric(enrollment: BiometricEnrollment, authenticated: Cipher) {
-        val wrapped = try { authenticated.doFinal(enrollment.derivedKey) } catch (e: Exception) {
-            disableBiometric(); throw SecretStoreFailure.BiometricUnavailable
-        }
-        val iv = authenticated.iv
-        writeOwnerOnly(bioFile, byteArrayOf(1, iv.size.toByte()) + iv + wrapped)
-        enrollment.derivedKey.fill(0)
-    }
-
-    override fun biometricUnlockCipher(): Cipher {
-        val vault = biometricVault ?: throw SecretStoreFailure.BiometricUnavailable
-        try {
-            val bytes = bioFile.readBytes()
-            if (bytes.size < 3 || bytes[0] != 1.toByte()) throw SecretStoreFailure.BiometricUnavailable
-            val iv = bytes.copyOfRange(2, 2 + bytes[1].toInt())
-            return vault.decryptCipher(iv)
-        } catch (e: Exception) {
-            // Invalidated by a new fingerprint/face, deleted, or unreadable: gone for good.
-            disableBiometric()
-            throw SecretStoreFailure.BiometricUnavailable
-        }
-    }
-
-    override fun loadMnemonicBiometric(authenticated: Cipher): String {
-        try {
-            val bytes = bioFile.readBytes()
-            val ct = bytes.copyOfRange(2 + bytes[1].toInt(), bytes.size)
-            val key = authenticated.doFinal(ct)
-            val plain = try {
-                PinBox.openWithKeyBytes(readInner(), SecretKeySpec(key, "AES"), iterations)
-            } finally {
-                key.fill(0)
-            }
-            return try { String(plain, Charsets.UTF_8) } finally { plain.fill(0) }
-        } catch (e: SecretStoreFailure.KeystoreUnavailable) {
-            throw e
-        } catch (e: Exception) {
-            // Stale (PIN changed elsewhere) or corrupt: fall back to the PIN and forget it.
-            disableBiometric()
-            throw SecretStoreFailure.BiometricUnavailable
-        }
-    }
-
-    override fun disableBiometric() {
-        bioFile.delete()
-        runCatching { biometricVault?.delete() }
+    override fun setBiometricEnabled(on: Boolean) {
+        if (on) writeOwnerOnly(bioFlagFile, byteArrayOf(1)) else bioFlagFile.delete()
     }
 
     /// Writes so the file is never, even briefly, world-readable — a fresh

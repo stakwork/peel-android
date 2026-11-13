@@ -96,7 +96,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class YouRoute { WORDS, CHANGE_PIN, BIOMETRIC_SETUP }
+private enum class YouRoute { WORDS, CHANGE_PIN }
 
 /// "You" (docs/design/iphone.md, screen 6), reworked to match the iOS app's
 /// own Profile: a centred "You" title, the avatar/name/balance header, an
@@ -117,12 +117,10 @@ fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForg
     when (route) {
         YouRoute.WORDS -> TwelveWordsScreen(secretStore, onBack = { route = null })
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
-        YouRoute.BIOMETRIC_SETUP -> BiometricSetupScreen(engine, secretStore, onBack = { route = null })
         null -> YouMain(
             engine, storage, secretStore, onForgotten,
             onOpenWords = { route = YouRoute.WORDS },
             onOpenChangePin = { route = YouRoute.CHANGE_PIN },
-            onOpenBiometricSetup = { route = YouRoute.BIOMETRIC_SETUP },
         )
     }
 }
@@ -137,7 +135,6 @@ private fun YouMain(
     onForgotten: () -> Unit,
     onOpenWords: () -> Unit,
     onOpenChangePin: () -> Unit,
-    onOpenBiometricSetup: () -> Unit,
 ) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -281,17 +278,33 @@ private fun YouMain(
                 AccountRow(label = "Ask for the PIN", value = PinTimeout.label(pinTimeoutHours), onClick = { editingPinTimeout = true })
                 if (biometricsAvailable || biometricOn) {
                     AccountDivider()
+                    val everyTime = pinTimeoutHours == 0
                     AccountRow(
-                        label = "Biometric unlock", value = if (biometricOn) "On" else "Off",
+                        label = "Biometric unlock", value = if (biometricOn && !everyTime) "On" else "Off",
                         onClick = {
+                            if (everyTime) return@AccountRow
                             if (biometricOn) {
-                                secretStore.disableBiometric()
+                                secretStore.setBiometricEnabled(false)
                                 engine.setBiometricEnabled(false)
                                 biometricOn = false
                             } else {
-                                onOpenBiometricSetup()
+                                // Turning it on needs a successful check, not the PIN.
+                                val host = context.findActivity() as? androidx.fragment.app.FragmentActivity
+                                if (host != null) scope.launch {
+                                    if (BiometricUnlock.check(host, "Turn on biometric unlock")) {
+                                        secretStore.setBiometricEnabled(true)
+                                        engine.setBiometricEnabled(true)
+                                        biometricOn = true
+                                    }
+                                }
                             }
                         },
+                    )
+                    Text(
+                        if (everyTime) "Peel asks for your PIN every time it opens."
+                        else "Asks for ${BiometricUnlock.name()} when Peel opens, until it asks for your PIN.",
+                        style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
                 AccountDivider()
@@ -487,13 +500,13 @@ private fun YouMain(
             text = {
                 Column {
                     Text(
-                        "Opening the app always needs your PIN or biometrics. This is how long it can sit in the " +
-                            "background before it asks again.",
+                        "Peel remembers your PIN for this long after you last used it, and opens without asking.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     (PinTimeout.OPTIONS + PinTimeout.NEVER).forEach { hours ->
                         TextButton(onClick = {
                             engine.setPinTimeout(hours)
+                            secretStore.remembered?.timeoutChanged(hours)
                             pinTimeoutHours = hours
                             editingPinTimeout = false
                         }) { Text(PinTimeout.label(hours) + if (hours == pinTimeoutHours) "  ✓" else "") }
@@ -864,23 +877,6 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 40.dp),
                 )
-                if (host != null && secretStore.biometricEnrolled) {
-                    TextButton(
-                        onClick = {
-                            scope.launch {
-                                val mnemonic = BiometricUnlock.unlockWords(host, secretStore, "Show your twelve words", null)
-                                if (mnemonic != null) {
-                                    words = Account.wordsIn(mnemonic)
-                                    visible = false
-                                    problem = null
-                                    stage = WordsStage.WORDS
-                                    revealedAt = System.currentTimeMillis()
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Use biometrics") }
-                }
             }
             WordsStage.WORDS -> {
                 RouteHeader(
@@ -931,59 +927,6 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                 Spacer(Modifier.height(24.dp))
             }
         }
-    }
-}
-
-/// Turns biometric unlock on: the PIN first (it is what the Keystore-wrapped
-/// key is derived from — a synced "on" never enrols anything, PeelCore
-/// decision 10), then the system prompt on a freshly created biometric-gated
-/// key, which wraps the derived key. Records the choice (`biometric_enabled`).
-@Composable
-private fun BiometricSetupScreen(engine: Engine, secretStore: SecretStore, onBack: () -> Unit) {
-    SecureWindow()
-    val host = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
-    var pin by remember { mutableStateOf("") }
-    var problem by remember { mutableStateOf<String?>(null) }
-    var working by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    Column(Modifier.fillMaxSize()) {
-        RouteHeader("Biometric unlock", null, onBack)
-        PinPrompt(
-            title = "Enter your PIN", detail = problem ?: "To turn biometric unlock on.",
-            pin = pin, onPinChange = { pin = it }, working = working,
-            onComplete = {
-                working = true
-                scope.launch {
-                    try {
-                        val enrollment = withContext(Dispatchers.Default) { secretStore.beginBiometric(pin) }
-                        val authenticated = host?.let {
-                            BiometricUnlock.authenticate(it, enrollment.cipher, "Turn on biometric unlock", null)
-                        }
-                        if (authenticated == null) {
-                            secretStore.disableBiometric()
-                            problem = "Biometric unlock was not turned on."
-                            pin = ""
-                        } else {
-                            secretStore.finishBiometric(enrollment, authenticated)
-                            engine.setBiometricEnabled(true)
-                            onBack()
-                        }
-                    } catch (e: SecretStoreFailure.LockedOut) {
-                        problem = "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}."
-                        pin = ""
-                    } catch (e: SecretStoreFailure.WrongPin) {
-                        problem = "Wrong PIN"
-                        pin = ""
-                    } catch (e: Exception) {
-                        problem = e.message ?: "Could not turn biometric unlock on."
-                        pin = ""
-                    }
-                    working = false
-                }
-            },
-            modifier = Modifier.fillMaxWidth().padding(top = 60.dp),
-        )
     }
 }
 
