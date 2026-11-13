@@ -64,7 +64,9 @@ sections for code that isn't written yet.
   - `engine/VisitorSignIn.kt`, `PublicApp.kt`, `WalletHost.kt`, `StorageWalletConnections.kt` — Sign in with Sphinx
     (`docs/phases/27-sign-in-with-sphinx.md`): `VisitorChallenge`/`SignInRequest`/`SignInKey`, `Seller`, `PublicAppLink`
     (`peel://open?url=…`, HTTP behind `PublicAppHttp`), and the pure `WalletHost` (`host_capability`, `sign_in`) over
-    injected storage/signer/person/clock (all JVM-tested); `Engine.signVisitor`; `Storage` table `wallet_connection` (v13).
+    injected storage/signer/person/clock (all JVM-tested), `WalletProtocol` (iOS `integer` reading) and `WalletErrors`
+    (strut's error body) in `WalletProtocol.kt`/`WalletHost.kt`, `TextLine.kt` (`TextLine.clean`, page text made safe to
+    show); `Engine.signVisitor`; `Storage` table `wallet_connection` (v13).
     UI in `ui/page/` (`PublicPageScreen` = WebView + `addWebMessageListener` bridge, `SignInSheet`, `PublicPageRouter`) and
     You › Connected apps.
   - `ui/` — Compose screens and the pieces they share.

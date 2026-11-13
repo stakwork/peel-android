@@ -30,7 +30,7 @@ interface WalletConnections {
     fun save(connection: WalletConnection)
 }
 
-/// What the person is asked in the sign-in sheet. [app] is the page's own claim.
+/// What the person is asked in the sign-in sheet. [app] is the page's own claim, cleaned for one line.
 data class SignInAsk(val host: String, val app: SignInApp, val keys: List<SignInKey>)
 
 /// The person's side: the sheet, and the notice of a silent sign-in.
@@ -53,8 +53,39 @@ data class WalletCaller(val scopeKey: String, val place: String, val personActed
     }
 }
 
+/// strut's wallet error codes: the page reads only `error.data.code`; any other name it reads as `OTHER`.
 enum class WalletError {
-    BAD_REQUEST, RESTRICTED, USER_REJECTED, RATE_LIMITED, NOT_IMPLEMENTED, NOT_FOUND, INTERNAL
+    USER_REJECTED, BAD_REQUEST, PAYMENT_FAILED, INSUFFICIENT_BALANCE, QUOTA_EXCEEDED, RESTRICTED, UNAUTHORIZED,
+    NOT_IMPLEMENTED, RATE_LIMITED, NOT_FOUND, INTERNAL, OTHER
+}
+
+/// The error reply the page reads, built the same everywhere (the wallet host, the page's bridge): iOS's
+/// `{ error: { code: <-32602 for BAD_REQUEST, else -32000>, message, data: { code: "<NAME>" } } }`.
+object WalletErrors {
+    fun numeric(code: WalletError): Int = if (code == WalletError.BAD_REQUEST) -32602 else -32000
+
+    /// The whole reply, `{error: {code, message, data: {code}}}`.
+    fun body(code: WalletError, message: String): JSONObject = JSONObject().put(
+        "error",
+        JSONObject().put("code", numeric(code)).put("message", message).put("data", JSONObject().put("code", code.name)),
+    )
+}
+
+/// The app a wallet message names (iOS `WalletApp`), as the page says it: never trusted.
+private class WalletApp(val name: String, val version: String, val title: String, val asksForWallet: Boolean) {
+    companion object {
+        fun read(raw: Any?): WalletApp? {
+            val json = raw as? JSONObject ?: return null
+            val name = (json.opt("name") as? String)?.takeIf { it.isNotEmpty() } ?: return null
+            val version = json.opt("version") as? String ?: return null
+            val peer = json.opt("peer")
+            if (peer != null && peer != JSONObject.NULL) {
+                if (peer !is String || peer.isEmpty() || peer.contains('/')) return null
+            }
+            val title = json.opt("title") as? String ?: name
+            return WalletApp(name, version, title, json.opt("request") is JSONObject)
+        }
+    }
 }
 
 class WalletHost(
@@ -67,7 +98,7 @@ class WalletHost(
     /// One sheet at a time, across every page.
     private val asking = AtomicBoolean(false)
 
-    /// Answers one message: `{result: …}` or `{error: {code, message}}`. Never throws (but for cancellation).
+    /// Answers one message: `{result: …}` or `{error: {code, message, data: {code}}}` ([WalletErrors]). Never throws (but for cancellation).
     suspend fun handle(message: Any?, caller: WalletCaller): JSONObject = try {
         read(message, caller)
     } catch (e: CancellationException) {
@@ -79,20 +110,37 @@ class WalletHost(
     private suspend fun read(message: Any?, caller: WalletCaller): JSONObject {
         val body = message as? JSONObject ?: return unreadable()
         val op = body.opt("op") as? String
-        val v = body.opt("v")
-        if (!((v is Int || v is Long) && (v as Number).toLong() == 1L) || op == null) return unreadable()
-        return when (op) {
-            "host_capability" -> result(
+        if (WalletProtocol.integer(body.opt("v")) != 1L || op == null) return unreadable()
+        // The host's own ops need no app of the wallet's kind.
+        when (op) {
+            "host_capability" -> return result(
                 JSONObject().put("version", 1).put("ops", JSONArray().put("sign_in")).put("wallet", "Peel"),
             )
-            // No wallet here: a page asking for one is simply not connected.
-            "capability" -> result(JSONObject().put("version", 1).put("methods", JSONArray()).put("connected", false))
-            "call" -> {
-                val name = (body.opt("method") as? String)?.takeIf { it.isNotEmpty() } ?: "that"
-                error(WalletError.NOT_IMPLEMENTED, "Peel's wallet has no method $name.")
-            }
-            "sign_in" -> signIn(body, caller)
+            "sign_in" -> return signIn(body, caller)
+        }
+        val app = WalletApp.read(body.opt("app")) ?: return unreadable()
+        return when (op) {
+            "capability" ->
+                if (!app.asksForWallet) error(WalletError.RESTRICTED, "This app asks for no wallet.")
+                // Peel offers no wallet methods, and a sign-in-only connection holds no wallet. strut's capability
+                // check wants every one of these fields; an empty `methods` is valid.
+                else result(
+                    JSONObject().put("version", 1).put("methods", JSONArray()).put("notifications", JSONArray())
+                        .put("wallet", "sphinx").put("connected", false),
+                )
+            "call" -> call(body)
             else -> unreadable()
+        }
+    }
+
+    /// No wallet method is offered, so every call is refused. iOS first checks a known method's parameters (a
+    /// `BAD_REQUEST` for bad ones); with nothing offered here that check is not ported.
+    private fun call(body: JSONObject): JSONObject {
+        val name = body.opt("method") as? String ?: return error(WalletError.BAD_REQUEST, "The call names no method.")
+        return if (name !in KNOWN_METHODS) {
+            error(WalletError.NOT_IMPLEMENTED, "Peel's wallet has no method ${TextLine.clean(name, 40)}.")
+        } else {
+            error(WalletError.NOT_IMPLEMENTED, "Peel's wallet cannot do $name yet.")
         }
     }
 
@@ -117,9 +165,13 @@ class WalletHost(
         if (!asking.compareAndSet(false, true)) {
             return error(WalletError.RATE_LIMITED, "Peel is already asking you something; answer that first.")
         }
+        // What the sheet and the connection keep of the page's claims: one line each, not too long.
+        val shown = SignInApp(
+            TextLine.clean(request.app.name, 80), TextLine.clean(request.app.version, 20), TextLine.clean(request.app.title, 80),
+        )
         val chosen: SignInKey? = try {
             val wait = minOf(challenge.expiresAtMs - nowMs(), sheetTimeoutMs)
-            val answer = withTimeoutOrNull(wait.coerceAtLeast(1)) { Answered(person.askSignIn(SignInAsk(caller.place, request.app, offered))) }
+            val answer = withTimeoutOrNull(wait.coerceAtLeast(1)) { Answered(person.askSignIn(SignInAsk(caller.place, shown, offered))) }
                 ?: return error(WalletError.RESTRICTED, "You did not answer in time.")
             answer.key
         } finally {
@@ -130,7 +182,7 @@ class WalletHost(
         val current = connections.connection(caller.scopeKey)
         connections.save(
             current?.copy(signIn = chosen)
-                ?: WalletConnection(caller.scopeKey, request.app.name, request.app.title, caller.place, emptyList(), chosen, nowMs()),
+                ?: WalletConnection(caller.scopeKey, "/${shown.name}", shown.title, caller.place, emptyList(), chosen, nowMs()),
         )
         if (challenge.expiresAtMs <= nowMs()) {
             return error(WalletError.RESTRICTED, "The sign-in ran out of time while you were asked. Sign in again.")
@@ -145,10 +197,15 @@ class WalletHost(
 
     private fun result(value: JSONObject) = JSONObject().put("result", value)
 
-    private fun error(code: WalletError, message: String) =
-        JSONObject().put("error", JSONObject().put("code", code.name).put("message", message))
+    private fun error(code: WalletError, message: String) = WalletErrors.body(code, message)
 
     companion object {
         const val DEFAULT_SHEET_TIMEOUT_MS = 9 * 60 * 1000L
+
+        /// The wallet methods strut knows (iOS lists these too); none is offered.
+        private val KNOWN_METHODS = setOf(
+            "connect", "get_info", "pay_invoice", "pay_keysend", "make_invoice", "lookup_payment", "lookup_invoice",
+            "get_budget", "get_balance", "list_transactions", "pay_lightning_address",
+        )
     }
 }

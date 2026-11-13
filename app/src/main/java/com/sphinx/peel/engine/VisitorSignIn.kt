@@ -48,7 +48,7 @@ data class VisitorChallenge(
             }
             val host = (json.opt("host") as? String)?.takeIf { it.isNotEmpty() } ?: return null
             val nonce = (json.opt("nonce") as? String)?.takeIf { it.isNotEmpty() } ?: return null
-            val exp = json.opt("exp").let { if (it is Int) it.toLong() else it as? Long } ?: return null
+            val exp = WalletProtocol.integer(json.opt("exp")) ?: return null
             if (exp < 1) return null
             val key = SignInKey.fromWire(json.opt("visitorKey") as? String) ?: return null
             return VisitorChallenge(text, host, key, nonce, exp)
@@ -72,12 +72,10 @@ data class SignInRequest(val app: SignInApp, val seller: String, val challenge: 
         /// The request when it has no problems.
         fun of(raw: Any?, nowMs: Long, trustedHost: String? = null): SignInRequest? = check(raw, nowMs, trustedHost).first
 
-        private fun isInteger(value: Any?, expected: Long) = (value is Int || value is Long) && (value as Number).toLong() == expected
-
         private fun check(raw: Any?, nowMs: Long, trustedHost: String?): Pair<SignInRequest?, List<String>> {
             if (raw !is JSONObject) return null to listOf("a sign-in request must be an object")
             val problems = mutableListOf<String>()
-            if (!isInteger(raw.opt("v"), 1) || raw.opt("op") != "sign_in") {
+            if (WalletProtocol.integer(raw.opt("v")) != 1L || raw.opt("op") != "sign_in") {
                 problems += "a sign-in request is { v: 1, op: \"sign_in\", … }"
             }
             val seller = (raw.opt("seller") as? String)?.takeIf { Seller.isSellerURL(it) }
@@ -104,7 +102,7 @@ data class SignInRequest(val app: SignInApp, val seller: String, val challenge: 
             }
             val host = trustedHost ?: seller?.let(Seller::host)
             if (host != null && host != challenge.host) {
-                problems += "the challenge is for ${WorkspaceApp.clean(challenge.host, 80)}, not $host: never signed"
+                problems += "the challenge is for ${TextLine.clean(challenge.host, 80)}, not $host: never signed"
             }
             if (challenge.expiresAtMs <= nowMs) problems += "the challenge has ended"
             if (problems.isNotEmpty() || seller == null || app == null) return null to problems

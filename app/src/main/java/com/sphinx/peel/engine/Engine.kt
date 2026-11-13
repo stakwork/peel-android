@@ -72,16 +72,15 @@ import uniffi.sphinxrs.xpubFromSeed as coreXpubFromSeed
 /// membership, payments or reply/thread handling, so `run` and `connect`
 /// here commit a fraction of what the Mac/iPhone `commit` does.
 class Engine(mnemonic: CharArray, val storage: Storage) {
-    /// The native core takes the seed as a `String`, so one lives as long as
-    /// the engine does; the words it came from are zeroed here, right away.
-    private val seeds: Pair<String, String> =
-        try { Account.seedOf(mnemonic) to Account.bip39SeedOf(mnemonic) } finally { mnemonic.fill('\u0000') }
-    val seed: String = seeds.first
+    /// The words' full BIP39 seed (64 bytes, hex), derived once, with the words zeroed right away. The native core
+    /// takes a `String`, so it lives as long as the engine does. Per-domain sign-in keys (LUD-05) derive from all of it.
+    private val bip39Seed: String =
+        try { Account.bip39SeedOf(mnemonic) } finally { mnemonic.fill('\u0000') }
 
-    /// The words' full BIP39 seed (hex), for the per-domain sign-in key only (LUD-05). iOS makes [seed] its
-    /// first 64 hex characters; that could not be checked here, so Android's own derivation of [seed] is
-    /// unchanged and this is computed beside it (one more PBKDF2 at unlock).
-    private val bip39Seed: String = seeds.second
+    /// What the core takes everywhere else: the first 64 hex characters (32 bytes) of [bip39Seed], as iOS does. That
+    /// equals `mnemonicToSeed` of the words (sphinx-ffi documents `mnemonic_to_seed` as the first 32 bytes of the
+    /// BIP39 seed, and `SeedDerivationTest` checks it against sphinx-rs's own vector), so one PBKDF2 serves both.
+    val seed: String = bip39Seed.take(64)
     constructor(mnemonic: String, storage: Storage) : this(mnemonic.toCharArray(), storage)
 
     val network: String = storage.value(Setting.NETWORK) ?: "bitcoin"

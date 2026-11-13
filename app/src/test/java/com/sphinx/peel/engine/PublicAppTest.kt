@@ -51,6 +51,21 @@ class PublicAppLinkTest {
         assertNull(PublicAppLink.parse("peel://open?x=1"))
     }
 
+    @Test fun appNames() {
+        for (ok in listOf("moon-game", "team/app", "a.b_c-d", "a".repeat(120), "v2x", "data.dbx")) assertTrue(ok, PublicAppLink.isAppName(ok))
+        for (bad in listOf("v2", "team/v2", "data.db", "x/data.db", ".hidden", "a b", "", "a".repeat(121), "team/", "/app", "a//b", "-a")) {
+            assertFalse(bad, PublicAppLink.isAppName(bad))
+        }
+    }
+
+    @Test fun aPortOnThePeelLinkIsNotRejected() {
+        assertNotNull(PublicAppLink.parse("peel://open:8080?url=https%3A%2F%2Fshop.example.com"))
+    }
+
+    @Test fun theLinkIsNotTrimmed() {
+        assertNull(PublicAppLink.parse(" peel://open?url=https%3A%2F%2Fshop.example.com"))
+    }
+
     @Test fun rejectedAddresses() {
         assertNull(PublicAppLink.parse(link("http://shop.example.com")))
         assertNull(PublicAppLink.parse(link("https://shop.example.com/?app=a&app=b")))

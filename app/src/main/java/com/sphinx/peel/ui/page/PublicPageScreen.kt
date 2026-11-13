@@ -1,9 +1,12 @@
 package com.sphinx.peel.ui.page
 
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.webkit.CookieManager
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -51,6 +54,7 @@ import com.sphinx.peel.engine.Seller
 import com.sphinx.peel.engine.StorageWalletConnections
 import com.sphinx.peel.engine.WalletCaller
 import com.sphinx.peel.engine.WalletError
+import com.sphinx.peel.engine.WalletErrors
 import com.sphinx.peel.engine.WalletHost
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.theme.Theme
@@ -62,10 +66,14 @@ import org.json.JSONObject
 /// How long a tap in the page counts as the person acting (iOS `StrutWallet.gestureWindow`).
 const val GESTURE_WINDOW_MS = 5_000L
 
+/// How soon after a touch a link to another site counts as one the person tapped (iOS: within 1 second).
+const val LINK_TAP_WINDOW_MS = 1_000L
+
 /// Peel's answer to the page's `window.webkit.messageHandlers.strutWallet.postMessage(body)`, as a promise. The page
 /// is a stranger's strut app whose UI looks for iOS's handler, so Android offers the same object, backed by the
 /// `peelWallet` message listener (`addWebMessageListener`, which tells Peel the frame and origin of each message).
-/// Each call is `{id, body}`; the answer comes back as `{id, reply}`, `reply` being the wallet's `{result}`/`{error}`.
+/// Each call is `{id, body}`; the answer comes back as `{id, reply}`, `reply` being the wallet's `{result}`/`{error}`
+/// (errors as [WalletErrors.body] builds them). `postMessage` resolves to the parsed reply, as strut reads it.
 internal const val BRIDGE_NAME = "peelWallet"
 internal val WALLET_SHIM = """
 (function () {
@@ -73,7 +81,7 @@ internal val WALLET_SHIM = """
   var pending = {};
   var next = 1;
   var listening = false;
-  function fail(message) { return { error: { code: 'INTERNAL', message: message } }; }
+  function fail(message) { return { error: { code: -32000, message: message, data: { code: 'INTERNAL' } } }; }
   var handler = {
     postMessage: function (body) {
       return new Promise(function (resolve) {
@@ -114,6 +122,7 @@ fun PublicPageScreen(link: PublicAppLink, engine: Engine, storage: Storage, onCl
     var web by remember { mutableStateOf<WebView?>(null) }
     var lastTouch by remember { mutableStateOf(0L) }
     var walletOffered by remember { mutableStateOf(true) }
+    var failed by remember(link) { mutableStateOf(false) }
     val sheets = remember(link) {
         SignInSheets { host, key ->
             val text = SignInWords.toast(host, key)
@@ -143,6 +152,12 @@ fun PublicPageScreen(link: PublicAppLink, engine: Engine, storage: Storage, onCl
                     Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
                 )
             }
+            if (failed) {
+                Text(
+                    "Couldn't open ${link.host}.",
+                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
+                )
+            }
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
@@ -163,9 +178,34 @@ fun PublicPageScreen(link: PublicAppLink, engine: Engine, storage: Storage, onCl
                             false
                         }
                         webViewClient = object : WebViewClient() {
-                            // Only requests still on the origin Peel loaded load here; anything else loads nothing.
-                            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-                                Seller.origin(request.url.toString()) != link.origin
+                            // iOS's policy for a stranger's page: the origin Peel loaded and the app's own `about:` frame
+                            // load; `data:`/`blob:` only in sub-frames; another http(s) site never loads here, but a link the
+                            // person just tapped opens in the system browser; every other scheme loads nothing.
+                            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                                val url = request.url
+                                val scheme = url.scheme?.lowercase()
+                                return when {
+                                    Seller.origin(url.toString()) == link.origin -> false
+                                    scheme == "about" -> false
+                                    scheme == "data" || scheme == "blob" -> request.isForMainFrame
+                                    scheme == "http" || scheme == "https" -> {
+                                        val tapped = lastTouch != 0L && SystemClock.elapsedRealtime() - lastTouch <= LINK_TAP_WINDOW_MS
+                                        if (request.isForMainFrame && request.hasGesture() && tapped) {
+                                            try {
+                                                view.context.startActivity(Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                            } catch (e: ActivityNotFoundException) {
+                                                // Nothing to open it: it simply does not open.
+                                            }
+                                        }
+                                        true
+                                    }
+                                    else -> true
+                                }
+                            }
+
+                            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                                if (request.isForMainFrame) failed = true
+                            }
                         }
                         walletOffered = installWallet(this, link, wallet, scope) {
                             lastTouch != 0L && SystemClock.elapsedRealtime() - lastTouch <= GESTURE_WINDOW_MS
@@ -215,7 +255,7 @@ private fun installWallet(
         }
         // Only the main frame whose origin is exactly the one Peel loaded is answered.
         if (parsed == null || !isMainFrame || Seller.origin(sourceOrigin.toString()) != link.origin) {
-            answer(JSONObject().put("error", JSONObject().put("code", WalletError.RESTRICTED.name).put("message", "Peel does not answer there.")))
+            answer(WalletErrors.body(WalletError.RESTRICTED, "Peel does not answer there."))
             return@addWebMessageListener
         }
         val caller = WalletCaller.page(link.origin, personActed())

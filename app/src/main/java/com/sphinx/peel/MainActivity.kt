@@ -149,8 +149,8 @@ private fun PeelApp(
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
 
-    // A stranger's public app (`peel://open?url=…`): opened when the account is unlocked, kept until it is, and
-    // dropped (page and waiting link both) when the account locks or is signed out.
+    // A stranger's public app (`peel://open?url=…`): opened when the account is unlocked, kept until it is
+    // (also across a lock: only the open page closes then). Page and waiting link both go on sign-out or wipe.
     val router = remember { PublicPageRouter() }
     val unlocked = screen is Screen.Home
     androidx.compose.runtime.LaunchedEffect(publicLink, unlocked) {
@@ -182,7 +182,7 @@ private fun PeelApp(
                 onDispose { router.locked() }
             }
             Box(Modifier.fillMaxSize()) {
-                MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { screen = Screen.Onboarding }
+                MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { router.reset(); screen = Screen.Onboarding }
                 router.page?.let { PublicPageScreen(it, current.engine, storage, onClose = router::close) }
             }
         }

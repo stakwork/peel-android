@@ -24,8 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.sphinx.peel.engine.SignInAsk
 import com.sphinx.peel.engine.SignInKey
+import com.sphinx.peel.engine.TextLine
 import com.sphinx.peel.engine.WalletPerson
-import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.ui.theme.Theme
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
@@ -63,13 +63,13 @@ class SignInSheets(private val onSignedIn: (host: String, key: SignInKey) -> Uni
     override fun signedIn(host: String, key: SignInKey) = onSignedIn(host, key)
 }
 
-/// Exact copy of iOS `WalletWords`.
+/// Copy of iOS `WalletWords` for the connect sheet of a stranger's page.
 object SignInWords {
     fun title(host: String) = "Sign in to $host?"
     fun toast(host: String, key: SignInKey) =
         if (key == SignInKey.root) "Signed in to $host as you" else "Signed in to $host as its own identity"
-    fun who(ask: SignInAsk) =
-        "${clean(ask.app.title)} · ${clean(ask.app.name)}@${clean(ask.app.version)}, as ${ask.host} names it"
+    fun who(ask: SignInAsk) = "An app on ${ask.host}, which calls itself ${clean(ask.app.title)}"
+    fun note(key: SignInKey) = if (key == SignInKey.root) AS_YOU_NOTE else AS_NEW_NOTE
     fun shared(host: String) = "Every app on $host shares this connection."
     const val CONFIRM = "Sign in"
     const val CANCEL = "Don't sign in"
@@ -79,11 +79,12 @@ object SignInWords {
     const val AS_NEW_NOTE = "A key for this app alone: no other app can tell it is you. Payments still come from your account."
 
     /// The page's words, on one line and not too long.
-    private fun clean(text: String) = WorkspaceApp.clean(text, 80)
+    private fun clean(text: String) = TextLine.clean(text, 80)
 }
 
-/// How long the confirm button stays off after the sheet shows: a tap meant for the page must never be the yes.
-const val SIGN_IN_ARM_DELAY_MS = 1000L
+/// How long the confirm button stays off after the sheet shows: a tap meant for the page must never be the yes
+/// (iOS `TouchPayButton.settle`).
+const val SIGN_IN_ARM_DELAY_MS = 700L
 
 /// The sign-in sheet (iOS `StrutSignInSheet`). Dismissing it, by Back, is "Don't sign in"; a tap outside does nothing.
 @Composable
@@ -105,19 +106,18 @@ fun SignInSheet(ask: SignInAsk, onAnswer: (SignInKey?) -> Unit) {
                 Text(SignInWords.shared(ask.host), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
                 Spacer(Modifier.height(12.dp))
                 ask.keys.forEach { key ->
-                    val (label, note) = if (key == SignInKey.root) SignInWords.AS_YOU to SignInWords.AS_YOU_NOTE
-                    else SignInWords.AS_NEW to SignInWords.AS_NEW_NOTE
+                    val label = if (key == SignInKey.root) SignInWords.AS_YOU else SignInWords.AS_NEW
                     Row(
                         Modifier.selectable(selected = chosen == key, onClick = { chosen = key }, role = Role.RadioButton).padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.Top,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        RadioButton(selected = chosen == key, onClick = null, modifier = Modifier.padding(top = 2.dp, end = 12.dp))
-                        Column {
-                            Text(label, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
-                            Text(note, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
-                        }
+                        RadioButton(selected = chosen == key, onClick = null, modifier = Modifier.padding(end = 12.dp))
+                        Text(label, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
                     }
                 }
+                // One note, for the key chosen now.
+                Spacer(Modifier.height(4.dp))
+                Text(SignInWords.note(chosen), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
             }
         },
         confirmButton = { TextButton(onClick = { onAnswer(chosen) }, enabled = armed) { Text(SignInWords.CONFIRM) } },

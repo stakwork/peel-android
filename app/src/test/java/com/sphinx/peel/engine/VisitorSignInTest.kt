@@ -56,6 +56,17 @@ class VisitorChallengeTest {
         assertNull(VisitorChallenge.parse(challengeOf("[1]")))
     }
 
+    @Test fun expIsReadAsAnInteger() {
+        fun raw(exp: String) = challengeOf("""{"host":"h","visitorKey":"root","nonce":"n","exp":$exp}""")
+        assertEquals(1793800060000L, VisitorChallenge.parse(raw("1793800060000.0"))!!.expiresAtMs)
+        assertNull(VisitorChallenge.parse(raw("\"1793800060000\"")))
+        assertNull(VisitorChallenge.parse(raw("0")))
+        assertNull(VisitorChallenge.parse(raw("9007199254740992")))
+        assertNotNull(VisitorChallenge.parse(raw("9007199254740991")))
+        assertNull(VisitorChallenge.parse(raw("true")))
+        assertNull(VisitorChallenge.parse(raw("null")))
+    }
+
     @Test fun badClaims() {
         assertNull(VisitorChallenge.parse(challengeOf("""{"visitorKey":"root","nonce":"n","exp":5}""")))
         assertNull(VisitorChallenge.parse(challengeOf(claims(host = ""))))
@@ -137,6 +148,13 @@ class SignInRequestTest {
         assertEquals(listOf("app is missing"), problems(message(app = false)))
         assertEquals(listOf("a sign-in request is { v: 1, op: \"sign_in\", … }"), problems(message(op = "sign_message")))
         assertNull(SignInRequest.of(message(op = "sign_message"), NOW))
+    }
+
+    @Test fun versionIsReadAsAnInteger() {
+        assertEquals(emptyList<String>(), problems(message().put("v", 1.0)))
+        assertTrue(problems(message().put("v", 1.5)).isNotEmpty())
+        assertTrue(problems(message().put("v", "1")).isNotEmpty())
+        assertTrue(problems(message().put("v", true)).isNotEmpty())
     }
 
     @Test fun appFields() {

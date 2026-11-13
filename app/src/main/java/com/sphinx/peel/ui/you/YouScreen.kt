@@ -1097,8 +1097,12 @@ private fun ConnectedAppsSection(storage: Storage) {
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                     Text(
-                        connectionLine(connection), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+                        connection.place, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
+                    connectionLine(connection)?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                    }
                 }
                 TextButton(onClick = { storage.deleteWalletConnection(connection.key) }) {
                     Text("Disconnect", color = Theme.colors.destructive)
@@ -1108,8 +1112,8 @@ private fun ConnectedAppsSection(storage: Storage) {
     }
 }
 
-private fun connectionLine(connection: com.sphinx.peel.engine.WalletConnection): String = when (connection.signIn) {
+private fun connectionLine(connection: com.sphinx.peel.engine.WalletConnection): String? = when (connection.signIn) {
     com.sphinx.peel.engine.SignInKey.root -> "Signs you in to ${connection.place} as you"
     com.sphinx.peel.engine.SignInKey.domain -> "Signs you in to ${connection.place} as a new identity"
-    null -> connection.place
+    null -> null
 }

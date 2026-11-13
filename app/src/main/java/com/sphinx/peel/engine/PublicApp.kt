@@ -122,11 +122,15 @@ data class PublicAppLink(
     companion object {
         const val PAGE_LIMIT = 1_000_000
         private val SERVE = Regex("""<meta\s+name="strut-serve"\s+content="([^"<>]{1,120})"\s*/?>""")
-        private val NAME = Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,119}")
+        private val NAME = Regex("[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")
+        private val VERSION_SEGMENT = Regex("v[0-9]+")
 
-        /// A name strut gives an app: letters, digits, `-` and `_`, 1 to 120, starting with a letter or digit.
-        /// Stricter than [WorkspaceApp.isAppName] (no `/` or `.`): a stranger's server names a top-level app.
-        fun isAppName(name: String): Boolean = NAME.matches(name)
+        /// A name strut gives an app (iOS `AgentArtifact.Handle.isAppName`): at most 120 characters, `/`-separated
+        /// segments of letters, digits, `.`, `_` and `-` that start with a letter or digit, and no segment that is
+        /// `data.db` or a version (`v2`). Not [WorkspaceApp.isAppName], which differs.
+        fun isAppName(name: String): Boolean =
+            name.length <= 120 && NAME.matches(name) &&
+                name.split('/').none { it == "data.db" || VERSION_SEGMENT.matches(it) }
 
         /// The name a seller's home page says it serves.
         fun serveName(html: String): String? = SERVE.find(html)?.groupValues?.get(1)?.takeIf(::isAppName)
@@ -141,9 +145,9 @@ data class PublicAppLink(
 
         /// Reads a link strictly; null for anything else.
         fun parse(text: String): PublicAppLink? {
-            val link = runCatching { URI(text.trim()) }.getOrNull() ?: return null
+            val link = runCatching { URI(text) }.getOrNull() ?: return null
             if (link.scheme?.lowercase() != "peel" || link.host?.lowercase() != "open") return null
-            if (link.rawUserInfo != null || link.port != -1) return null
+            if (link.rawUserInfo != null) return null
             if (!link.rawPath.isNullOrEmpty() && link.rawPath != "/") return null
             if (!link.rawFragment.isNullOrEmpty()) return null
             val items = queryItems(link.rawQuery) ?: return null
