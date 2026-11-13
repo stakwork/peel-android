@@ -6,7 +6,18 @@ import com.sphinx.peel.engine.ReadToggle
 import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.engine.SendStatus
 import com.sphinx.peel.engine.SignInKey
+import com.sphinx.peel.engine.KeysendRecord
+import com.sphinx.peel.engine.OverBudget
+import com.sphinx.peel.engine.OverBudgetException
+import com.sphinx.peel.engine.PING_PRICE_MSAT
+import com.sphinx.peel.engine.WalletBudget
 import com.sphinx.peel.engine.WalletConnection
+import com.sphinx.peel.engine.WalletMethod
+import com.sphinx.peel.engine.WalletNotificationType
+import com.sphinx.peel.engine.WalletProtocol
+import com.sphinx.peel.engine.WalletRecord
+import com.sphinx.peel.engine.WalletRenewal
+import com.sphinx.peel.engine.WalletUsage
 import org.json.JSONArray
 import android.content.ContentValues
 import android.content.Context
@@ -17,8 +28,11 @@ import com.sphinx.peel.engine.InviteRules
 import com.sphinx.peel.engine.InvoiceRecord
 import com.sphinx.peel.engine.Mentions
 import com.sphinx.peel.engine.PaymentRecord
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import org.json.JSONObject
 
 /// `engine/Attachment.kt`'s own `ATTACHMENT_MESSAGE_TYPE`/
@@ -346,8 +360,25 @@ class Storage(context: Context, account: String = "default") {
         /// Settings removed in the same transaction (e.g. a finished
         /// restore's cursor goes in the commit that marks it finished).
         val deleteSettings: List<Setting> = emptyList(),
-    )
+        /// Rows of the server's payment history (stored, and settling the keysends they name: [reconcileKeysends]).
+        val payments: List<PaymentRecord> = emptyList(),
+        /// Invoices made here, or about to be paid (written before publishing); one already being paid or paid is never written over, and
+        /// refusing abandons the whole commit.
+        val invoices: List<InvoiceRecord> = emptyList(),
+        /// Keysends sent for an app, written before they are published.
+        val keysends: List<KeysendRecord> = emptyList(),
+        /// An app's payment (the invoice or keysend in this commit) must fit its connection's budget, counted in this transaction before it is
+        /// written; refused ([OverBudgetException]), the whole commit is abandoned and nothing is written or published.
+        val walletBudget: WalletBudgetCheck? = null,
+        /// Preimages the server sent with a send's COMPLETE, by its tag ([keepPreimage] keeps only one that proves the payment).
+        val preimages: List<Pair<String, String>> = emptyList(),
+    ) {
+        /// The connection, what the payment adds (msat), and the budget.
+        data class WalletBudgetCheck(val connection: String, val amountMsat: Long, val guard: WalletBudget.Guard)
+    }
 
+    /// Writes [commit] in one transaction. A refusal (over budget, an invoice already being paid or paid, a keysend repeating a hash or tag) throws and
+    /// leaves the database as it was.
     fun apply(commit: Commit) {
         val db = helper.writableDatabase
         db.beginTransaction()
@@ -373,9 +404,21 @@ class Storage(context: Context, account: String = "default") {
             for (setting in commit.deleteSettings) {
                 db.delete("setting", "key = ?", arrayOf(setting.key))
             }
+            writePayments(db, commit.payments)
+            commit.walletBudget?.let { check ->
+                if (!check.guard.admits(check.amountMsat, walletRecords(db, check.connection).mapNotNull { it.entry })) throw OverBudgetException()
+            }
+            for (invoice in commit.invoices) {
+                check(writeInvoice(db, invoice)) { "that invoice is already being paid or paid" }
+            }
+            for (keysend in commit.keysends) insertKeysend(db, keysend)
+            for ((tag, preimage) in commit.preimages) keepPreimage(db, preimage, tag)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
+        }
+        if (commit.payments.isNotEmpty() || commit.invoices.isNotEmpty() || commit.keysends.isNotEmpty() || commit.preimages.isNotEmpty()) {
+            walletRecordsVersionFlow.value += 1
         }
     }
 
@@ -1361,32 +1404,40 @@ class Storage(context: Context, account: String = "default") {
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
-            val existing = readInvoice(db, record.paymentHash, record.incoming)
-            if (existing != null && existing.status != InvoiceRecord.Status.FAILED && existing.status != InvoiceRecord.Status.OPEN) {
-                return false
-            }
-            val values = ContentValues().apply {
-                put("paymentHash", record.paymentHash)
-                put("incoming", if (record.incoming) 1 else 0)
-                put("bolt11", record.bolt11)
-                put("amountMsat", record.amountMsat)
-                put("memo", record.memo)
-                put("payee", record.payee)
-                put("createdAt", record.createdAt)
-                put("expiresAt", record.expiresAt)
-                put("status", record.status.raw)
-                put("paidAt", record.paidAt)
-                put("paidMsat", record.paidMsat)
-                put("tag", record.tag)
-                put("chat", record.chat)
-                put("error", record.error)
-            }
-            db.insertWithOnConflict("invoice", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            if (!writeInvoice(db, record)) return false
             db.setTransactionSuccessful()
-            return true
         } finally {
             db.endTransaction()
         }
+        walletRecordsVersionFlow.value += 1
+        return true
+    }
+
+    /// The write of [saveInvoice] inside a transaction of the caller's: false when it is refused (a record being paid or paid).
+    private fun writeInvoice(db: SQLiteDatabase, record: InvoiceRecord): Boolean {
+        val existing = readInvoice(db, record.paymentHash, record.incoming)
+        if (existing != null && existing.status != InvoiceRecord.Status.FAILED && existing.status != InvoiceRecord.Status.OPEN) return false
+        val values = ContentValues().apply {
+            put("paymentHash", record.paymentHash)
+            put("incoming", if (record.incoming) 1 else 0)
+            put("bolt11", record.bolt11)
+            put("amountMsat", record.amountMsat)
+            put("memo", record.memo)
+            put("payee", record.payee)
+            put("createdAt", record.createdAt)
+            put("expiresAt", record.expiresAt)
+            put("status", record.status.raw)
+            put("paidAt", record.paidAt)
+            put("paidMsat", record.paidMsat)
+            put("tag", record.tag)
+            put("chat", record.chat)
+            put("error", record.error)
+            put("preimage", record.preimage)
+            put("connection", record.connection)
+            put("app", record.app)
+        }
+        db.insertWithOnConflict("invoice", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        return true
     }
 
     fun invoice(paymentHash: String, incoming: Boolean): InvoiceRecord? =
@@ -1421,6 +1472,9 @@ class Storage(context: Context, account: String = "default") {
         tag = c.getColumnIndexOrThrow("tag").let { if (c.isNull(it)) null else c.getString(it) },
         chat = c.getColumnIndexOrThrow("chat").let { if (c.isNull(it)) null else c.getString(it) },
         error = c.getColumnIndexOrThrow("error").let { if (c.isNull(it)) null else c.getString(it) },
+        preimage = c.getColumnIndexOrThrow("preimage").let { if (c.isNull(it)) null else c.getString(it) },
+        connection = c.getColumnIndexOrThrow("connection").let { if (c.isNull(it)) null else c.getString(it) },
+        app = c.getColumnIndexOrThrow("app").let { if (c.isNull(it)) null else c.getString(it) },
     )
 
     /// An invoice of ours that the server says was paid (a history row, a
@@ -1437,20 +1491,27 @@ class Storage(context: Context, account: String = "default") {
                 atMs, paidMsat, paymentHash, if (incoming) 1 else 0,
             ),
         )
+        walletRecordsVersionFlow.value += 1
     }
 
     /// The mixer's word on a payment's tag: COMPLETE settles it, FAILED
     /// frees it to be tried again. Only a pending record moves.
     fun markInvoiceSendStatus(tag: String, delivered: Boolean, error: String? = null) {
-        helper.writableDatabase.execSQL(
+        val db = helper.writableDatabase
+        val status = if (delivered) InvoiceRecord.Status.PAID.raw else InvoiceRecord.Status.FAILED.raw
+        val paidAt = if (delivered) System.currentTimeMillis() else null
+        val why = if (delivered) null else (error ?: "failed")
+        db.execSQL(
             "UPDATE invoice SET status = ?, paidAt = ?, error = ? WHERE tag = ? AND incoming = 0 AND status = 'PENDING'",
-            arrayOf<Any?>(
-                if (delivered) InvoiceRecord.Status.PAID.raw else InvoiceRecord.Status.FAILED.raw,
-                if (delivered) System.currentTimeMillis() else null,
-                if (delivered) null else (error ?: "failed"),
-                tag,
-            ),
+            arrayOf<Any?>(status, paidAt, why, tag),
         )
+        // A keysend sent for an app moves by the same rule (a failure keeps the server's reason, a COMPLETE clears it).
+        db.execSQL(
+            "UPDATE keysend SET status = ?, paidAt = CASE WHEN ? = 'COMPLETE' THEN COALESCE(paidAt, ?) ELSE paidAt END, " +
+                "error = CASE WHEN ? = 'FAILED' THEN COALESCE(?, error) ELSE NULL END WHERE tag = ? AND status = 'PENDING'",
+            arrayOf<Any?>(status, status, System.currentTimeMillis(), status, why, tag),
+        )
+        walletRecordsVersionFlow.value += 1
     }
 
     /// A send of ours the server's history shows failed: free to be paid again.
@@ -1459,6 +1520,7 @@ class Storage(context: Context, account: String = "default") {
             "UPDATE invoice SET status = 'FAILED', error = ? WHERE paymentHash = ? AND incoming = 0 AND status = 'PENDING'",
             arrayOf<Any?>(error ?: "failed", paymentHash),
         )
+        walletRecordsVersionFlow.value += 1
     }
 
     /// A page of the server's history, stored (a row seen again is replaced:
@@ -1468,21 +1530,50 @@ class Storage(context: Context, account: String = "default") {
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
-            for (row in rows) {
-                val values = ContentValues().apply {
-                    put("rhash", row.rhash)
-                    put("ts", row.ts)
-                    put("amountMsat", row.amountMsat)
-                    put("incoming", if (row.incoming) 1 else 0)
-                    put("msgIndex", row.msgIndex)
-                    put("remote", if (row.remote) 1 else 0)
-                    put("error", row.error)
-                }
-                db.insertWithOnConflict("payment", null, values, SQLiteDatabase.CONFLICT_REPLACE)
-            }
+            writePayments(db, rows)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
+        }
+        walletRecordsVersionFlow.value += 1
+    }
+
+    /// [insertPayments] inside a transaction of the caller's, settling or failing the keysends the rows name ([reconcileKeysends]).
+    private fun writePayments(db: SQLiteDatabase, rows: List<PaymentRecord>) {
+        for (row in rows) {
+            val values = ContentValues().apply {
+                put("rhash", row.rhash)
+                put("ts", row.ts)
+                put("amountMsat", row.amountMsat)
+                put("incoming", if (row.incoming) 1 else 0)
+                put("msgIndex", row.msgIndex)
+                put("remote", if (row.remote) 1 else 0)
+                put("error", row.error)
+            }
+            db.insertWithOnConflict("payment", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        }
+        reconcileKeysends(db, rows)
+    }
+
+    /// A keysend sent for an app, by the same rule as every send of ours (iOS `Storage.reconcile`): one still open whose outgoing row has no error went
+    /// through; one still open whose only rows failed, failed (the server put the sats back); one that failed but has a good row settled after all. Settled
+    /// from the history it carries no preimage (the server's rows have none).
+    private fun reconcileKeysends(db: SQLiteDatabase, page: List<PaymentRecord>) {
+        for (row in page) {
+            if (row.incoming) continue
+            if (row.failed) {
+                db.execSQL(
+                    "UPDATE keysend SET status = 'FAILED', error = COALESCE(error, ?2) WHERE paymentHash = ?1 AND status = 'PENDING' " +
+                        "AND NOT EXISTS (SELECT 1 FROM payment WHERE rhash = ?1 AND incoming = 0 AND IFNULL(error, '') = '')",
+                    arrayOf<Any?>(row.rhash, row.error),
+                )
+            } else {
+                db.execSQL(
+                    "UPDATE keysend SET status = 'COMPLETE', paidAt = COALESCE(paidAt, ?), error = NULL " +
+                        "WHERE paymentHash = ? AND status IN ('PENDING', 'FAILED')",
+                    arrayOf<Any?>(row.ts, row.rhash),
+                )
+            }
         }
     }
 
@@ -1590,8 +1681,9 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
-    /// The connection a page was given (iOS `walletConnection`), by its scope key (`origin:<origin>` for a
-    /// stranger's page). Null when there is none, or it was revoked.
+    // MARK: - The app wallet (iOS `Storage+Wallet.swift`; docs/phases/31-wallet-storage.md)
+
+    /// The connection a page was given (iOS `walletConnection`), by its scope key (`org:<peer>`, `origin:<origin>`). Null when there is none, or it was revoked.
     fun walletConnection(key: String): WalletConnection? =
         helper.readableDatabase.query("wallet_connection", null, "key = ?", arrayOf(key), null, null, null)
             .use { c -> if (c.moveToFirst()) readWalletConnection(c) else null }
@@ -1601,9 +1693,16 @@ class Storage(context: Context, account: String = "default") {
     /// Moves when a connection is saved or revoked, so a screen listing them follows.
     val walletConnectionsVersion: StateFlow<Int> = walletConnectionsVersionFlow
 
+    private val walletRecordsVersionFlow = MutableStateFlow(0)
+
+    /// Every connection, oldest first (iOS `walletConnections`).
     fun walletConnections(): List<WalletConnection> =
-        helper.readableDatabase.query("wallet_connection", null, null, null, null, null, "createdAt DESC")
+        helper.readableDatabase.query("wallet_connection", null, null, null, null, null, "createdAt ASC, key ASC")
             .use { c -> buildList { while (c.moveToNext()) add(readWalletConnection(c)) } }
+
+    /// Every connection, oldest first, emitted again whenever one changes: Connected apps (iOS `walletConnectionUpdates`).
+    fun walletConnectionUpdates(): Flow<List<WalletConnection>> =
+        walletConnectionsVersion.map { walletConnections() }.distinctUntilChanged()
 
     fun saveWalletConnection(connection: WalletConnection) {
         val values = ContentValues().apply {
@@ -1611,7 +1710,12 @@ class Storage(context: Context, account: String = "default") {
             put("app", connection.app)
             put("title", connection.title)
             put("place", connection.place)
-            put("methods", JSONArray(connection.methods).toString())
+            put("methods", JSONArray(connection.methods.map { it.wire }).toString())
+            put("notificationTypes", JSONArray(connection.notificationTypes.map { it.wire }).toString())
+            put("maxAmountMsat", connection.maxAmountMsat)
+            put("renewal", connection.renewal.wire)
+            put("expiresAt", connection.expiresAt)
+            put("overBudget", connection.overBudget.wire)
             put("signIn", connection.signIn?.wire)
             put("createdAt", connection.createdAt)
         }
@@ -1619,23 +1723,198 @@ class Storage(context: Context, account: String = "default") {
         walletConnectionsVersionFlow.value += 1
     }
 
-    /// Revokes a connection: the next sign-in asks again.
+    /// Revoked: the app must `connect` again, and ask again to sign the person in. Its payments stay in history (iOS `deleteWalletConnection`).
     fun deleteWalletConnection(key: String) {
         helper.writableDatabase.delete("wallet_connection", "key = ?", arrayOf(key))
         walletConnectionsVersionFlow.value += 1
     }
 
+    /// The spending limit per period, lowered or raised; null (or nothing above 0) asks for every payment (iOS `setSpendingLimit`). False when there is no such connection.
+    fun setSpendingLimit(key: String, msat: Long?): Boolean = updateWalletConnection(key) { it.copy(maxAmountMsat = msat?.takeIf { m -> m > 0 }) }
+
+    /// What happens over the limit: a sheet for each payment, or a refusal (iOS `setOverLimit`).
+    fun setOverLimit(key: String, choice: OverBudget): Boolean = updateWalletConnection(key) { it.copy(overBudget = choice) }
+
+    private fun updateWalletConnection(key: String, change: (WalletConnection) -> WalletConnection): Boolean {
+        val connection = walletConnection(key) ?: return false
+        saveWalletConnection(change(connection))
+        return true
+    }
+
+    /// What a connection has spent this period, and when it renews (iOS `WalletHost.usage`); null for no such connection.
+    fun walletUsage(key: String, now: Long = System.currentTimeMillis() / 1000): WalletUsage? {
+        val connection = walletConnection(key) ?: return null
+        val (start, renewsAt) = WalletBudget.period(connection.createdAt, connection.renewal, now)
+        return WalletUsage(WalletBudget.used(walletRecords(key).mapNotNull { it.entry }, start), renewsAt)
+    }
+
     private fun readWalletConnection(c: android.database.Cursor): WalletConnection {
         fun text(name: String) = c.getString(c.getColumnIndexOrThrow(name))
-        val methods = runCatching {
-            val array = JSONArray(text("methods"))
-            List(array.length()) { array.getString(it) }
+        fun longOrNull(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getLong(it) }
+        // Names this build does not know (an older or a newer one wrote them) are left out, never a failure.
+        fun <T> names(name: String, of: (String?) -> T?): List<T> = runCatching {
+            val array = JSONArray(text(name))
+            (0 until array.length()).mapNotNull { of(array.optString(it)) }
         }.getOrDefault(emptyList())
         val signIn = c.getColumnIndexOrThrow("signIn").let { if (c.isNull(it)) null else SignInKey.fromWire(c.getString(it)) }
         return WalletConnection(
             key = text("key"), app = text("app"), title = text("title"), place = text("place"),
-            methods = methods, signIn = signIn, createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")),
+            methods = names("methods", WalletMethod::of),
+            notificationTypes = names("notificationTypes", WalletNotificationType::of),
+            maxAmountMsat = longOrNull("maxAmountMsat"),
+            renewal = WalletRenewal.of(text("renewal")) ?: WalletRenewal.NEVER,
+            expiresAt = longOrNull("expiresAt"),
+            overBudget = OverBudget.of(text("overBudget")) ?: OverBudget.ASK,
+            createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")),
+            signIn = signIn,
         )
+    }
+
+    // MARK: Transactions
+
+    /// A connection's transactions, newest first; with null, every app's (iOS `walletRecords`).
+    fun walletRecords(connection: String?): List<WalletRecord> = walletRecords(helper.readableDatabase, connection)
+
+    /// Every app's transactions, emitted again whenever one changes: what the wallet host's notifications come from, whichever way a payment moved (the
+    /// server's live word, its records, its history) (iOS `walletRecordUpdates`).
+    fun walletRecordUpdates(): Flow<List<WalletRecord>> = walletRecordsVersionFlow.map { walletRecords(null) }.distinctUntilChanged()
+
+    /// The keysends and invoices tagged with a connection (all of them for null), as the wallet host reads them. A fee is known once a settled payment's
+    /// history row says what left: what it paid beyond its amount, and for a keysend sent the asynchronous way its 1-sat ping.
+    internal fun walletRecords(db: SQLiteDatabase, connection: String?, nowMs: Long = System.currentTimeMillis()): List<WalletRecord> {
+        val filter = if (connection == null) "connection IS NOT NULL" else "connection = ?"
+        val args = connection?.let { arrayOf(it) } ?: emptyArray()
+        val paid = "(SELECT MAX(p.amountMsat) FROM payment p WHERE p.rhash = paymentHash AND p.incoming = 0 AND IFNULL(p.error, '') = '')"
+        val records = mutableListOf<WalletRecord>()
+        db.rawQuery("SELECT *, $paid AS paidOut FROM keysend WHERE $filter", args).use { c ->
+            fun text(name: String) = c.getString(c.getColumnIndexOrThrow(name))
+            fun textOrNull(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getString(it) }
+            fun longOrNull(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getLong(it) }
+            while (c.moveToNext()) {
+                val state = walletState(InvoiceRecord.Status.of(text("status")))
+                val amount = c.getLong(c.getColumnIndexOrThrow("amountMsat"))
+                var fees: Long? = null
+                if (state == WalletRecord.State.SETTLED) {
+                    val routed = longOrNull("paidOut")?.let { maxOf(it - amount, 0) } ?: 0
+                    fees = routed + (if (c.getInt(c.getColumnIndexOrThrow("async")) != 0) PING_PRICE_MSAT else 0)
+                }
+                val hash = text("paymentHash")
+                records += WalletRecord(
+                    transactionId = hash, direction = WalletRecord.Direction.OUTGOING, paymentType = WalletRecord.PaymentType.KEYSEND, state = state,
+                    paymentHash = hash, amountMsat = amount, feesMsat = fees,
+                    preimage = if (state == WalletRecord.State.SETTLED) textOrNull("preimage") else null,
+                    createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")) / 1000, settledAt = longOrNull("paidAt")?.let { it / 1000 },
+                    failureReason = if (state == WalletRecord.State.FAILED) textOrNull("error")?.takeIf { it.isNotEmpty() } else null,
+                    pubkey = textOrNull("pubkey"), connection = text("connection"), app = textOrNull("app") ?: "",
+                )
+            }
+        }
+        db.rawQuery("SELECT *, $paid AS paidOut FROM invoice WHERE $filter", args).use { c ->
+            fun text(name: String) = c.getString(c.getColumnIndexOrThrow(name))
+            fun textOrNull(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getString(it) }
+            fun longOrNull(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getLong(it) }
+            while (c.moveToNext()) {
+                val status = InvoiceRecord.Status.of(text("status"))
+                val incoming = c.getInt(c.getColumnIndexOrThrow("incoming")) != 0
+                val amount = c.getLong(c.getColumnIndexOrThrow("amountMsat"))
+                val expiresAt = longOrNull("expiresAt")
+                var state = walletState(status)
+                if (incoming && status == InvoiceRecord.Status.OPEN && expiresAt != null && expiresAt <= nowMs) state = WalletRecord.State.EXPIRED
+                if (incoming && status == InvoiceRecord.Status.UNDERPAID) state = WalletRecord.State.FAILED
+                var fees: Long? = null
+                if (!incoming && state == WalletRecord.State.SETTLED) fees = longOrNull("paidOut")?.let { maxOf(it - amount, 0) }
+                val hash = text("paymentHash")
+                records += WalletRecord(
+                    transactionId = hash, direction = if (incoming) WalletRecord.Direction.INCOMING else WalletRecord.Direction.OUTGOING,
+                    paymentType = WalletRecord.PaymentType.BOLT11, state = state, paymentHash = hash,
+                    amountMsat = if (incoming && state == WalletRecord.State.SETTLED) (longOrNull("paidMsat") ?: amount) else amount,
+                    feesMsat = fees, preimage = if (!incoming && state == WalletRecord.State.SETTLED) textOrNull("preimage") else null,
+                    createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")) / 1000, settledAt = longOrNull("paidAt")?.let { it / 1000 },
+                    expiresAt = expiresAt?.let { it / 1000 },
+                    failureReason = if (!incoming && state == WalletRecord.State.FAILED) textOrNull("error")?.takeIf { it.isNotEmpty() } else null,
+                    invoice = textOrNull("bolt11"), description = textOrNull("memo")?.takeIf { it.isNotEmpty() },
+                    connection = text("connection"), app = textOrNull("app") ?: "",
+                )
+            }
+        }
+        return records.sortedWith(compareByDescending<WalletRecord> { it.createdAt }.thenByDescending { it.transactionId })
+    }
+
+    /// (iOS `walletState`: an unsettled send is not a status here, so only these five.)
+    private fun walletState(status: InvoiceRecord.Status): WalletRecord.State = when (status) {
+        InvoiceRecord.Status.OPEN, InvoiceRecord.Status.PENDING -> WalletRecord.State.PENDING
+        InvoiceRecord.Status.PAID -> WalletRecord.State.SETTLED
+        InvoiceRecord.Status.FAILED, InvoiceRecord.Status.UNDERPAID -> WalletRecord.State.FAILED
+    }
+
+    /// One keysend by its send's tag.
+    fun keysend(tag: String): KeysendRecord? = readKeysend("tag = ?", tag)
+
+    /// One keysend by its payment hash.
+    fun keysendByHash(paymentHash: String): KeysendRecord? = readKeysend("paymentHash = ?", paymentHash)
+
+    private fun readKeysend(where: String, arg: String): KeysendRecord? =
+        helper.readableDatabase.rawQuery("SELECT * FROM keysend WHERE $where", arrayOf(arg)).use { c ->
+            if (!c.moveToFirst()) return null
+            fun textOrNull(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getString(it) }
+            fun longOrNull(name: String) = c.getColumnIndexOrThrow(name).let { if (c.isNull(it)) null else c.getLong(it) }
+            KeysendRecord(
+                paymentHash = c.getString(c.getColumnIndexOrThrow("paymentHash")), tag = c.getString(c.getColumnIndexOrThrow("tag")),
+                pubkey = c.getString(c.getColumnIndexOrThrow("pubkey")), routeHint = textOrNull("routeHint"),
+                async = c.getInt(c.getColumnIndexOrThrow("async")) != 0, amountMsat = c.getLong(c.getColumnIndexOrThrow("amountMsat")),
+                createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")), status = InvoiceRecord.Status.of(c.getString(c.getColumnIndexOrThrow("status"))),
+                paidAt = longOrNull("paidAt"), preimage = textOrNull("preimage"), error = textOrNull("error"),
+                connection = textOrNull("connection"), app = textOrNull("app"),
+            )
+        }
+
+    /// Writes a keysend about to be published; one with the same payment hash or tag (which the core never repeats) refuses, and with it the whole commit.
+    private fun insertKeysend(db: SQLiteDatabase, keysend: KeysendRecord) {
+        val values = ContentValues().apply {
+            put("paymentHash", keysend.paymentHash)
+            put("tag", keysend.tag)
+            put("pubkey", keysend.pubkey)
+            put("routeHint", keysend.routeHint)
+            put("async", if (keysend.async) 1 else 0)
+            put("amountMsat", keysend.amountMsat)
+            put("createdAt", keysend.createdAt)
+            put("status", keysend.status.raw)
+            put("paidAt", keysend.paidAt)
+            put("preimage", keysend.preimage)
+            put("error", keysend.error)
+            put("connection", keysend.connection)
+            put("app", keysend.app)
+        }
+        db.insertOrThrow("keysend", null, values)
+    }
+
+    /// Keeps the preimage the server sent with a send's COMPLETE, on the keysend or invoice we pay that [tag] names, only when it hashes to that payment's
+    /// hash: a page is never handed a preimage that proves nothing. One kept is never written over (iOS `keepPreimage`).
+    fun keepPreimage(preimage: String, tag: String) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            keepPreimage(db, preimage, tag)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        walletRecordsVersionFlow.value += 1
+    }
+
+    private fun keepPreimage(db: SQLiteDatabase, preimage: String, tag: String) {
+        val proof = preimage.lowercase()
+        db.rawQuery("SELECT paymentHash FROM keysend WHERE tag = ?", arrayOf(tag)).use { c ->
+            if (c.moveToFirst() && WalletProtocol.verifyPreimage(proof, c.getString(0))) {
+                db.execSQL("UPDATE keysend SET preimage = ? WHERE tag = ? AND preimage IS NULL", arrayOf(proof, tag))
+            }
+        }
+        val hashes = db.rawQuery("SELECT paymentHash FROM invoice WHERE tag = ? AND incoming = 0", arrayOf(tag)).use { c ->
+            buildList { while (c.moveToNext()) add(c.getString(0)) }
+        }
+        for (hash in hashes.filter { WalletProtocol.verifyPreimage(proof, it) }) {
+            db.execSQL("UPDATE invoice SET preimage = ? WHERE tag = ? AND incoming = 0 AND preimage IS NULL", arrayOf(proof, tag))
+        }
     }
 
     fun deleteAccount() {
@@ -1665,6 +1944,7 @@ class Storage(context: Context, account: String = "default") {
             v11(db)
             v12(db)
             v13(db)
+            v14(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -1683,6 +1963,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 11) v11(db)
             if (oldVersion < 12) v12(db)
             if (oldVersion < 13) v13(db)
+            if (oldVersion < 14) v14(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -1938,8 +2219,47 @@ class Storage(context: Context, account: String = "default") {
             )
         }
 
+        // The app wallet (iOS v33, with v34's `signIn` already in v13; docs/phases/31-wallet-storage.md). `wallet_connection` (iOS `walletConnection`)
+        // gains the rest of what a grant holds: its notification types and methods as JSON text, a budget and its renewal, an expiry, and what to do over
+        // budget; its times in unix seconds (v13 wrote `createdAt` in milliseconds: those rows are divided, by their size, so a renewal counts from the
+        // right day). An invoice we pay keeps the preimage the server sent with its COMPLETE, and an invoice made or paid for an app the connection and the
+        // app (`<peer>/<name>`) it was made for. A keysend sent for an app is tracked by its tag like any send of ours (iOS `keysend`, same columns).
+        private fun v14(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE wallet_connection ADD COLUMN notificationTypes TEXT NOT NULL DEFAULT '[]'")
+            db.execSQL("ALTER TABLE wallet_connection ADD COLUMN maxAmountMsat INTEGER")
+            db.execSQL("ALTER TABLE wallet_connection ADD COLUMN renewal TEXT NOT NULL DEFAULT 'never'")
+            db.execSQL("ALTER TABLE wallet_connection ADD COLUMN expiresAt INTEGER")
+            db.execSQL("ALTER TABLE wallet_connection ADD COLUMN overBudget TEXT NOT NULL DEFAULT 'ask'")
+            db.execSQL("UPDATE wallet_connection SET createdAt = createdAt / 1000 WHERE createdAt >= 100000000000")
+            db.execSQL("ALTER TABLE invoice ADD COLUMN preimage TEXT")
+            db.execSQL("ALTER TABLE invoice ADD COLUMN connection TEXT")
+            db.execSQL("ALTER TABLE invoice ADD COLUMN app TEXT")
+            db.execSQL("CREATE INDEX invoice_connection ON invoice(connection) WHERE connection IS NOT NULL")
+            db.execSQL(
+                """
+                CREATE TABLE keysend (
+                    paymentHash TEXT PRIMARY KEY NOT NULL,
+                    tag TEXT NOT NULL,
+                    pubkey TEXT NOT NULL,
+                    routeHint TEXT,
+                    async INTEGER NOT NULL,
+                    amountMsat INTEGER NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    paidAt INTEGER,
+                    preimage TEXT,
+                    error TEXT,
+                    connection TEXT,
+                    app TEXT
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE UNIQUE INDEX keysend_tag ON keysend(tag)")
+            db.execSQL("CREATE INDEX keysend_connection ON keysend(connection) WHERE connection IS NOT NULL")
+        }
+
         companion object {
-            const val VERSION = 13
+            const val VERSION = 14
         }
     }
 }
