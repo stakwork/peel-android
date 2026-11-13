@@ -53,6 +53,7 @@ import com.sphinx.peel.engine.OrgPageRequest
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
+import com.sphinx.peel.engine.WalletHost
 import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.toast.LocalToast
@@ -70,7 +71,7 @@ import kotlinx.coroutines.coroutineScope
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
 @Composable
-fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
+fun AppsScreen(wallet: WalletHost, onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -104,7 +105,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     val shownPage = page?.takeIf { it.isLive(live) }
     LaunchedEffect(live.map { it.id }, page) { if (page != null && shownPage == null) page = null }
     if (shownPage != null) {
-        OrgPageScreen(shownPage, onClose = { page = null }, modifier)
+        OrgPageScreen(shownPage, wallet, onClose = { page = null }, modifier = modifier)
         return
     }
     BackHandler(onBack = onBack)

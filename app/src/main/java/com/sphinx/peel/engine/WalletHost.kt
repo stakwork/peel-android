@@ -2,6 +2,10 @@ package com.sphinx.peel.engine
 
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,7 +16,7 @@ import org.json.JSONObject
 
 /// What a page was allowed to do, kept per [key] (iOS `walletConnection`). A sign-in-only connection has no [methods].
 data class WalletConnection(
-    /// The scope: `origin:<origin>` for a stranger's page Peel opened.
+    /// The scope's key ([WalletScope.key]): `origin:<origin>` for a stranger's page Peel opened, `org:<peer>` for an org's.
     val key: String,
     val app: String,
     val title: String,
@@ -43,15 +47,49 @@ interface WalletPerson {
     fun signedIn(host: String, key: SignInKey)
 }
 
-/// Who is calling: the page's scope [key] (`origin:<origin>`), its [place] (the host of the origin Peel loaded) and
-/// whether the person tapped in the page just now.
-data class WalletCaller(val scopeKey: String, val place: String, val personActed: Boolean) {
-    companion object {
-        /// A stranger's page Peel loaded from [origin].
-        fun page(origin: String, personActed: Boolean): WalletCaller =
-            WalletCaller("origin:$origin", Seller.host(origin) ?: origin, personActed)
-    }
+/// Who a message is from, as Peel itself knows it, never as the page says (iOS `WalletScope`). Only the phone's two scopes
+/// exist here: the Mac's `.app` (an app on Peel's own strut) and `.remote` (a stranger's app Peel's own strut hosts) are
+/// Mac-only and have no Android counterpart.
+sealed class WalletScope {
+    /// An org, whose own strut's UI is the main frame and can name any of its apps, so the org is what is trusted.
+    data class Org(val peer: String) : WalletScope()
+
+    /// A page Peel loaded itself from a box it is not paired with (strut's R7, "direct open"). The box's own code is the main
+    /// frame and can claim anything, so only the origin Peel loaded is trusted: `scheme://host[:port]`.
+    data class Origin(val origin: String) : WalletScope()
+
+    /// The connection's key ([WalletConnection.key]).
+    val key: String
+        get() = when (this) {
+            is Org -> "org:$peer"
+            is Origin -> "origin:$origin"
+        }
+
+    /// The host of a stranger's public app, from Peel's own record (the origin Peel loaded): what a sign-in challenge must
+    /// name. Null where the person is no visitor: an org's page knows who is looking.
+    val visitorHost: String?
+        get() = when (this) {
+            is Org -> null
+            is Origin -> Seller.host(origin)
+        }
+
+    /// Whether the app is named by the page rather than known to Peel (iOS `byOrg`): an org's own UI, or a stranger's box Peel
+    /// loaded; true for both scopes here (it is false for the Mac's two).
+    val byOrg: Boolean get() = true
 }
+
+/// Who is calling: the page's [scope], its [place] as the person reads it (from Peel's own record), whether the person tapped in
+/// the page just now (native events, which no script makes; no sheet opens without it), and the [person] to ask (iOS `WalletCaller`).
+data class WalletCaller(val scope: WalletScope, val place: String, val personActed: Boolean, val person: WalletPerson)
+
+/// A notification for the pages hosting an app: the whole `window.strutWallet.notify` message ([envelope]) (iOS `WalletPush`).
+data class WalletPush(
+    /// The connection it is for ([WalletScope.key]): a bridge sends it only to pages of that scope.
+    val connection: String,
+    /// `<peer>/<name>`, as strut names the app.
+    val app: String,
+    val envelope: JSONObject,
+)
 
 /// strut's wallet error codes: the page reads only `error.data.code`; any other name it reads as `OTHER`.
 enum class WalletError {
@@ -91,12 +129,21 @@ private class WalletApp(val name: String, val version: String, val title: String
 class WalletHost(
     private val connections: WalletConnections,
     private val signer: VisitorSigner,
-    private val person: WalletPerson,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val sheetTimeoutMs: Long = DEFAULT_SHEET_TIMEOUT_MS,
 ) {
     /// One sheet at a time, across every page.
     private val asking = AtomicBoolean(false)
+
+    private val pushes = MutableSharedFlow<WalletPush>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /// Notifications for the pages hosting an app (iOS `notifications`): each page host collects them and hands those of its
+    /// own scope to the page ([com.sphinx.peel.ui.apps.OrgWalletBridge]). The producers (an app's payment that settled or
+    /// failed) come with the spending wallet, which Android does not have yet: [publish] is where they will put them.
+    val notifications: Flow<WalletPush> = pushes.asSharedFlow()
+
+    /// Tells every listening page host about [push]; false when it could not be queued (nothing is listening is not a failure).
+    fun publish(push: WalletPush): Boolean = pushes.tryEmit(push)
 
     /// Answers one message: `{result: …}` or `{error: {code, message, data: {code}}}` ([WalletErrors]). Never throws (but for cancellation).
     suspend fun handle(message: Any?, caller: WalletCaller): JSONObject = try {
@@ -113,10 +160,11 @@ class WalletHost(
         if (WalletProtocol.integer(body.opt("v")) != 1L || op == null) return unreadable()
         // The host's own ops need no app of the wallet's kind.
         when (op) {
-            "host_capability" -> return result(
-                JSONObject().put("version", 1).put("ops", JSONArray().put("sign_in")).put("wallet", "Peel"),
-            )
+            "host_capability" -> return hostCapability(caller)
             "sign_in" -> return signIn(body, caller)
+            // Credit is bought only for a public app Peel opened itself; Android buys none (not advertised), and an org's page is told why.
+            "buy_credit", "buy_credit_status", "buy_credit_cancel" ->
+                if (caller.scope.visitorHost == null) return error(WalletError.RESTRICTED, "Peel buys credit only for a public app it opened itself.")
         }
         val app = WalletApp.read(body.opt("app")) ?: return unreadable()
         return when (op) {
@@ -144,18 +192,27 @@ class WalletHost(
         }
     }
 
+    /// What `host_capability` answers: the host's own ops this page may send (only a stranger's public page signs in).
+    private fun hostCapability(caller: WalletCaller): JSONObject = result(
+        JSONObject().put("version", 1).put("wallet", "Peel").put(
+            "ops", JSONArray().apply { if (caller.scope.visitorHost != null) put("sign_in") },
+        ),
+    )
+
     private suspend fun signIn(body: JSONObject, caller: WalletCaller): JSONObject {
+        val host = caller.scope.visitorHost
+            ?: return error(WalletError.RESTRICTED, "Peel signs you in only to a public app it opened itself.")
         // Judged against the host Peel itself loaded, never against what the page says its seller is.
-        val problems = SignInRequest.problems(body, nowMs(), caller.place)
-        val request = SignInRequest.of(body, nowMs(), caller.place)
+        val problems = SignInRequest.problems(body, nowMs(), host)
+        val request = SignInRequest.of(body, nowMs(), host)
         if (problems.isNotEmpty() || request == null) {
             return error(WalletError.BAD_REQUEST, "Peel does not sign that: ${problems.firstOrNull() ?: "it is not a sign-in request"}.")
         }
         val challenge = request.challenge
-        val held = connections.connection(caller.scopeKey)?.signIn
+        val held = connections.connection(caller.scope.key)?.signIn
         if (held != null && (challenge.visitorKey == SignInKey.root || held == SignInKey.domain)) {
             val signature = signer.sign(challenge, held)
-            person.signedIn(caller.place, held)
+            caller.person.signedIn(host, held)
             return result(signature.toJson())
         }
         if (!caller.personActed) {
@@ -171,7 +228,7 @@ class WalletHost(
         )
         val chosen: SignInKey? = try {
             val wait = minOf(challenge.expiresAtMs - nowMs(), sheetTimeoutMs)
-            val answer = withTimeoutOrNull(wait.coerceAtLeast(1)) { Answered(person.askSignIn(SignInAsk(caller.place, shown, offered))) }
+            val answer = withTimeoutOrNull(wait.coerceAtLeast(1)) { Answered(caller.person.askSignIn(SignInAsk(host, shown, offered))) }
                 ?: return error(WalletError.RESTRICTED, "You did not answer in time.")
             answer.key
         } finally {
@@ -179,10 +236,10 @@ class WalletHost(
         }
         if (chosen == null || chosen !in offered) return error(WalletError.USER_REJECTED, "You declined to sign in.")
         // Read again: a connection revoked while the sheet was up stays revoked, so this one starts fresh.
-        val current = connections.connection(caller.scopeKey)
+        val current = connections.connection(caller.scope.key)
         connections.save(
             current?.copy(signIn = chosen)
-                ?: WalletConnection(caller.scopeKey, "/${shown.name}", shown.title, caller.place, emptyList(), chosen, nowMs()),
+                ?: WalletConnection(caller.scope.key, "/${shown.name}", shown.title, caller.place, emptyList(), chosen, nowMs()),
         )
         if (challenge.expiresAtMs <= nowMs()) {
             return error(WalletError.RESTRICTED, "The sign-in ran out of time while you were asked. Sign in again.")
