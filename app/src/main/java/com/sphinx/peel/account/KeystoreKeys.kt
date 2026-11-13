@@ -40,17 +40,6 @@ interface StateSigner {
     fun delete()
 }
 
-/// A SEPARATE key that can only be used right after a biometric
-/// authentication (per-use, via BiometricPrompt's CryptoObject) and is
-/// destroyed by the OS when the set of enrolled biometrics changes.
-interface BiometricKeyVault {
-    /// Creates a fresh key (replacing any old) and returns an encrypt cipher on it.
-    fun newEncryptCipher(): Cipher
-    /// A decrypt cipher for `iv`; throws if the key is gone or invalidated.
-    fun decryptCipher(iv: ByteArray): Cipher
-    fun delete()
-}
-
 internal object Keystore {
     const val PROVIDER = "AndroidKeyStore"
 
@@ -76,17 +65,18 @@ internal object Keystore {
     }
 }
 
-class AndroidKeyWall(private val alias: String) : KeyWall {
+class AndroidKeyWall(private val alias: String, private val strongBox: Boolean = true) : KeyWall {
     private fun key(): SecretKey {
         val ks = Keystore.store()
         (ks.getKey(alias, null) as? SecretKey)?.let { return it }
-        return Keystore.withStrongBoxFallback { strongBox ->
+        return Keystore.withStrongBoxFallback { tryStrongBox ->
             val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
+                .setUserAuthenticationRequired(false)
                 .setRandomizedEncryptionRequired(true)
-                .apply { if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) setIsStrongBoxBacked(true) }
+                .apply { if (strongBox && tryStrongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) setIsStrongBoxBacked(true) }
                 .build()
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, Keystore.PROVIDER).apply { init(spec) }.generateKey()
         }
@@ -124,37 +114,6 @@ class AndroidStateSigner(private val alias: String) : StateSigner {
         Mac.getInstance("HmacSHA256").apply { init(key()) }.doFinal(data)
 
     override fun verify(data: ByteArray, mac: ByteArray): Boolean = MessageDigest.isEqual(sign(data), mac)
-
-    override fun delete() = Keystore.delete(alias)
-}
-
-class AndroidBiometricKeyVault(private val alias: String) : BiometricKeyVault {
-    override fun newEncryptCipher(): Cipher {
-        Keystore.delete(alias)
-        val key = Keystore.withStrongBoxFallback { strongBox ->
-            val builder = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .setUserAuthenticationRequired(true)
-                .setInvalidatedByBiometricEnrollment(true)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                // Timeout 0: every single use needs a fresh authentication (CryptoObject), strong biometrics only.
-                builder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
-            } else {
-                @Suppress("DEPRECATION")
-                builder.setUserAuthenticationValidityDurationSeconds(-1)
-            }
-            if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) builder.setIsStrongBoxBacked(true)
-            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, Keystore.PROVIDER).apply { init(builder.build()) }.generateKey()
-        }
-        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
-    }
-
-    override fun decryptCipher(iv: ByteArray): Cipher {
-        val key = Keystore.store().getKey(alias, null) as? SecretKey ?: throw KeyPermanentlyInvalidatedException("no biometric key")
-        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) }
-    }
 
     override fun delete() = Keystore.delete(alias)
 }

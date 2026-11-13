@@ -40,20 +40,6 @@ class FakeLockoutStore : LockoutStore {
     override fun clear() { state = null; tampered = false }
 }
 
-class FakeVault : BiometricKeyVault {
-    var key: SecretKey? = null
-    override fun newEncryptCipher(): Cipher {
-        key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
-        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
-    }
-
-    override fun decryptCipher(iv: ByteArray): Cipher {
-        val k = key ?: throw IllegalStateException("invalidated")
-        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, k, GCMParameterSpec(128, iv)) }
-    }
-
-    override fun delete() { key = null }
-}
 
 class TestClock(var elapsed: Long = 1_000, var wall: Long = 1_700_000_000_000, var boot: String = "boot-1") : LockoutClock {
     override fun now() = LockoutPolicy.Clock(elapsed, wall, boot)

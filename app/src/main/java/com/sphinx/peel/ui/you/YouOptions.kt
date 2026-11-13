@@ -18,17 +18,17 @@ object YouOptions {
     /// hours away, or "never".
     const val PIN_TIMEOUT_NEVER = "never"
     val pinTimeouts: List<Choice<String>> = listOf(
-        Choice("0", "When Peel opens"),
-        Choice("1", "After an hour away"),
-        Choice("4", "After 4 hours away"),
-        Choice("12", "After 12 hours away"),
-        Choice("24", "After a day away"),
+        Choice("0", "Every time Peel opens"),
+        Choice("1", "After 1 hour"),
+        Choice("4", "After 4 hours"),
+        Choice("12", "After 12 hours"),
+        Choice("24", "After a day"),
         Choice(PIN_TIMEOUT_NEVER, "Never ask for PIN"),
     )
 
-    /// Unset reads as never, the iOS default.
+    /// Unset reads as a day, the iOS default.
     fun pinTimeoutOf(stored: String?): String =
-        stored?.takeIf { s -> pinTimeouts.any { it.value == s } } ?: PIN_TIMEOUT_NEVER
+        stored?.takeIf { s -> pinTimeouts.any { it.value == s } } ?: "24"
 
     /// "Confirm payments" (PeelCore's `paymentConfirmationMsat`).
     const val PAYMENT_CONFIRMATION_DEFAULT_MSAT = 100_000L

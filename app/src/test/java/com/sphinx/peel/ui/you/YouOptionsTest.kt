@@ -14,9 +14,9 @@ class YouOptionsTest {
         assertEquals("-1.000", YouOptions.groupedSats(-1000))
     }
 
-    @Test fun unsetPinTimeoutIsNever() {
-        assertEquals("never", YouOptions.pinTimeoutOf(null))
-        assertEquals("never", YouOptions.pinTimeoutOf("7"))
+    @Test fun unsetPinTimeoutIsADay() {
+        assertEquals("24", YouOptions.pinTimeoutOf(null))
+        assertEquals("24", YouOptions.pinTimeoutOf("7"))
         assertEquals("4", YouOptions.pinTimeoutOf("4"))
     }
 

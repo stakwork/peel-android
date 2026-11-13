@@ -31,6 +31,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.FileSecretStore
+import com.sphinx.peel.account.LockDecision
+import com.sphinx.peel.account.RememberedPIN
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.InviteLink
@@ -173,7 +175,7 @@ private fun PeelApp(
         is Screen.Relock -> LockScreen(secretStore, storage, existing = current.engine) { engine -> screen = Screen.Home(engine) }
         is Screen.Restoring -> RestoringAccountScreen(current.engine) { screen = Screen.Home(current.engine) }
         is Screen.Home -> {
-            RelockWhenIdle(current.engine) { screen = Screen.Relock(current.engine) }
+            RelockWhenIdle(current.engine, secretStore) { screen = Screen.Relock(current.engine) }
             BiometricHousekeeping(current.engine, secretStore)
             StadeumHousekeeping(current.engine)
             InviterNotice(current.engine)
@@ -209,25 +211,34 @@ private fun KeepConnected(engine: Engine, storage: Storage) {
     }
 }
 
-/// The PIN timeout (`PinTimeout`): remembers when the app left the screen
-/// and, on coming back after longer than the setting, asks for the PIN (or a
-/// biometric) again. Monotonic time, so changing the clock does not help.
-/// iOS also re-locks an app left open in front; here only time spent in the
-/// background counts (a gap, docs/phases/17-lock-hardening.md).
+/// The PIN timeout (`PinTimeout`, `RememberedPIN`): leaving the foreground
+/// records when the app was last in use; coming back, the lock decision
+/// (`LockDecision`) says whether to open straight on (remembered PIN valid,
+/// biometrics off) or lock again (biometric cover, or the PIN keypad when the
+/// timeout is 0 or has run out).
 @Composable
-private fun RelockWhenIdle(engine: Engine, relock: () -> Unit) {
+private fun RelockWhenIdle(engine: Engine, secretStore: SecretStore, relock: () -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current.applicationContext
     DisposableEffect(engine, lifecycleOwner) {
-        var stoppedAt = -1L
+        var stopped = false
         val observer = LifecycleEventObserver { _, event ->
+            val remembered = secretStore.remembered
             when (event) {
-                Lifecycle.Event.ON_STOP -> stoppedAt = android.os.SystemClock.elapsedRealtime()
-                Lifecycle.Event.ON_START -> {
-                    if (stoppedAt >= 0) {
-                        val idle = android.os.SystemClock.elapsedRealtime() - stoppedAt
-                        if (com.sphinx.peel.account.PinTimeout.isLockDue(engine.pinTimeoutHours(), idle)) relock()
-                    }
-                    stoppedAt = -1L
+                Lifecycle.Event.ON_STOP -> {
+                    stopped = true
+                    remembered?.touch(RememberedPIN.nowSeconds())
+                    // A synced change of the setting reaches what is kept.
+                    remembered?.timeoutChanged(engine.pinTimeoutHours())
+                }
+                Lifecycle.Event.ON_START -> if (stopped) {
+                    stopped = false
+                    val step = LockDecision.decide(
+                        rememberedPinValid = remembered?.pin(RememberedPIN.nowSeconds()) != null,
+                        biometricsEnabled = secretStore.biometricEnrolled,
+                        biometricsAvailable = com.sphinx.peel.ui.lock.BiometricUnlock.available(context),
+                    )
+                    if (step != LockDecision.Step.OpenWithRememberedPin) relock()
                 }
                 else -> {}
             }
@@ -246,6 +257,8 @@ private fun BiometricHousekeeping(engine: Engine, secretStore: SecretStore) {
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(engine) {
         engine.syncsBiometrics = com.sphinx.peel.ui.lock.BiometricUnlock.available(context)
+        // The timeout may have been synced from another device since the PIN was kept.
+        secretStore.remembered?.timeoutChanged(engine.pinTimeoutHours())
         if (engine.biometricWish() == false && secretStore.biometricEnrolled) secretStore.disableBiometric()
     }
 }

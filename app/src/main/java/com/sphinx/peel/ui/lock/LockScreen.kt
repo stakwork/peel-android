@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.lock
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -18,7 +20,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import com.sphinx.peel.account.LockDecision
 import com.sphinx.peel.account.LockoutPolicy
+import com.sphinx.peel.account.RememberedPIN
+import com.sphinx.peel.ui.theme.Theme
+import androidx.compose.material3.MaterialTheme
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.SecretStoreFailure
 import com.sphinx.peel.engine.Engine
@@ -31,21 +37,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/// Asks for the PIN (or a biometric match, when it is set up) to open the
-/// account already sealed on this device, then opens its `Engine` and starts
-/// it — connecting (restoring too, if an earlier restore never finished)
-/// before `onUnlocked` even fires, the same as a fresh onboarding does.
-/// Ported from PeelCore's PinPad.swift (`PinPrompt` as the lock screen).
+/// Opens the account already sealed on this device, then opens its `Engine`
+/// and starts it — connecting (restoring too, if an earlier restore never
+/// finished) before `onUnlocked` even fires, the same as a fresh onboarding does.
 ///
-/// With `existing` (an idle re-lock, `PinTimeout`) the engine is already
-/// running behind this screen and is handed back untouched once the words
-/// open — nothing is rebuilt.
+/// What it shows is `LockDecision`: while the PIN timeout has not run out the
+/// PIN is remembered (`RememberedPIN`), so no keypad — either it opens at once,
+/// or, with biometrics on, behind a "Peel is locked" cover whose check (device
+/// passcode as fallback, never the Peel PIN) releases the remembered PIN.
+/// Timeout 0 or past it: the keypad, and only the PIN opens (no biometrics
+/// here). A remembered PIN that is wrong (changed elsewhere) is dropped and the
+/// PIN asked. A typed PIN that works is remembered again.
 ///
-/// A biometric match releases the stored derived key, so the multi-second
-/// PBKDF2 is skipped; the typed PIN path is unchanged. Wrong PINs are
-/// throttled by the store (`LockoutPolicy`); the pad is inert and shows a
-/// countdown while a wait is due. Biometrics are not throttled by it (the OS
-/// has its own lockout), and never reset it.
+/// With `existing` (a re-lock after the app came back) the engine is already
+/// running behind this screen and is handed back untouched.
+///
+/// Wrong PINs are throttled by the store (`LockoutPolicy`); the pad is inert
+/// and shows a countdown while a wait is due.
 @Composable
 fun LockScreen(
     secretStore: SecretStore,
@@ -54,13 +62,15 @@ fun LockScreen(
     onUnlocked: (engine: Engine) -> Unit,
 ) {
     SecureWindow()
+    var phase by remember { mutableStateOf(Phase.DECIDING) }
     var pin by remember { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
     var working by remember { mutableStateOf(false) }
     var waitMs by remember { mutableLongStateOf(secretStore.lockoutRemainingMs()) }
-    var offerBiometric by remember { mutableStateOf(secretStore.biometricEnrolled) }
     val scope = rememberCoroutineScope()
-    val activity = LocalContext.current.findActivity() as? FragmentActivity
+    val context = LocalContext.current
+    val activity = context.findActivity() as? FragmentActivity
+    val remembered = secretStore.remembered
 
     // Counts the wait down, once a second, while there is one.
     LaunchedEffect(waitMs > 0) {
@@ -70,63 +80,112 @@ fun LockScreen(
         }
     }
 
-    suspend fun open(mnemonic: String) {
-        val engine = existing ?: withContext(Dispatchers.Default) { Engine(mnemonic, storage).also { it.start() } }
-        onUnlocked(engine)
+    suspend fun openEngine(mnemonic: String): Engine =
+        existing ?: withContext(Dispatchers.Default) { Engine(mnemonic, storage).also { it.start() } }
+
+    /// With the remembered PIN: no prompt. Anything wrong drops to the keypad.
+    suspend fun openWithRemembered() {
+        working = true
+        val kept = withContext(Dispatchers.Default) { remembered?.pin(RememberedPIN.nowSeconds()) }
+        if (kept == null) {
+            phase = Phase.PIN
+            working = false
+            return
+        }
+        try {
+            val mnemonic = withContext(Dispatchers.Default) { secretStore.loadMnemonic(kept) }
+            val engine = openEngine(mnemonic)
+            withContext(Dispatchers.Default) { remembered?.touch(RememberedPIN.nowSeconds()) }
+            onUnlocked(engine)
+        } catch (e: SecretStoreFailure.LockedOut) {
+            waitMs = e.remainingMs
+            phase = Phase.PIN
+        } catch (e: SecretStoreFailure.WrongPin) {
+            // Changed elsewhere: forget it and ask.
+            withContext(Dispatchers.Default) { remembered?.forget() }
+            waitMs = secretStore.lockoutRemainingMs()
+            phase = Phase.PIN
+        } catch (e: Exception) {
+            problem = e.message ?: "Could not open the account."
+            phase = Phase.PIN
+        }
+        working = false
     }
 
-    fun tryBiometric() {
+    fun biometricCheck() {
         val host = activity ?: return
+        if (working) return
         scope.launch {
-            working = true
-            try {
-                val mnemonic = BiometricUnlock.unlockWords(host, secretStore, "Unlock Peel", null)
-                if (mnemonic != null) open(mnemonic) else offerBiometric = secretStore.biometricEnrolled
-            } catch (e: Exception) {
-                problem = e.message ?: "Could not open the account."
-                offerBiometric = secretStore.biometricEnrolled
-            }
-            working = false
+            if (BiometricUnlock.check(host, "Unlock Peel")) openWithRemembered()
         }
     }
 
-    // Asks for the biometric straight away, once, when it is on and no PIN wait is due.
-    LaunchedEffect(Unit) { if (offerBiometric) tryBiometric() }
+    LaunchedEffect(Unit) {
+        val step = withContext(Dispatchers.Default) {
+            LockDecision.decide(
+                rememberedPinValid = remembered?.pin(RememberedPIN.nowSeconds()) != null,
+                biometricsEnabled = secretStore.biometricEnrolled,
+                biometricsAvailable = BiometricUnlock.available(context),
+            )
+        }
+        when (step) {
+            LockDecision.Step.AskPin -> phase = Phase.PIN
+            LockDecision.Step.OpenWithRememberedPin -> openWithRemembered()
+            LockDecision.Step.BiometricCover -> { phase = Phase.COVER; biometricCheck() }
+        }
+    }
 
-    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-        PinPrompt(
-            title = "Enter your PIN",
-            detail = if (waitMs > 0) "Too many wrong PINs. Try again in ${LockoutPolicy.describe(waitMs)}." else problem,
-            pin = pin,
-            onPinChange = { pin = it },
-            enabled = waitMs <= 0,
-            onComplete = {
-                working = true
-                // PBKDF2 at a deliberately slow iteration count: off the main
-                // thread, or the keypad would freeze (SecretStore.kt).
-                scope.launch {
-                    try {
-                        open(withContext(Dispatchers.Default) { secretStore.loadMnemonic(pin) })
-                    } catch (e: SecretStoreFailure.LockedOut) {
-                        waitMs = e.remainingMs
-                        problem = null
-                        pin = ""
-                    } catch (e: SecretStoreFailure.WrongPin) {
-                        waitMs = secretStore.lockoutRemainingMs()
-                        problem = "Wrong PIN"
-                        pin = ""
-                    } catch (e: Exception) {
-                        problem = e.message ?: "Could not open the account."
-                        pin = ""
+    when (phase) {
+        Phase.DECIDING -> Box(Modifier.fillMaxSize())
+        Phase.COVER -> Column(
+            Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text("Peel is locked", style = MaterialTheme.typography.titleLarge, color = Theme.colors.text)
+            TextButton(onClick = { biometricCheck() }, enabled = !working && activity != null) {
+                Text("Unlock with biometrics")
+            }
+        }
+        Phase.PIN -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+            PinPrompt(
+                title = "Enter your PIN",
+                detail = if (waitMs > 0) "Too many wrong PINs. Try again in ${LockoutPolicy.describe(waitMs)}." else problem,
+                pin = pin,
+                onPinChange = { pin = it },
+                enabled = waitMs <= 0,
+                onComplete = {
+                    working = true
+                    // PBKDF2 at a deliberately slow iteration count: off the main
+                    // thread, or the keypad would freeze (SecretStore.kt).
+                    scope.launch {
+                        try {
+                            val typed = pin
+                            val engine = openEngine(withContext(Dispatchers.Default) { secretStore.loadMnemonic(typed) })
+                            withContext(Dispatchers.Default) {
+                                remembered?.keep(typed, RememberedPIN.nowSeconds(), engine.pinTimeoutHours())
+                            }
+                            onUnlocked(engine)
+                        } catch (e: SecretStoreFailure.LockedOut) {
+                            waitMs = e.remainingMs
+                            problem = null
+                            pin = ""
+                        } catch (e: SecretStoreFailure.WrongPin) {
+                            waitMs = secretStore.lockoutRemainingMs()
+                            problem = "Wrong PIN"
+                            pin = ""
+                        } catch (e: Exception) {
+                            problem = e.message ?: "Could not open the account."
+                            pin = ""
+                        }
+                        working = false
                     }
-                    working = false
-                }
-            },
-            working = working,
-            modifier = Modifier.weight(1f, fill = false).padding(top = 80.dp),
-        )
-        if (offerBiometric && activity != null) {
-            TextButton(onClick = { tryBiometric() }, enabled = !working) { Text("Use biometrics") }
+                },
+                working = working,
+                modifier = Modifier.weight(1f, fill = false).padding(top = 80.dp),
+            )
         }
     }
 }
+
+private enum class Phase { DECIDING, PIN, COVER }

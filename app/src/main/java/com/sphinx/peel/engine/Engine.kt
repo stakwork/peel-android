@@ -1122,8 +1122,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// The official `pin_timeout` as stored (hours 0..25), if ever set or synced.
     fun pinTimeoutOfficialHours(): Int? = storage.value(Setting.PIN_TIMEOUT)?.toIntOrNull()?.let(PinTimeout::clampOfficial)
 
-    /// "Ask for the PIN", on Peel's scale (`PinTimeout`); default is at launch (0).
-    fun pinTimeoutHours(): Int = pinTimeoutOfficialHours()?.let(PinTimeout::peelHours) ?: 0
+    /// "Ask for the PIN", on Peel's scale (`PinTimeout`); default is a day (24).
+    fun pinTimeoutHours(): Int = pinTimeoutOfficialHours()?.let(PinTimeout::peelHours) ?: PinTimeout.DEFAULT
 
     fun setPinTimeout(peelHours: Int) = setPreference(PreferencesMerge.PIN_TIMEOUT, PinTimeout.officialHours(peelHours).toLong())
 

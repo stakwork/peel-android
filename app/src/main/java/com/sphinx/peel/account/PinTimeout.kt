@@ -8,12 +8,13 @@ package com.sphinx.peel.account
 /// file holds it. Peel's own scale (what the UI offers and these helpers
 /// speak) is `NEVER` (-1), 0, 1, 4, 12, 24.
 ///
-/// iOS semantics kept: launch ALWAYS asks (the PIN is not stored and the
-/// words need it, or a biometric release of the derived key); the timeout
-/// only governs RE-locking an already-open app after it has been idle.
-/// 0 and `NEVER` therefore both mean "no idle re-lock".
+/// The timeout is how long the PIN is remembered (`RememberedPIN`): within it
+/// the app opens without the PIN, even on a cold launch; 0 asks every time
+/// Peel opens, `NEVER` never asks again.
 object PinTimeout {
     const val NEVER = -1
+    /// What an account that never chose gets (iOS: "After a day").
+    const val DEFAULT = 24
     const val OFFICIAL_ALWAYS = 0
     const val OFFICIAL_NEVER = 25
     val OPTIONS = listOf(0, 1, 4, 12, 24)
@@ -32,9 +33,10 @@ object PinTimeout {
         if (fromPeel <= NEVER) OFFICIAL_NEVER else minOf(fromPeel, OFFICIAL_NEVER - 1)
 
     fun label(peelHours: Int): String = when {
-        peelHours <= NEVER -> "Never"
-        peelHours == 0 -> "At launch"
+        peelHours <= NEVER -> "Never ask for PIN"
+        peelHours == 0 -> "Every time Peel opens"
         peelHours == 1 -> "After 1 hour"
+        peelHours == 24 -> "After a day"
         else -> "After $peelHours hours"
     }
 
