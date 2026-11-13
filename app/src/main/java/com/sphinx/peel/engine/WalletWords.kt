@@ -83,6 +83,25 @@ object WalletWords {
     fun who(title: String, app: String, version: String, place: String, byOrg: Boolean): String =
         if (byOrg) "An app on $place, which calls itself $title" else "$title · $app@$version · $place"
 
+    /// The credit sheet's title (specs/WALLET.md §1.2).
+    fun creditTitle(sheet: WalletCreditSheet) = "Buy credit on ${sheet.host}?"
+
+    /// The app the launch is in, as the server names it.
+    fun creditApp(sheet: WalletCreditSheet) = "${sheet.title} · ${sheet.app}@${sheet.version}, as ${sheet.host} names it"
+
+    /// What the server says the payment buys: its own figure, never the price.
+    fun creditBuys(sheet: WalletCreditSheet, locale: java.util.Locale = java.util.Locale.getDefault()): String {
+        val dollars = java.text.NumberFormat.getCurrencyInstance(locale).apply { currency = java.util.Currency.getInstance("USD") }.format(sheet.usd)
+        return "$dollars of credit, by the server's own figure"
+    }
+
+    /// What credit is, under the sheet.
+    fun creditNote(sheet: WalletCreditSheet) =
+        "This buys credit on ${sheet.host}. Runs in this app spend it, and what a run does not use stays there."
+
+    /// The credit sheet's armed Pay (iOS `armedNote`).
+    const val CREDIT_ARMED_NOTE = "Check the amount, then confirm."
+
     /// The payment sheet's title.
     fun paymentTitle(sheet: WalletPaymentSheet) = "${sheet.title} asks to pay"
 }

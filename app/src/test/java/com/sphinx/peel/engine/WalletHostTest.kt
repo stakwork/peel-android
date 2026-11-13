@@ -52,6 +52,7 @@ private class FakePerson : WalletPerson {
         }
     }
     override suspend fun pay(sheet: WalletPaymentSheet) = false
+    override suspend fun buyCredit(sheet: WalletCreditSheet) = false
     override fun signedIn(host: String, key: SignInKey) { notices += host to key }
 }
 
@@ -84,7 +85,7 @@ class WalletHostTest {
         val r = host().handle(JSONObject().put("v", 1).put("op", "host_capability"), caller())
         val result = r.getJSONObject("result")
         assertEquals(1, result.getInt("version"))
-        assertEquals(JSONArray().put("sign_in").toString(), result.getJSONArray("ops").toString())
+        assertEquals(JSONArray(WalletHost.VISITOR_OPS).toString(), result.getJSONArray("ops").toString())
         assertEquals("Peel", result.getString("wallet"))
     }
 
@@ -321,7 +322,7 @@ class WalletHostTest {
         assertEquals(0, org.getJSONArray("ops").length())
         assertEquals("Peel", org.getString("wallet"))
         val origin = host().handle(ask, caller()).getJSONObject("result")
-        assertEquals(JSONArray().put("sign_in").toString(), origin.getJSONArray("ops").toString())
+        assertEquals(JSONArray(listOf("buy_credit", "buy_credit_status", "buy_credit_cancel", "sign_in")).toString(), origin.getJSONArray("ops").toString())
         assertEquals("Peel", origin.getString("wallet"))
     }
 
@@ -339,11 +340,16 @@ class WalletHostTest {
     }
 
     @Test fun creditIsNotBoughtForAnOrg() = runBlocking {
-        for (op in listOf("buy_credit", "buy_credit_status", "buy_credit_cancel")) {
+        for (op in listOf("buy_credit", "buy_credit_status")) {
             val r = host().handle(message(op), orgCaller())
             assertEquals(op, "RESTRICTED", r.code())
             assertEquals("Peel buys credit only for a public app it opened itself.", r.text())
         }
+    }
+
+    @Test fun anOrgPageCancelsNothing() = runBlocking {
+        // `buy_credit_cancel` can only take down the asking page's own sheet: for an org it is `{}`, as iOS answers.
+        assertEquals("{\"result\":{}}", host().handle(message("buy_credit_cancel").put("payment_hash", "a".repeat(64)), orgCaller()).toString())
     }
 
     @Test fun anOrgPageAsksTheSameWalletQuestions() = runBlocking {

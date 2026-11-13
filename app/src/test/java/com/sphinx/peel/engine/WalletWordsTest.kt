@@ -89,4 +89,12 @@ class WalletWordsTest {
         assertNull(storage.walletConnection("org:acme"))
         assertNull(storage.walletUsage("org:acme"))
     }
+
+    @Test fun `the credit sheet's words are iOS's`() {
+        val sheet = WalletCreditSheet("shop.example.com", "Voxel Studio", "acme/voxel", "v3", "acme/wf", 250_000_000, 250.0, "credit", 1)
+        assertEquals("Buy credit on shop.example.com?", WalletWords.creditTitle(sheet))
+        assertEquals("Voxel Studio · acme/voxel@v3, as shop.example.com names it", WalletWords.creditApp(sheet))
+        assertEquals("\$250.00 of credit, by the server's own figure", WalletWords.creditBuys(sheet, Locale.US))
+        assertEquals("This buys credit on shop.example.com. Runs in this app spend it, and what a run does not use stays there.", WalletWords.creditNote(sheet))
+    }
 }

@@ -85,6 +85,7 @@ sections for code that isn't written yet.
   - `engine/WalletProtocol.kt` (`checkParams`, `resultProblems`, `notificationProblems`, `connectionRequestProblems`, `WalletRefusal`), `AppPayments.kt` (`AppPayments`, `PaymentRunner`, `AppWallet`, `EngineWallet`) and
     `Payments.kt`'s `Engine.paymentRunner()`/`engineWallet()` — the app-payments engine over the core (`docs/phases/32-app-payments.md`).
   - `engine/WalletHost.kt` (`WalletHost`, `WalletConnectSheet`, `WalletPaymentSheet`, `WalletPerson`), `WalletWords.kt` — the wallet host over `EngineWallet` for every scope (`docs/phases/33-wallet-host.md`); `Engine.walletHost`. UI (6b): pure `engine/WalletSheetState.kt` (`ArmingGate`, `WalletPayStep`, `WalletConnectForm`, `ConnectedAppRow`), `ui/page/PhoneWalletSheets.kt` + `WalletSheets.kt` (connect and payment sheets), You › Connected apps in `ui/you/YouScreen.kt`.
+  - `engine/CreditPurchase.kt` (`CreditPurchase`, `CreditReply`, `HostCapability`), `WalletHost.kt` (`buy_credit*`, `WalletCreditSheet`, `creditKey`, sheet withdrawal) — buying a visitor's credit (`docs/phases/34-buy-credit.md`); sheet `WalletCreditPhoneSheet` in `ui/page/WalletSheets.kt`.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

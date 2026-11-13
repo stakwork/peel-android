@@ -92,6 +92,7 @@ internal class ScriptedPerson(private val absent: Boolean = false) : WalletPerso
     private val shownLog = Collections.synchronizedList(mutableListOf<String>())
     @Volatile var lastConnect: WalletConnectSheet? = null
     @Volatile var lastPayment: WalletPaymentSheet? = null
+    @Volatile var lastCredit: WalletCreditSheet? = null
     val notices = Collections.synchronizedList(mutableListOf<Pair<String, SignInKey>>())
 
     fun will(a: String?) { answer = a }
@@ -108,6 +109,12 @@ internal class ScriptedPerson(private val absent: Boolean = false) : WalletPerso
 
     override suspend fun pay(sheet: WalletPaymentSheet): Boolean {
         shownLog += "payment"; lastPayment = sheet
+        if (absent) kotlinx.coroutines.awaitCancellation()
+        return answer == "approve"
+    }
+
+    override suspend fun buyCredit(sheet: WalletCreditSheet): Boolean {
+        shownLog += "credit"; lastCredit = sheet
         if (absent) kotlinx.coroutines.awaitCancellation()
         return answer == "approve"
     }

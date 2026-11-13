@@ -54,6 +54,7 @@ class OrgWalletBridgeTest {
             return WalletConnectAnswer.asAsked(sheet)
         }
         override suspend fun pay(sheet: WalletPaymentSheet) = false
+        override suspend fun buyCredit(sheet: com.sphinx.peel.engine.WalletCreditSheet) = false
         override fun signedIn(host: String, key: SignInKey) {}
     }
 
@@ -132,7 +133,8 @@ class OrgWalletBridgeTest {
     @Test fun `a public page is answered at its origin with the scope and place Peel recorded`() {
         val b = bridge(public)
         val cap = answer(b, message(3, hostCapability()), origin = "https://shop.example.com", current = "https://shop.example.com/x")
-        assertEquals("sign_in", cap.reply().getJSONObject("result").getJSONArray("ops").getString(0))
+        val ops = cap.reply().getJSONObject("result").getJSONArray("ops")
+        assertEquals(listOf("buy_credit", "buy_credit_status", "buy_credit_cancel", "sign_in"), List(ops.length()) { ops.getString(it) })
         // The sign-in sheet names the host Peel loaded, and the connection is kept under the origin's key.
         val r = answer(b, message(4, signIn()), origin = "https://shop.example.com", current = "https://shop.example.com/x")
         assertEquals("sig-root", r.reply().getJSONObject("result").getString("sig"))
