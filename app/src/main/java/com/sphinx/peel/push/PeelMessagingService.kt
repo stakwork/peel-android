@@ -31,7 +31,9 @@ class PeelMessagingService : FirebaseMessagingService() {
         val engine = PushRegistrar.activeEngine()
         val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
         val plan = PushPlan.decide(engineOpen = engine != null, connected = engine?.let { it.isOnline || it.connectionState.value == ConnectionState.Connecting } == true, foreground = foreground)
-        if (plan.reconnect) engine?.resume()
+        // Reconnecting resumes an unfinished restore too (`afterConnect`); an open connection
+        // may still have one that stalled or was cut short.
+        if (plan.reconnect) engine?.resume() else engine?.resumeRestoreIfNeeded()
         if (!plan.postResolved) return
         val data = message.data
         if (isBadgeOnly(data)) return

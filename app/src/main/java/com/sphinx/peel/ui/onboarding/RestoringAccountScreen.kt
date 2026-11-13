@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -113,6 +114,8 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
         if (failed != null) {
             Spacer(Modifier.height(16.dp))
             Text(failed, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = { engine.resumeRestoreIfNeeded() }) { Text("Resume") }
         }
 
         Spacer(Modifier.weight(1f))

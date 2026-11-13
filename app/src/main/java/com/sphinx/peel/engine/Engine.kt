@@ -20,6 +20,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -159,8 +160,21 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// same as PeelUI's `AppModel.attach` does with its own account tasks.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var started = false
-    /// A restore is paging right now: a second `start`/`resume` must not run another.
+    /// A restore is paging right now (set while [restoreBody] runs, cleared in its `finally`).
     @Volatile private var restoreRunning = false
+    /// The restore in flight, if any: `resume`/`reconnectLoop` cancel it (its cursor is already
+    /// kept) and `afterConnect` starts a new one on the new connection ([runRestore]).
+    @Volatile private var restoreJob: Job? = null
+    /// When the restore last made progress (a page or the counts answered), for
+    /// [resumeRestoreIfNeeded].
+    @Volatile private var restoreProgressAt = 0L
+    /// The highest server index of the history page the listener last left unread chunks out
+    /// of (-1: none), so `page` still moves past the whole page.
+    @Volatile private var skippedThrough = -1L
+    /// A message the listener could not handle (the core refused it, storage failed), for the
+    /// history asks waiting on an answer that will now never come: they fail at once rather than
+    /// after [historyWaitMs].
+    private val inboundFaults = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
     /// Called after each successful (re)connect, once registered and caught
     /// up — where `PushRegistrar` registers the push token (iOS:
@@ -495,34 +509,68 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val connection = transport ?: return
         scope.launch {
             connection.inbound().collect { message ->
-                val startedAt = SystemClock.elapsedRealtime()
-                val handled = mutex.withLock {
-                    val handleTime = clock.next()
-                    val result = coreHandle(
-                        message.topic, message.payload, seed, handleTime, StateCodec.encode(state),
-                        storage.value(Setting.ALIAS) ?: "", storage.value(Setting.PHOTO_URL) ?: "",
-                    )
-                    commitLocked(result, handleTime)
-                    answerKeyExchange(result)
-                    result
+                // One message the core refuses, or a storage error, must not end the
+                // collector: every later answer (the same restore page asked again) would
+                // then go unheard for good.
+                try {
+                    handleInbound(message)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("PeelEngine", "handling an inbound message failed", e)
+                    inboundFaults.tryEmit(e.message ?: e.javaClass.simpleName)
                 }
-                // Every inbound message, live or a restore's own page answer
-                // alike: whichever `askAndAwait` is waiting on this one (if
-                // any) reads the same already-stored result once it gets it
-                // below, not a second copy — `storeMessages` is the one
-                // place this happens now.
-                val handledAt = SystemClock.elapsedRealtime()
-                storeMessages(handled)
-                if (handled.msgs.isNotEmpty()) {
-                    Log.d("PeelHistory", "${handled.msgs.size} msgs: core handle+commit ${handledAt - startedAt}ms, store ${SystemClock.elapsedRealtime() - handledAt}ms")
-                    onIncoming?.let { notify ->
-                        val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe }
-                        if (rows.isNotEmpty()) runCatching { notify(rows) }
-                    }
-                }
-                inboundResults.emit(handled)
             }
         }
+    }
+
+    /// One inbound message: through the core's `handle`, committed, answered if it is a key
+    /// exchange, stored and broadcast on [inboundResults].
+    private suspend fun handleInbound(message: Inbound) {
+        val startedAt = SystemClock.elapsedRealtime()
+        val handled = mutex.withLock {
+            val handleTime = clock.next()
+            val stateBytes = StateCodec.encode(state)
+            val alias = storage.value(Setting.ALIAS) ?: ""
+            val photoUrl = storage.value(Setting.PHOTO_URL) ?: ""
+            val result = try {
+                coreHandle(message.topic, message.payload, seed, handleTime, stateBytes, alias, photoUrl)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A history page is a batch of per-message chunks and the core refuses the
+                // whole page for one it cannot read: give it the page again without those
+                // (`HistoryPage.readablePart`, iOS `readablePart`), so the cursor advances
+                // past the page. Anything that is not such a page is thrown as it came
+                // (the listener's catch turns it into a fault the history asks fail on).
+                val (read, left) = HistoryPage.readablePart(message.payload, e) { page ->
+                    coreHandle(message.topic, page, seed, handleTime, stateBytes, alias, photoUrl)
+                }
+                if (left.isNotEmpty()) {
+                    skippedThrough = maxOf(skippedThrough, left.last()) // `left` is sorted
+                    Log.w("PeelHistory", "skipped messages in history that could not be read (server index ${left.joinToString(", ")})", e)
+                }
+                read
+            }
+            commitLocked(result, handleTime)
+            answerKeyExchange(result)
+            result
+        }
+        // Every inbound message, live or a restore's own page answer
+        // alike: whichever `askAndAwait` is waiting on this one (if
+        // any) reads the same already-stored result once it gets it
+        // below, not a second copy — `storeMessages` is the one
+        // place this happens now.
+        val handledAt = SystemClock.elapsedRealtime()
+        storeMessages(handled)
+        if (handled.msgs.isNotEmpty()) {
+            Log.d("PeelHistory", "${handled.msgs.size} msgs: core handle+commit ${handledAt - startedAt}ms, store ${SystemClock.elapsedRealtime() - handledAt}ms")
+            onIncoming?.let { notify ->
+                val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe }
+                if (rows.isNotEmpty()) runCatching { notify(rows) }
+            }
+        }
+        inboundResults.emit(handled)
     }
 
     /// The core's reply to someone adding this account (their type-10 message): the key
@@ -1690,9 +1738,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// it, for an inbound result matching `expect` — the shape every
     /// restore call takes: the real answer is not the ask's own return
     /// value, it is whatever the server publishes back later. Null on
-    /// [timeoutMs] with nothing matching.
+    /// [timeoutMs] with nothing matching. With [failOnFault] (the history asks), a message the
+    /// listener could not handle in the meantime throws at once ([inboundFaults]): the answer
+    /// being waited for may be that message, and waiting out [timeoutMs] for it would be 30 s lost.
     internal suspend fun askAndAwait(
         timeoutMs: Long,
+        failOnFault: Boolean = false,
         expect: (RunReturn) -> Boolean,
         ask: suspend () -> RunReturn,
     ): RunReturn? = withTimeoutOrNull(timeoutMs) {
@@ -1700,8 +1751,19 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // Subscribed before the ask goes out: the flow has no replay, so an
             // answer beating a lazily scheduled collector would be lost (30 s wait).
             val waiter = async(start = CoroutineStart.UNDISPATCHED) { inboundResults.first(expect) }
-            ask()
-            waiter.await()
+            val fault = if (failOnFault) {
+                launch(start = CoroutineStart.UNDISPATCHED) {
+                    throw IllegalStateException("A message from the server could not be read: ${inboundFaults.first()}")
+                }
+            } else {
+                null
+            }
+            try {
+                ask()
+                waiter.await()
+            } finally {
+                fault?.cancel()
+            }
         }
     }
 
@@ -1833,15 +1895,44 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// a frozen/killed process never gets the chance), so this always
     /// reconnects first rather than trust [Transport.isConnected]. A
     /// no-op before `start()` has ever run. Supersedes a drop
-    /// [reconnectLoop] is already retrying, not a second one alongside it.
+    /// [reconnectLoop] is already retrying, not a second one alongside it,
+    /// and a restore in flight: its cursor is already kept, and
+    /// [afterConnect] runs it again on the new connection (a restore's
+    /// own `resume` used to be refused, which left one that had stalled
+    /// on a dead connection stalled).
     fun resume() {
-        if (!started || restoreRunning) return
+        if (!started) return
         reconnectJob?.cancel()
-        scope.launch {
+        restoreJob?.cancel()
+        reconnectJob = scope.launch {
             disconnect()
             if (!connectAndRegister()) return@launch
             afterConnect()
             runCatching { syncPreferences() }
+        }
+    }
+
+    /// Picks a restore up where its cursor stands, when one is unfinished
+    /// (`NEEDS_RESTORE`) and none is making progress (a page or the counts
+    /// answered within [historyWaitMs]) — PeelCore's `resumeHistory`, asked
+    /// for by a push waking the app, the network changing, or the restore
+    /// screen's Resume. Offline (or with a restore that has stalled on a
+    /// connection that looks alive) it reconnects first, whose
+    /// [afterConnect] runs the restore. A no-op before `start()`, after
+    /// `stop()`, and while a connect is already running.
+    fun resumeRestoreIfNeeded() {
+        if (!started || !keepConnected) return
+        scope.launch {
+            if (storage.value(Setting.NEEDS_RESTORE) != "1") return@launch
+            val connection = connectionStateFlow.value
+            if (connection == ConnectionState.Connecting) return@launch
+            val running = restoreJob?.isActive == true
+            val stalled = SystemClock.elapsedRealtime() - restoreProgressAt >= historyWaitMs
+            when {
+                running && !stalled -> Unit
+                connection != ConnectionState.Connected || running -> resume()
+                else -> caughtUp = runRestore()
+            }
         }
     }
 
@@ -1864,6 +1955,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// drop — see `Transport`'s own doc comment on why HiveMQ's built-in
     /// `automaticReconnect()` is not used instead.
     private suspend fun reconnectLoop() {
+        // A restore still waiting on the dead connection stops here (its cursor is kept);
+        // afterConnect runs it again on the new one.
+        restoreJob?.cancel()
         var attempt = 1
         while (keepConnected) {
             val retryInSeconds = minOf(30, 1 shl minOf(attempt - 1, 5))
@@ -1934,7 +2028,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// The device came online or changed network (`ConnectionWatcher`): a
     /// connection that lived through a network change is usually dead
     /// though nothing has said so yet, so this reconnects, now. Not while
-    /// a connect is already running.
+    /// a connect is already running. `resume` also restarts an unfinished
+    /// restore, from its cursor (`afterConnect`).
     fun networkChanged() {
         if (connectionStateFlow.value == ConnectionState.Connecting) return
         resume()
@@ -2094,10 +2189,40 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// next `start()`/`resume()` runs it again from the cursor. Everything
     /// after a successful finish is the same for a fresh and a resumed one.
     private suspend fun runRestore(): Boolean {
-        if (restoreRunning) return false
+        // One at a time: whatever is still running is superseded (its cursor is kept),
+        // this one picks up from it. Not `restoreRunning`'s early return, which left a
+        // restore stalled on a dead connection stalled.
+        restoreJob?.cancelAndJoin()
+        val job = scope.async { restoreBody() }
+        restoreJob = job
+        val finished = try {
+            job.await()
+        } catch (e: CancellationException) {
+            // The restore was cancelled (resume, reconnectLoop): not a failure, the
+            // new connection's afterConnect runs it again. Otherwise this caller
+            // itself was cancelled: it takes the restore down with it.
+            if (!job.isCancelled) throw e
+            return false
+        }
+        if (finished) {
+            // History is stored: the account's own name/photo first (best
+            // effort), then the reads pass, which needs the rebuilt contacts.
+            runCatching { recoverOwnProfile() }.onFailure { Log.w("PeelHistory", "recovering own profile failed", it) }
+            runCatching { settleReadsAfterRestore() }.onFailure { Log.w("PeelHistory", "settling reads failed", it) }
+            // Our restored sends carry no status: the server's record of
+            // each, by its tag, says how it went (PeelCore's `historyEnded`).
+            runCatching { checkPendingSends() }.onFailure { Log.w("PeelHistory", "checking restored sends failed", it) }
+            runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
+        }
+        return finished
+    }
+
+    /// The cancellable part of [runRestore]: the pages themselves, up to and including
+    /// marking the restore finished. A cancellation is rethrown, never marked Failed.
+    private suspend fun restoreBody(): Boolean {
         restoreRunning = true
+        restoreProgressAt = SystemClock.elapsedRealtime()
         restoreProgressFlow.update { it.copy(outcome = null) }
-        var finished = false
         try {
             var cursor = RestoreCursor.decode(storage.value(Setting.RESTORE_CURSOR))
             if (cursor != null) {
@@ -2115,34 +2240,46 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 ),
             )
             restoreProgressFlow.update { it.copy(restoring = false, outcome = RestoreOutcome.Finished) }
-            finished = true
+            return true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             restoreProgressFlow.update { it.copy(outcome = RestoreOutcome.Failed(e.message ?: "Restoring stopped.")) }
+            return false
         } finally {
             restoreRunning = false
         }
-        if (finished) {
-            // History is stored: the account's own name/photo first (best
-            // effort), then the reads pass, which needs the rebuilt contacts.
-            runCatching { recoverOwnProfile() }.onFailure { Log.w("PeelHistory", "recovering own profile failed", it) }
-            runCatching { settleReadsAfterRestore() }.onFailure { Log.w("PeelHistory", "settling reads failed", it) }
-            // Our restored sends carry no status: the server's record of
-            // each, by its tag, says how it went (PeelCore's `historyEnded`).
-            runCatching { checkPendingSends() }.onFailure { Log.w("PeelHistory", "checking restored sends failed", it) }
-            runCatching { refreshTribeNames() }.onFailure { Log.w("PeelHistory", "refreshing tribes failed", it) }
-        }
-        return finished
+    }
+
+    /// Drops the connection on purpose, the way a failed ping does (PeelCore's
+    /// `dropOnPurpose`): a history ask nothing answered usually means a
+    /// connection that looks alive and is not. [reconnectLoop] then connects
+    /// again — after its own backoff, so a persistent stall is a retry every
+    /// few seconds at worst, not a storm — and [afterConnect] resumes the
+    /// restore from its cursor.
+    private suspend fun dropOnPurpose() {
+        if (!keepConnected) return
+        Log.w("PeelHistory", "no answer from the server for ${historyWaitMs / 1000} seconds: reconnecting")
+        transport?.let { runCatching { it.close() } }
+        // Not `onConnectionDropped`: its guard ignores a drop while a reconnect job is
+        // active, and the job that connected this restore is still active (it is
+        // running the restore). Superseding it is what `resume` does too.
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch { reconnectLoop() }
     }
 
     /// Asks the server what it holds and plans the restore from that; the
     /// plan is kept at once so even the first page's failure resumes.
     private suspend fun planRestore(): RestoreCursor? {
         restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, null)) }
-        val countsAnswer = askAndAwait(historyWaitMs, expect = { it.msgsCounts != null }) {
+        val countsAnswer = askAndAwait(historyWaitMs, failOnFault = true, expect = { it.msgsCounts != null }) {
             run { time, stateBytes -> coreGetMsgsCounts(seed, time, stateBytes) }
-        } ?: throw IllegalStateException("The server did not report your message history. Will retry.")
+        }
+        if (countsAnswer == null) {
+            dropOnPurpose()
+            throw IllegalStateException("The server did not report your message history. Will retry.")
+        }
+        restoreProgressAt = SystemClock.elapsedRealtime()
         val counts = parseCounts(countsAnswer.msgsCounts)
             ?: throw IllegalStateException("The server's counts could not be read. Will retry.")
         // An item count, not the highest server index (that only says when
@@ -2178,6 +2315,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             phase, cursor.end, cursor.next.toULong(),
             total = if (contactsRun) total else null,
             restored = if (contactsRun) cursor.fetched else 0,
+            dropOnStall = true,
             onPage = { next, items ->
                 current = current.advanced(next.toLong() - 1, items)
                 keepCursor(current)
@@ -2197,6 +2335,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             val people = parseContactPubkeys(coreListContacts(StateCodec.encode(state)))
             personKeys = people.toSet()
             storage.markContactsReady(people)
+            // The first getReads (afterConnect) was skipped while restoring, as no contact
+            // existed to hold its markers: ask now, so a half-restored account is not all
+            // unread. Best effort; the restore's end asks again.
+            runCatching { fetchReadsAndMutesAwaiting() }.onFailure { Log.w("PeelHistory", "reading read markers after contacts failed", it) }
             val done = total ?: current.fetched
             restoreProgressFlow.update { it.copy(contacts = RestoreCount(done, done)) }
         }
@@ -2324,21 +2466,26 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// number of messages fetched so far out of it, not a server index. Starts at [start] (0 for a restore's own phases; where
     /// this device's history already stands, for a catch-up — see
     /// `catchUpMessages`). Stops on no answer in [historyWaitMs] (PeelCore's
-    /// watchdog, simplified to "stop" rather than "resume later"), an
-    /// empty page (the server has nothing more for this phase), or once
-    /// `next` passes `end`.
+    /// watchdog: with [dropOnStall], a restore's, the connection is also
+    /// dropped on purpose so it reconnects and resumes from the cursor), an
+    /// empty page with no `end` ahead (`RestorePage.verdict`: before `end` an
+    /// empty page is a page lost, asked again a couple of times, then
+    /// thrown so the run fails and resumes), or once `next` passes `end`.
+    /// A stale reply (below `next`) is ignored: `next` never moves backwards.
     private suspend fun page(
         phase: HistoryPhase,
         end: Long?,
         start: ULong = 0uL,
         total: Long? = null,
         restored: Long = 0,
+        dropOnStall: Boolean = false,
         onPage: (next: ULong, items: Long) -> Unit = { _, _ -> },
         call: (String, ByteArray, ULong) -> RunReturn,
     ): Boolean {
         var next = start
         var restored = restored
         if (end != null && next > end.toULong()) return true
+        var retries = 0
         while (true) {
             // Timed deliberately: the protocol gives a history page no
             // request id (`HistoryCursor.advance`'s own comment on
@@ -2350,14 +2497,32 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // actually is slower than the iPhone's for a reason that *can*
             // be fixed (docs/phases/03-restoring.md, "Open").
             val askedAt = SystemClock.elapsedRealtime()
-            val result = askAndAwait(historyWaitMs, expect = { it.msgsTotal != null }) {
+            skippedThrough = -1L
+            val result = askAndAwait(historyWaitMs, failOnFault = dropOnStall, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
             }
             Log.d("PeelHistory", "$phase page at $next: ${if (result == null) "timed out" else "${result.msgs.size} msgs"} in ${SystemClock.elapsedRealtime() - askedAt}ms")
-            if (result == null) return false
+            if (result == null) {
+                if (dropOnStall) dropOnPurpose()
+                return false
+            }
+            restoreProgressAt = SystemClock.elapsedRealtime()
             // Already stored: the same listener that delivered this result
-            // to askAndAwait ran it through `storeMessages` first.
-            val reached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
+            // to askAndAwait ran it through `storeMessages` first. A message the
+            // core refused was left out of it (`handleInbound`) but its index still
+            // counts as reached: the cursor moves past the whole page.
+            val storedReached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
+            val reached = listOfNotNull(storedReached?.toLong(), skippedThrough.takeIf { it >= 0 }).maxOrNull()?.toULong()
+            when (RestorePage.verdict(reached?.toLong(), next.toLong(), end)) {
+                PageVerdict.RETRY -> {
+                    if (++retries > RestorePage.MAX_RETRIES) {
+                        throw IllegalStateException("The server's history ended early at ${next.toLong()}. Will retry.")
+                    }
+                    continue
+                }
+                PageVerdict.END -> Unit
+                PageVerdict.ADVANCE -> retries = 0
+            }
             restored += result.msgs.size
             val progress = if (total != null) RestoreCount(minOf(restored, total), total) else RestoreCount((reached ?: next).toLong(), end)
             restoreProgressFlow.update {
