@@ -415,7 +415,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     suspend fun callTicket(link: CallLink): CallTicket {
         val alias = storage.value(Setting.ALIAS)?.trim()?.takeIf { it.isNotEmpty() } ?: "Peel user"
         val photo = storage.value(Setting.PHOTO_URL)?.takeIf { it.startsWith("https://") }
-        return callConnection(link).ticket(link, alias, photo)
+        // Either way, so a device of this account that joins later can take the call over.
+        return callConnection(link).ticket(link, alias, photo).copy(handoff = CallHandoff(seed))
     }
 
     /// The publish half of `run`: whatever a result's `subscriptionTopics`,

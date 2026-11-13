@@ -3,6 +3,7 @@ package com.sphinx.peel.ui.dashboard
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import com.sphinx.peel.engine.TalkHome
+import com.sphinx.peel.engine.CallDevices
 import com.sphinx.peel.engine.CallSwitch
 import com.sphinx.peel.ui.call.PendingCall
 import com.sphinx.peel.ui.toast.LocalToast
@@ -206,6 +207,21 @@ fun MainTabs(
                 }) { Text("Leave and join") }
             },
             dismissButton = { TextButton(onClick = { pendingCall = null }) { Text("Stay") } },
+        )
+    }
+
+    // The call being joined is on another device of this account too: asked before anything connects (iOS wording).
+    if (CallController.choosingDevice != null) {
+        AlertDialog(
+            onDismissRequest = { CallController.answerDeviceChoice(CallController.DeviceChoice.CANCEL) },
+            title = { Text(CallDevices.QUESTION) },
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.SWITCH) }) { Text(CallDevices.SWITCH) }
+                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.STAY) }) { Text(CallDevices.STAY) }
+                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.CANCEL) }) { Text(CallDevices.CANCEL) }
+                }
+            },
         )
     }
 

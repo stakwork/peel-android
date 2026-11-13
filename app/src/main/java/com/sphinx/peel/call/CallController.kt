@@ -12,12 +12,16 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.sphinx.peel.engine.CallDevices
 import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.CallParticipant
+import com.sphinx.peel.engine.CallPresence
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.TalkHome
 import com.sphinx.peel.push.Notifications
 import com.sphinx.peel.ui.call.CallConnectionState
 import com.sphinx.peel.ui.call.CallPhase
+import com.sphinx.peel.ui.call.PendingCall
 import com.sphinx.peel.ui.call.CallSession
 import com.sphinx.peel.ui.call.camera
 import com.sphinx.peel.ui.call.chat
@@ -28,7 +32,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -143,6 +150,9 @@ object CallController {
     /// for first, then the service starts (Peel is on screen), then the ticket is
     /// fetched and the room joined. Any call already on is left.
     fun connect(engine: Engine, chat: String, title: String, link: CallLink, camera: Boolean) {
+        answerDeviceChoice(DeviceChoice.CANCEL)
+        // This device's own earlier identity on the room, which the presence feed may still list.
+        val mine = activeSession()?.takeIf { it.link.room == link.room }?.ticket?.identity
         dropGroupSession()
         val requested = CallPhase.Connecting(chat, title, link, camera)
         phase = requested
@@ -162,12 +172,31 @@ object CallController {
                 val ticket = engine.callTicket(link)
                 // Stale by the time the ticket came back (left, or moved on).
                 if (phase !== requested) return@launch
+                // Another device of this account is already on the call: asked before anything connects.
+                var stay = false
+                if (CallDevices.otherDevice(presenceSnapshot(engine, link), ticket, mine)) {
+                    when (askAboutOtherDevice(PendingCall(chat, title, link, camera))) {
+                        DeviceChoice.CANCEL -> {
+                            if (phase === requested) {
+                                phase = null
+                                callScreenShown = false
+                                finishIfIdle()
+                            }
+                            return@launch
+                        }
+                        DeviceChoice.STAY -> stay = true
+                        DeviceChoice.SWITCH -> {}
+                    }
+                    if (phase !== requested) return@launch
+                }
                 val session = CallSession(
                     app, ticket, link, chat, title, video,
                     askMicPermission = { askPermission(Manifest.permission.RECORD_AUDIO) },
                     askCameraPermission = { askPermission(Manifest.permission.CAMERA) },
+                    stay = stay,
                 )
                 session.onStatus = ::callChanged
+                session.onMovedAway = { movedAway(session) }
                 phase = CallPhase.Active(session)
                 CallService.refresh()
             } catch (e: Exception) {
@@ -183,8 +212,53 @@ object CallController {
         connect(engine, failed.chat, failed.title, failed.link, failed.camera)
     }
 
+    // MARK: - Another device of this account on the call
+
+    enum class DeviceChoice { SWITCH, STAY, CANCEL }
+
+    /// The join waiting for the person's choice about their other device (`MainTabs` shows it); null: none.
+    var choosingDevice by mutableStateOf<PendingCall?>(null)
+        private set
+    private var deviceChoice: CompletableDeferred<DeviceChoice>? = null
+
+    private suspend fun askAboutOtherDevice(pending: PendingCall): DeviceChoice {
+        answerDeviceChoice(DeviceChoice.CANCEL)
+        val answer = CompletableDeferred<DeviceChoice>()
+        deviceChoice = answer
+        choosingDevice = pending
+        return answer.await()
+    }
+
+    /// The person's answer ("Switch to this device", "Stay on both devices", or Cancel / dismissed).
+    fun answerDeviceChoice(choice: DeviceChoice) {
+        choosingDevice = null
+        val waiting = deviceChoice
+        deviceChoice = null
+        waiting?.complete(choice)
+    }
+
+    /// Who is on the call, from the first word of the presence feed that says so, or null if it says nothing in
+    /// [CallDevices.PRESENCE_WAIT_MS] (PeelCore's `CallStore.snapshot`).
+    private suspend fun presenceSnapshot(engine: Engine, link: CallLink): List<CallParticipant>? =
+        withTimeoutOrNull(CallDevices.PRESENCE_WAIT_MS) {
+            engine.callPresence(link).first { it !is CallPresence.Unknown }.let { it.people() ?: emptyList() }
+        }
+
+    /// Another device on this account joined the call: it keeps it, and this one leaves, saying so for 5 s.
+    private fun movedAway(session: CallSession) {
+        if (activeSession() !== session) return
+        leave()
+        val moved = CallNotice(CallDevices.MOVED_NOTICE, error = false)
+        notice = moved
+        scope.launch {
+            delay(CallDevices.MOVED_NOTICE_MS)
+            if (notice === moved) dismissNotice()
+        }
+    }
+
     /// Leaves the group call (Leave on the screen or banner).
     fun leave() {
+        answerDeviceChoice(DeviceChoice.CANCEL)
         dropGroupSession()
         phase = null
         callScreenShown = false
