@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.dashboard
 
+import com.sphinx.peel.engine.AgentMessages
+import com.sphinx.peel.engine.TEXT_MESSAGE_TYPE
+import com.sphinx.peel.ui.apps.AgentArtifactLines
 import android.content.Intent
 import android.webkit.MimeTypeMap
 import com.sphinx.peel.R
@@ -1410,6 +1413,15 @@ private fun MessageRowView(
                     myAliases = mentionAliases,
                     modifier = Modifier.alpha(if (SendRetry.isSending(row, sendNow)) 0.6f else 1f),
                 )
+            }
+            // What an agent's reply points to (the agent's DM: `metadata.peel.artifacts`), or what a member's post points to from
+            // strut's own entries (a tribe: `metadata.strut`, Jamie's deliverables, an app asking first): one quiet line each.
+            // Whoever sent it wrote it: never yours, never a deleted message.
+            if (!row.fromMe && !row.deleted && row.type == TEXT_MESSAGE_TYPE && (isAgent || isTribe)) {
+                val artifacts = remember(row.body, isAgent, isTribe) {
+                    if (isAgent) AgentMessages.artifacts(row.body) else AgentMessages.strutArtifacts(row.body)
+                }
+                if (artifacts.isNotEmpty()) AgentArtifactLines(artifacts, Modifier.padding(top = 2.dp), inTribe = !isAgent)
             }
             // Failed, or pending past the 30 s confirmation timeout and
             // unable to have paid: Retry and Discard (`SendRetry`).
