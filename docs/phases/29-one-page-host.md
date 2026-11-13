@@ -33,7 +33,7 @@ strut itself is not on this machine, so strut's `kit/src/wallet/relay.ts` was no
 - **`ui/apps/OrgPageHost.kt`**: `OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose)`, the step 1 host made generic; installs the bridge, collects
   `wallet.notifications`, shows the wallet's sheet and its notice. **`ui/page/PublicPageScreen.kt` is deleted**; `MainActivity` opens `PublicPage(link)` in
   `OrgPageScreen` (the router is unchanged, it still holds the link); `AppsScreen(wallet, …)` opens an org's.
-- **`ui/page/SignInSheet.kt`**: `SignInSheets` → `PhoneWalletSheets` (iOS name) with `toast`/`show(words)` (2.5 s, announced to TalkBack): the one mechanism for
+- **`ui/page/PhoneWalletSheets.kt` (was `SignInSheet.kt`)**: `SignInSheets` → `PhoneWalletSheets` (iOS name) with `toast`/`show(words)` (2.5 s, announced to TalkBack): the one mechanism for
   "a connection did something with no sheet" (the silent sign-in notice). The old app-wide `LocalToast` use for sign-in is gone.
 
 ## Differences from iOS

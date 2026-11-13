@@ -75,7 +75,7 @@ import com.sphinx.peel.engine.PhonePage
 import com.sphinx.peel.engine.WalletHost
 import com.sphinx.peel.engine.StrutWallet
 import com.sphinx.peel.ui.page.PhoneWalletSheets
-import com.sphinx.peel.ui.page.SignInSheet
+import com.sphinx.peel.ui.page.WalletSheets
 import com.sphinx.peel.engine.OrgPageRules
 import com.sphinx.peel.engine.OrgRequest
 import com.sphinx.peel.ui.theme.Theme
@@ -424,7 +424,7 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
     LaunchedEffect(controller) { wallet.notifications.collect { controller.wallet?.push(it) } }
     DisposableEffect(controller) {
         onDispose {
-            sheets.dismiss()
+            sheets.close()
             controller.close()
         }
     }
@@ -484,7 +484,7 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
             }
         }
     }
-    sheets.ask?.let { ask -> SignInSheet(ask) { sheets.answer(it) } }
+    WalletSheets(sheets)
     controller.notice?.let { notice ->
         AlertDialog(
             onDismissRequest = { controller.notice = null },
