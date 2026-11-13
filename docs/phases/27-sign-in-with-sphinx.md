@@ -44,7 +44,7 @@ A stranger's public strut app opens in a WebView from `peel://open?url=<address>
 - **`Storage` v13** `wallet_connection(key, app, title, place, methods, signIn, createdAt)` (iOS `walletConnection` with its v34
   `signIn`): `walletConnection`, `saveWalletConnection`, `deleteWalletConnection`, `walletConnections`, and a
   `walletConnectionsVersion` flow. Key for a stranger's page: `origin:<origin>`. Revoking deletes the row.
-- **`ui/page/`**: `PublicPageScreen` (full-screen overlay: close button, the host as title, JS + DOM storage on, file/content
+- **`ui/page/`** (the page itself moved to the one host in phase 29): `PublicPageScreen` (full-screen overlay: close button, the host as title, JS + DOM storage on, file/content
   access off, navigation policy as iOS (see Differences), a tap in the page = `personActed` for 5 s,
   cookies/web storage/cache cleared before and after the visit), `SignInSheet` (iOS `WalletWords` copy; radio list, one note for the chosen key; confirm off
   for 700 ms; Back = decline; outside tap does nothing), `SignInSheets` (the `WalletPerson`), `PublicPageRouter` (open now when

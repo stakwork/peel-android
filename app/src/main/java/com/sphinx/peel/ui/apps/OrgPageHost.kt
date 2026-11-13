@@ -41,6 +41,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,7 +71,11 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.sphinx.peel.engine.OrgDownloads
 import com.sphinx.peel.engine.OrgNavigation
-import com.sphinx.peel.engine.OrgPageRequest
+import com.sphinx.peel.engine.PhonePage
+import com.sphinx.peel.engine.WalletHost
+import com.sphinx.peel.engine.StrutWallet
+import com.sphinx.peel.ui.page.PhoneWalletSheets
+import com.sphinx.peel.ui.page.SignInSheet
 import com.sphinx.peel.engine.OrgPageRules
 import com.sphinx.peel.engine.OrgRequest
 import com.sphinx.peel.ui.theme.Theme
@@ -78,7 +84,7 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-/// The org-page host: the web view that opens a workspace's app, as iOS's `OrgPageSheet` does (see
+/// The page host: the web view that opens a workspace's app or a stranger's public app, as iOS's `OrgPageSheet` does (see
 /// `docs/phases/28-org-page-host.md`). What it decides is plain rules in `engine/OrgPage.kt` and `engine/OrgPageRules.kt`
 /// (JVM-tested); this file only applies them to Android's web view.
 
@@ -86,7 +92,7 @@ import kotlinx.coroutines.launch
 /// download to share, a download that failed, and which app it shows. Holds the web view for the actions of its toolbar; owns
 /// the folders downloads are saved in (iOS `OrgPageController`).
 class OrgPageController(
-    val page: OrgPageRequest,
+    val page: PhonePage,
     val downloads: OrgDownloads,
     private val scope: CoroutineScope,
     /// The per-page profile the web view's data lives in, when this device's WebView has profiles (deleted with the page).
@@ -103,6 +109,10 @@ class OrgPageController(
     var notice by mutableStateOf<String?>(null)
     /// The page shows an app other than the one it opened with: a link in it opened that one here.
     var showsAnotherApp by mutableStateOf(false)
+    /// The app wallet's handler on this page, when the host has one to give ([OrgWalletBridge]).
+    var wallet: OrgWalletBridge? = null
+    /// Whether this device's web view could take the wallet's bridge; a public page tells the person when it could not.
+    var walletOffered by mutableStateOf(true)
     /// Counts up when the web view's process died and a new web view must be made.
     var generation by mutableIntStateOf(0)
 
@@ -140,8 +150,8 @@ class OrgPageController(
         val web = web ?: return
         problem = null
         when (val again = page.reload(web.url)) {
-            is OrgPageRequest.Reload.Load -> load(again.request)
-            OrgPageRequest.Reload.InPlace -> web.reload()
+            is PhonePage.Reload.Load -> load(again.request)
+            PhonePage.Reload.InPlace -> web.reload()
         }
     }
 
@@ -232,7 +242,8 @@ internal class OrgPageClient(
         if (!decision.load) return true
         // strut's UI again in this folder: loaded with the bearer, as a redirect or a link drops headers. Files are not.
         if (request.isForMainFrame && request.method.equals("GET", ignoreCase = true) && controller.reissued < MAX_REISSUES) {
-            page.request(at = url)?.let {
+            // Only a page with a token has anything to add: a public page's navigation loads as it is.
+            page.request(at = url)?.takeIf { it.headers.isNotEmpty() }?.let {
                 controller.reissued++
                 view.loadUrl(it.url, it.headers)
                 return true
@@ -280,7 +291,7 @@ internal class OrgPageClient(
     /// Without `DOCUMENT_START_SCRIPT` the hand-over runs as the page starts and again as it commits: before its own script
     /// when the page is slow enough, not guaranteed (see the phase doc). The script checks the origin and folder itself.
     private fun handOverIfNeeded(view: WebView) {
-        if (!controller.documentStartScript) view.evaluateJavascript(page.mainFrameHandOver, null)
+        page.script?.let { if (!controller.documentStartScript) view.evaluateJavascript(it, null) }
     }
 
     private companion object {
@@ -390,26 +401,41 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
     web.webChromeClient = OrgPageChromeClient(controller, outside)
     web.setDownloadListener { url, userAgent, disposition, _, _ -> controller.download(url, userAgent, disposition) }
     controller.web = web
-    controller.documentStartScript = page.origin.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
-        runCatching<ScriptHandler> { WebViewCompat.addDocumentStartJavaScript(web, page.mainFrameHandOver, setOf(page.origin)) }.isSuccess
+    controller.walletOffered = controller.wallet?.install(web) ?: true
+    controller.documentStartScript = page.script != null && page.origin.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
+        runCatching<ScriptHandler> { WebViewCompat.addDocumentStartJavaScript(web, page.script!!, setOf(page.origin)) }.isSuccess
     val first = controller.initialRequest()
     web.loadUrl(first.url, first.headers)
     return web
 }
 
-/// An org's page, full screen over Apps (iOS `OrgPageSheet`): the app's own title (else the workspace), a Back when the page can
-/// go back, Reload, progress while it loads, a failure screen with Try again, and Done. Another app opened by a link shows
-/// the workspace's name as the title.
+/// A page, full screen (iOS `OrgPageSheet<Page: PhonePage>`): an org's page over Apps or a stranger's public app, the same web
+/// view for both. The page's title (an org's app's own, else its workspace; a public page's host), a Back when the page can go
+/// back, Reload, progress while it loads, a failure screen with Try again, Done, the app wallet's sheet and the notice a
+/// connection leaves with no sheet ([PhoneWalletSheets.toast]) over it. A tap in the page counts for the wallet for
+/// [StrutWallet.GESTURE_WINDOW_MS] and for a link out for [OrgNavigation.TAP_WINDOW_MS].
 @Composable
-fun OrgPageScreen(page: OrgPageRequest, onClose: () -> Unit, modifier: Modifier = Modifier) {
+fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val view = LocalView.current
     val scope = rememberCoroutineScope()
+    @Suppress("DEPRECATION")
+    val sheets = remember(page) { PhoneWalletSheets(scope) { words -> view.announceForAccessibility(words) } }
     val controller = remember(page) {
         val profile = if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) "peel_org_" + UUID.randomUUID().toString().replace("-", "") else null
-        OrgPageController(page, OrgDownloads(orgDownloadsRoot(context)), scope, profile)
+        OrgPageController(page, OrgDownloads(orgDownloadsRoot(context)), scope, profile).also { c ->
+            c.wallet = OrgWalletBridge(page, wallet, sheets, scope) { StrutWallet.personActed(c.lastTouchAt, SystemClock.elapsedRealtime()) }
+        }
     }
     BackHandler { if (controller.canGoBack) controller.goBack() else onClose() }
-    DisposableEffect(controller) { onDispose { controller.close() } }
+    // The notifications the wallet host has for this page's scope go into its main frame (iOS `listenToWallet`).
+    LaunchedEffect(controller) { wallet.notifications.collect { controller.wallet?.push(it) } }
+    DisposableEffect(controller) {
+        onDispose {
+            sheets.dismiss()
+            controller.close()
+        }
+    }
     controller.shared?.let { file ->
         LaunchedEffect(file) {
             share(context, file)
@@ -433,12 +459,26 @@ fun OrgPageScreen(page: OrgPageRequest, onClose: () -> Unit, modifier: Modifier 
             )
             IconButton(onClick = { controller.reload() }) { Icon(Icons.Filled.Refresh, "Reload", tint = Theme.colors.secondaryText) }
         }
+        if (!controller.walletOffered && page.walletScope.visitorHost != null) {
+            Text(
+                "This device's web view can't offer Sign in with Sphinx.",
+                Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+            )
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             key(controller.generation) {
                 AndroidView(factory = { makeOrgWebView(it, controller) }, modifier = Modifier.fillMaxSize())
             }
             if (controller.isLoading) {
                 LinearProgressIndicator(progress = { controller.progress }, modifier = Modifier.fillMaxWidth())
+            }
+            sheets.toast?.let { words ->
+                Surface(
+                    Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp), shape = CircleShape,
+                    color = Theme.colors.fieldFill, tonalElevation = 4.dp,
+                ) {
+                    Text(words, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text)
+                }
             }
             controller.problem?.let { problem ->
                 Box(Modifier.fillMaxSize().background(Theme.colors.background).padding(32.dp), contentAlignment = Alignment.Center) {
@@ -452,6 +492,7 @@ fun OrgPageScreen(page: OrgPageRequest, onClose: () -> Unit, modifier: Modifier 
             }
         }
     }
+    sheets.ask?.let { ask -> SignInSheet(ask) { sheets.answer(it) } }
     controller.notice?.let { notice ->
         AlertDialog(
             onDismissRequest = { controller.notice = null },
