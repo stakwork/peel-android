@@ -69,6 +69,11 @@ sections for code that isn't written yet.
     show); `Engine.signVisitor`; `Storage` table `wallet_connection` (v13).
     UI in `ui/page/` (`PublicPageScreen` = WebView + `addWebMessageListener` bridge, `SignInSheet`, `PublicPageRouter`) and
     You › Connected apps.
+  - `engine/OrgPage.kt`, `OrgPageRules.kt`, `OrgDownloads.kt` — the org-page host (`docs/phases/28-org-page-host.md`): pure `StrutUI`,
+    `StrutAppLink`, `OrgPageRequest` (url + token + `handOver` script, `serves`, `request(at:)`), `OrgNavigation` (navigation and
+    new-window policy), `OrgPageRules` (iOS wording, download names), `OrgDownloads`; JVM-tested. The web view that applies them is
+    `ui/apps/OrgPageHost.kt` (`OrgPageScreen`, `OrgPageClient`, `OrgPageController`); `AppsScreen` opens it and closes it when
+    its workspace leaves `Stadeum.live`.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
