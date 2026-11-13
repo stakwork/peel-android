@@ -42,8 +42,9 @@ data class TalkCard(val id: String, val card: TalkArtifacts.Card, val anchor: Ta
 /// The room is end-to-end encrypted with the call's key, the audio both ways
 /// and the live text: the LiveKit server forwards what it cannot read.
 ///
-/// [askMicPermission] is the Composable layer's (a system permission dialog
-/// needs an `ActivityResultLauncher`), asked once the room is connected.
+/// [askMicPermission] is `CallController`'s (not an Activity's: this session
+/// outlives the Activity); the microphone was already asked for before the
+/// call started, so it is normally granted at once.
 class TalkSession(
     appContext: Context,
     ticket: TalkTicket,
@@ -75,6 +76,10 @@ class TalkSession(
     /// The call's encryption failing ([TalkEncryption]): said before anything else.
     var encryptionNotice by mutableStateOf<String?>(null)
         private set
+
+    /// Told when the phase or the microphone changes: `CallController`'s hook
+    /// (the notification's Mute label, a call that ended in the background).
+    var onStatus: () -> Unit = {}
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var encryption = TalkEncryption()
@@ -257,10 +262,13 @@ class TalkSession(
             if (notYet) TalkPhase.Connection.CONNECTING else connection, connectedOnce,
             participant?.let { it.attributes[TalkAgentState.ATTRIBUTE] ?: "" }, agentSeen,
         )
-        if (next != phase) phase = next
+        val phaseChanged = next != phase
+        if (phaseChanged) phase = next
         val micPublication = room.localParticipant.getTrackPublication(Track.Source.MICROPHONE)
         val mic = micPublication != null && !micPublication.muted
-        if (mic != micOn) micOn = mic
+        val micChanged = mic != micOn
+        if (micChanged) micOn = mic
+        if (phaseChanged || micChanged) onStatus()
     }
 
     companion object {

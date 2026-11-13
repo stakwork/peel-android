@@ -51,8 +51,14 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
     /// The group call this device is on, if any, by its title: Talk waits
     /// until it is left rather than leaving it unasked.
     var otherCall: () -> String? = { null }
-    /// The microphone permission, asked by the screen layer.
+    /// The microphone permission: `CallController`'s, not an Activity's.
     var askMicPermission: suspend () -> Boolean = { false }
+    /// Run in the call's own coroutine before the home is asked: `CallController`
+    /// asks for the microphone and starts the call service, and returns why the
+    /// call cannot start, or null.
+    var preflight: suspend () -> String? = { null }
+    /// The call started, changed, or ended: `CallController` keeps the service and its notification in step.
+    var onChanged: () -> Unit = {}
 
     /// Calling or in the room: a group call waits until this is hung up.
     val isOn: Boolean get() = home != null && state !is State.Failed
@@ -70,10 +76,18 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
             return
         }
         state = State.Starting
+        onChanged()
         starting = scope.launch {
+            val refusal = preflight()
+            if (refusal != null) {
+                state = State.Failed(refusal)
+                onChanged()
+                return@launch
+            }
             val next = try {
                 val ticket = target.startCall(asked, http)
                 val session = TalkSession(appContext, ticket, target, askMicPermission)
+                session.onStatus = { onChanged() }
                 // Switched while calling: the room is told once it is
                 // connected. Else the screen shows the voice in effect.
                 if (voice != asked) session.setVoice(voice) else ticket.voice?.let { voice = it }
@@ -90,6 +104,7 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
                 State.Failed("Peel could not start the call: ${e.message ?: e.javaClass.simpleName}.")
             }
             state = next
+            onChanged()
         }
     }
 
@@ -113,5 +128,6 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
         (state as? State.On)?.session?.leave()
         home = null
         state = State.Starting
+        onChanged()
     }
 }

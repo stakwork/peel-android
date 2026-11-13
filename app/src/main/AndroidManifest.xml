@@ -19,6 +19,8 @@
          with the camera granted, camera) service type, each with its own
          permission from Android 14. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- The call service holds a partial wake lock and a Wi-Fi lock while a call runs. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <!-- Screen share: the capture runs in LiveKit's own mediaProjection
@@ -31,6 +33,7 @@
          MQTT client's Netty, LiveKit's media connection) ignore them, so
          real enforcement is in code (NetworkPolicy, Transport, CallServer). -->
     <application
+        android:name=".PeelApplication"
         android:allowBackup="false"
         android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -83,10 +86,15 @@
             </intent-filter>
         </service>
 
-        <!-- Keeps a running call alive in the background. -->
+        <!-- Keeps a running call alive in the background. The manifest declares
+             the types it may use; each call picks its own at runtime
+             (call/ForegroundTypes: microphone always, camera only for video).
+             stopWithTask is false so a swipe from Recents reaches onTaskRemoved,
+             which ends the call. -->
         <service
             android:name=".call.CallService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="microphone|camera" />
 
         <!-- Hands a downloaded attachment to whatever app the person
