@@ -203,7 +203,7 @@ suspend fun Engine.fetchOlderPaymentHistory(): Int = fetchPaymentHistory(storage
 /// payment shows only as a balance change and a row in the server's
 /// history, which marks the invoice paid (`storeMoney`). An amount is
 /// required.
-suspend fun Engine.createInvoice(amountMsat: Long, memo: String = "", chat: String? = null): InvoiceRecord = moneyLock.withLock {
+suspend fun Engine.createInvoice(amountMsat: Long, memo: String = "", chat: String? = null, wallet: WalletTag? = null): InvoiceRecord = moneyLock.withLock {
     if (amountMsat <= 0) throw PaymentRefused("The amount must be more than zero.")
     val parts = PaymentRules.contactInfoParts(storage.value(Setting.CONTACT_INFO))
     if (!isRegistered || !isConnected || parts == null) throw PaymentRefused("Not connected.")
@@ -224,6 +224,7 @@ suspend fun Engine.createInvoice(amountMsat: Long, memo: String = "", chat: Stri
         paymentHash = invoice.paymentHash, incoming = true, bolt11 = invoice.bolt11, amountMsat = amountMsat,
         memo = invoice.memo, payee = invoice.payee, createdAt = System.currentTimeMillis(),
         expiresAt = invoice.expiresAtMs, status = InvoiceRecord.Status.OPEN, chat = chat,
+        connection = wallet?.connection, app = wallet?.app,
     )
     storage.saveInvoice(record)
     record
@@ -384,4 +385,74 @@ internal fun Engine.storeMoney(result: RunReturn, rows: List<MessageRow>) {
             storage.settleInvoice(hash, true, row.msat, row.timestamp ?: System.currentTimeMillis())
         }
     }
+}
+
+// MARK: - Apps
+
+/// The engine as the app wallet's payments see it ([PaymentRunner]): the real core, state and transport. Needs the native core, so it is not unit-tested;
+/// the logic over it ([AppPayments], [EngineWallet]) is, with a fake runner.
+internal fun Engine.paymentRunner(): PaymentRunner = object : PaymentRunner {
+    override val accountKey: String get() = this@paymentRunner.accountKey
+    override val ownKeys: Pair<String, String>?
+        get() = PaymentRules.contactInfoParts(storage.value(Setting.CONTACT_INFO))?.let { it[0] to it[1] }
+    override val isConnected: Boolean get() = this@paymentRunner.isConnected
+    override val network: String get() = this@paymentRunner.network
+    override fun nowMs() = System.currentTimeMillis()
+    override fun decodeInvoice(bolt11: String): Invoice = this@paymentRunner.decodeInvoice(bolt11)
+
+    private suspend fun publish(commitWith: (RunReturn) -> Storage.Commit, call: (time: String, state: ByteArray) -> RunReturn): Published =
+        try {
+            run(ordered = true, commitWith = commitWith, call = call)
+            Published.All
+        } catch (e: OverBudgetException) {
+            throw e
+        } catch (e: AppPaymentFailure) {
+            throw e
+        } catch (e: uniffi.sphinxrs.SphinxException) {
+            throw WalletRefusal(WalletError.PAYMENT_FAILED, "Could not pay: ${e.message ?: "the core refused"}")
+        } catch (e: NotConnectedException) {
+            throw AppPaymentFailure(AppFailure.NOT_CONNECTED)
+        } catch (e: java.io.IOException) {
+            // Committed, then a write failed: it may have gone.
+            Published.Unknown(e)
+        }
+
+    override suspend fun sendKeysend(to: String, amountMsat: Long, data: ByteArray?, routeHint: String?, extra: (String?, String?) -> Storage.Commit): Published {
+        val seed = seed
+        return publish({ result -> val main = result.msgs.firstOrNull(); extra(main?.tag, main?.paymentHash) }) { time, state ->
+            uniffi.sphinxrs.keysend(seed, time, to, state, amountMsat.toULong(), data, routeHint)
+        }
+    }
+
+    override suspend fun sendInvoice(invoice: Invoice, extra: (String?, String?) -> Storage.Commit): Published {
+        val seed = seed
+        val parts = PaymentRules.contactInfoParts(storage.value(Setting.CONTACT_INFO))
+        val hash = invoice.paymentHash
+        fun tagged(result: RunReturn): Storage.Commit { val msg = result.msgs.firstOrNull { it.paymentHash == hash } ?: result.msgs.firstOrNull(); return extra(msg?.tag, hash) }
+        // Made by our own server's node (`request_invoice`): the server moves the sats between its accounts. Otherwise the core builds the route, and when it
+        // cannot the server pays it, as `Engine.pay` does.
+        return if (invoice.payee == parts?.get(1)) {
+            publish(::tagged) { time, state -> corePay(seed, time, state, invoice.bolt11) }
+        } else try {
+            publish(::tagged) { time, state -> corePayInvoice(seed, time, state, invoice.bolt11, invoice.amountMsat.toULong()) }
+        } catch (e: WalletRefusal) {
+            if (invoice.hopHints.isNotEmpty()) throw e
+            publish(::tagged) { time, state -> corePay(seed, time, state, invoice.bolt11) }
+        }
+    }
+}
+
+/// The app wallet's payments over this engine, and the wallet the host asks (iOS `EngineWallet(engine:)`). Needs the native core.
+fun Engine.appPayments(): AppPayments = AppPayments(storage, paymentRunner())
+
+fun Engine.engineWallet(): EngineWallet {
+    val runner = paymentRunner()
+    val payments = AppPayments(storage, runner)
+    return EngineWallet(storage, payments, runner, InvoiceMaker { amount, memo, tag ->
+        try {
+            createInvoice(amount, memo, chat = null, wallet = tag)
+        } catch (e: PaymentRefused) {
+            throw WalletRefusal(WalletError.PAYMENT_FAILED, e.message ?: "Peel could not make that invoice.")
+        }
+    }, visitorSigner)
 }
