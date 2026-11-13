@@ -81,7 +81,9 @@ sections for code that isn't written yet.
     (`docs/phases/30-open-paths.md`): a Hive link tapped in any message (`ui/apps/PageOpening.kt` `LocalLinkOpener`, provided at `MainTabs`, which also holds the one org page), the agent's
     DM and a tribe's deliverable lines (`ui/apps/AgentArtifactLines.kt`), Talk cards.
   - `engine/WalletModel.kt` (`WalletConnection`, `WalletMethod`, `WalletRenewal`, `KeysendRecord`, `WalletRecord`, `WalletBudget`) and `Storage` v14 (`wallet_connection`, `keysend`, `invoice.connection/app/preimage`,
-    `Storage.Commit.walletBudget`, `walletRecords`, `keepPreimage`) — the app wallet's storage and budget ledger (`docs/phases/31-wallet-storage.md`); nothing pays for an app yet.
+    `Storage.Commit.walletBudget`, `walletRecords`, `keepPreimage`) — the app wallet's storage and budget ledger (`docs/phases/31-wallet-storage.md`).
+  - `engine/WalletProtocol.kt` (`checkParams`, `resultProblems`, `notificationProblems`, `connectionRequestProblems`, `WalletRefusal`), `AppPayments.kt` (`AppPayments`, `PaymentRunner`, `AppWallet`, `EngineWallet`) and
+    `Payments.kt`'s `Engine.paymentRunner()`/`engineWallet()` — the app-payments engine over the core (`docs/phases/32-app-payments.md`); the host does not call it yet.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
