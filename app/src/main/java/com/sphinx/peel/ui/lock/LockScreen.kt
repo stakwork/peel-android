@@ -1,10 +1,12 @@
 package com.sphinx.peel.ui.lock
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -136,7 +138,18 @@ fun LockScreen(
     }
 
     when (phase) {
-        Phase.DECIDING -> Box(Modifier.fillMaxSize())
+        // Covers both the brief `LockDecision.decide` and, when it comes back
+        // "remembered PIN", the PBKDF2 derivation that unlocks with it
+        // (SecretStore.kt's own "deliberately slow iteration count" PinPad's
+        // spinner was added for) — that work runs with no keypad on screen
+        // here, so without this it just looked frozen on a blank background
+        // for however long that derivation takes on this device.
+        Phase.DECIDING -> Box(
+            Modifier.fillMaxSize().background(Theme.colors.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(color = Theme.colors.accent)
+        }
         Phase.COVER -> Column(
             Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
