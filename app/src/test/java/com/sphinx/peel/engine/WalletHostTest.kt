@@ -191,7 +191,7 @@ class WalletHostTest {
     }
 
     @Test fun aHeldRootKeyDoesNotSignADomainChallenge() = runBlocking {
-        connections.save(WalletConnection(scope, "a", "A", "shop.example.com", emptyList(), SignInKey.root, 1))
+        connections.save(WalletConnection(scope, "a", "A", "shop.example.com", signIn = SignInKey.root, createdAt = 1))
         val domain = challengeOf(claims(key = "domain"))
         val r = host().handle(signIn(domain), caller(acted = false))
         assertEquals("RESTRICTED", r.code())
@@ -256,7 +256,7 @@ class WalletHostTest {
     }
 
     @Test fun aConnectionRevokedWhileTheSheetIsUpStaysRevoked() = runBlocking {
-        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", listOf("pay"), null, 1))
+        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", methods = listOf(WalletMethod.PAY_KEYSEND), createdAt = 1))
         person.answer = { connections.rows.remove(scope); SignInKey.root }
         val r = host().handle(signIn(), caller())
         assertNotNull(r.optJSONObject("result"))
@@ -267,9 +267,9 @@ class WalletHostTest {
     }
 
     @Test fun aHeldConnectionKeepsItsMethods() = runBlocking {
-        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", listOf("pay"), null, 1))
+        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", methods = listOf(WalletMethod.PAY_KEYSEND), createdAt = 1))
         host().handle(signIn(), caller())
-        assertEquals(listOf("pay"), connections.rows.getValue(scope).methods)
+        assertEquals(listOf(WalletMethod.PAY_KEYSEND), connections.rows.getValue(scope).methods)
         assertEquals(SignInKey.root, connections.rows.getValue(scope).signIn)
     }
 
@@ -324,7 +324,7 @@ class WalletHostTest {
         assertEquals(-32000, r.numeric())
         assertEquals("Peel signs you in only to a public app it opened itself.", r.text())
         // Not even for a held connection, a tap, or a challenge that names the org's own host; no sheet, no signature, nothing kept.
-        connections.save(WalletConnection("org:acme", "x", "X", "Acme", emptyList(), SignInKey.root, 1))
+        connections.save(WalletConnection("org:acme", "x", "X", "Acme", signIn = SignInKey.root, createdAt = 1))
         assertEquals("RESTRICTED", host().handle(signIn(), orgCaller(acted = true)).code())
         assertTrue(person.asks.isEmpty())
         assertTrue(signer.signed.isEmpty())

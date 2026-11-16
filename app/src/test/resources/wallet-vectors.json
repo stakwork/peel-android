@@ -1,0 +1,311 @@
+{
+ "about": "The sections of strut's wallet vectors (as copied into peel Tests/PeelCoreTests/WalletVectors/vectors.json at 1778b01) that the record shapes and the preimage check are held to.",
+ "results": [
+  {
+   "name": "pay_invoice settled",
+   "method": "pay_invoice",
+   "result": {
+    "transaction_id": "tx-1",
+    "state": "settled",
+    "payment_hash": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+    "amount": 21000,
+    "fees_paid": 10,
+    "preimage": "0000000000000000000000000000000000000000000000000000000000000000",
+    "created_at": 1793800000,
+    "settled_at": 1793800002
+   },
+   "valid": true
+  },
+  {
+   "name": "pay_keysend pending: no preimage yet",
+   "method": "pay_keysend",
+   "result": {
+    "transaction_id": "tx-2",
+    "state": "pending",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+    "amount": 20000,
+    "created_at": 1793800000
+   },
+   "valid": true
+  },
+  {
+   "name": "pay_keysend pending with a preimage",
+   "method": "pay_keysend",
+   "result": {
+    "transaction_id": "tx-2",
+    "state": "pending",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+    "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+    "amount": 20000,
+    "created_at": 1793800000
+   },
+   "valid": false
+  },
+  {
+   "name": "pay_invoice settled without its preimage",
+   "method": "pay_invoice",
+   "result": {
+    "transaction_id": "tx-1",
+    "state": "settled",
+    "payment_hash": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+    "amount": 21000,
+    "created_at": 1793800000,
+    "settled_at": 1793800002
+   },
+   "valid": false
+  },
+  {
+   "name": "pay_keysend failed with a reason",
+   "method": "pay_keysend",
+   "result": {
+    "transaction_id": "tx-3",
+    "state": "failed",
+    "payment_hash": "52fe6094743bfd4f9be4321d98adc7e23c1ab622b0ba830e271d1ee1cbfd7850",
+    "amount": 20000,
+    "created_at": 1793800000,
+    "failure_reason": "no route"
+   },
+   "valid": true
+  },
+  {
+   "name": "make_invoice",
+   "method": "make_invoice",
+   "result": {
+    "type": "incoming",
+    "state": "pending",
+    "invoice": "lnbc5u1pqpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6mua7l",
+    "description": "Q3 report",
+    "payment_hash": "52fe6094743bfd4f9be4321d98adc7e23c1ab622b0ba830e271d1ee1cbfd7850",
+    "amount": 500000,
+    "created_at": 1793800000,
+    "expires_at": 1793803600
+   },
+   "valid": true
+  },
+  {
+   "name": "make_invoice answered as outgoing",
+   "method": "make_invoice",
+   "result": {
+    "type": "outgoing",
+    "invoice": "lnbc5u1pqpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6mua7l",
+    "payment_hash": "52fe6094743bfd4f9be4321d98adc7e23c1ab622b0ba830e271d1ee1cbfd7850",
+    "amount": 500000,
+    "created_at": 1793800000
+   },
+   "valid": false
+  },
+  {
+   "name": "lookup_payment of a settled keysend",
+   "method": "lookup_payment",
+   "result": {
+    "transaction_id": "tx-2",
+    "type": "outgoing",
+    "state": "settled",
+    "payment_type": "keysend",
+    "amount": 20000,
+    "fees_paid": 1000,
+    "created_at": 1793800000,
+    "settled_at": 1793803000,
+    "details": {
+     "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+     "pubkey": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "preimage": "0101010101010101010101010101010101010101010101010101010101010101"
+    }
+   },
+   "valid": true
+  },
+  {
+   "name": "lookup_payment of a keysend without its pubkey",
+   "method": "lookup_payment",
+   "result": {
+    "transaction_id": "tx-2",
+    "type": "outgoing",
+    "state": "pending",
+    "payment_type": "keysend",
+    "amount": 20000,
+    "created_at": 1793800000,
+    "details": {
+     "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "get_info: the app's own methods, no pubkey",
+   "method": "get_info",
+   "result": {
+    "alias": "Peel",
+    "network": "bitcoin",
+    "methods": [
+     "connect",
+     "get_info",
+     "pay_keysend",
+     "get_budget"
+    ],
+    "notifications": [
+     "payment_sent",
+     "payment_failed"
+    ]
+   },
+   "valid": true
+  },
+  {
+   "name": "get_budget with none set",
+   "method": "get_budget",
+   "result": {},
+   "valid": true
+  },
+  {
+   "name": "get_budget",
+   "method": "get_budget",
+   "result": {
+    "used_budget": 21000,
+    "total_budget": 5000000,
+    "renews_at": 1794000000,
+    "renewal_period": "weekly"
+   },
+   "valid": true
+  },
+  {
+   "name": "connect: what the person granted",
+   "method": "connect",
+   "result": {
+    "connection": {
+     "methods": [
+      "pay_keysend",
+      "get_budget"
+     ],
+     "notification_types": [
+      "payment_sent"
+     ],
+     "max_amount": 5000000,
+     "renewal_period": "weekly",
+     "expires_at": null
+    }
+   },
+   "valid": true
+  },
+  {
+   "name": "list_transactions with one bad entry",
+   "method": "list_transactions",
+   "result": {
+    "transactions": [
+     {
+      "type": "sideways",
+      "payment_hash": "52fe6094743bfd4f9be4321d98adc7e23c1ab622b0ba830e271d1ee1cbfd7850",
+      "amount": 1000,
+      "created_at": 1793800000
+     }
+    ]
+   },
+   "valid": false
+  }
+ ],
+ "preimages": [
+  {
+   "preimage": "0000000000000000000000000000000000000000000000000000000000000000",
+   "payment_hash": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+   "valid": true
+  },
+  {
+   "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+   "payment_hash": "72CD6E8422C407FB6D098690F1130B7DED7EC2F7F5E1D30BD9D521F015363793",
+   "valid": true
+  },
+  {
+   "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+   "payment_hash": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+   "valid": false
+  },
+  {
+   "preimage": "00",
+   "payment_hash": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+   "valid": false
+  }
+ ],
+ "notifications": [
+  {
+   "name": "payment_sent: a keysend settled",
+   "notification": {
+    "notification_type": "payment_sent",
+    "notification": {
+     "type": "outgoing",
+     "state": "settled",
+     "transaction_id": "tx-2",
+     "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+     "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+     "amount": 20000,
+     "fees_paid": 1000,
+     "created_at": 1793800000,
+     "settled_at": 1793803000
+    }
+   },
+   "valid": true
+  },
+  {
+   "name": "payment_failed",
+   "notification": {
+    "notification_type": "payment_failed",
+    "notification": {
+     "type": "outgoing",
+     "state": "failed",
+     "transaction_id": "tx-3",
+     "payment_hash": "52fe6094743bfd4f9be4321d98adc7e23c1ab622b0ba830e271d1ee1cbfd7850",
+     "amount": 20000,
+     "created_at": 1793800000,
+     "failure_reason": "the payee never came online"
+    }
+   },
+   "valid": true
+  },
+  {
+   "name": "payment_received with metadata",
+   "notification": {
+    "notification_type": "payment_received",
+    "notification": {
+     "type": "incoming",
+     "state": "settled",
+     "transaction_id": "tx-4",
+     "invoice": "lnbc5u1pqpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6mua7l",
+     "payment_hash": "52fe6094743bfd4f9be4321d98adc7e23c1ab622b0ba830e271d1ee1cbfd7850",
+     "amount": 500000,
+     "created_at": 1793800000,
+     "settled_at": 1793800100,
+     "metadata": {
+      "comment": "thanks"
+     }
+    }
+   },
+   "valid": true
+  },
+  {
+   "name": "payment_failed carrying a settled transaction",
+   "notification": {
+    "notification_type": "payment_failed",
+    "notification": {
+     "type": "outgoing",
+     "state": "settled",
+     "transaction_id": "tx-3",
+     "payment_hash": "52fe6094743bfd4f9be4321d98adc7e23c1ab622b0ba830e271d1ee1cbfd7850",
+     "amount": 20000,
+     "created_at": 1793800000
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "payment_sent without a transaction id",
+   "notification": {
+    "notification_type": "payment_sent",
+    "notification": {
+     "type": "outgoing",
+     "state": "settled",
+     "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+     "amount": 20000,
+     "created_at": 1793800000
+    }
+   },
+   "valid": false
+  }
+ ]
+}
