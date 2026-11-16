@@ -152,7 +152,7 @@ data class PaymentItem(
             }
             val known = history.map { it.incoming to it.rhash }.toSet()
             val pending = invoices.filter { !it.incoming && it.status != InvoiceRecord.Status.PAID && (false to it.paymentHash) !in known }
-                .filter { it.status == InvoiceRecord.Status.PENDING || it.status == InvoiceRecord.Status.FAILED }
+                .filter { it.status == InvoiceRecord.Status.PENDING || it.status == InvoiceRecord.Status.UNSETTLED || it.status == InvoiceRecord.Status.FAILED }
                 .map {
                     val names = namesOf(it.chat, null, contactOf)
                     PaymentItem(

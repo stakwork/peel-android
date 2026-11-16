@@ -280,7 +280,7 @@ private fun PayInvoiceForm(engine: Engine, storage: Storage, bolt11: String, cle
         when {
             rec != null && rec.status == InvoiceRecord.Status.PAID ->
                 Text("Paid ${Sats.format(rec.amountMsat)}", color = Theme.colors.confirmed, fontWeight = FontWeight.SemiBold)
-            rec != null && rec.status == InvoiceRecord.Status.PENDING ->
+            rec != null && (rec.status == InvoiceRecord.Status.PENDING || rec.status == InvoiceRecord.Status.UNSETTLED) ->
                 Text("Paying… It stays pending until the server says how it went, and is never sent twice.", color = Theme.colors.secondaryText)
             blocker != null -> {
                 Text(blocker!!, color = Theme.colors.attention)
@@ -295,7 +295,7 @@ private fun PayInvoiceForm(engine: Engine, storage: Storage, bolt11: String, cle
         Spacer(Modifier.height(16.dp))
         if (rec?.status == InvoiceRecord.Status.PAID) {
             OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Done") }
-        } else if (rec?.status != InvoiceRecord.Status.PENDING) {
+        } else if (rec?.status != InvoiceRecord.Status.PENDING && rec?.status != InvoiceRecord.Status.UNSETTLED) {
             if (blocker == null) {
                 Button(
                     onClick = {

@@ -29,7 +29,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -190,6 +192,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// after [historyWaitMs].
     private val inboundFaults = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
+    private val coreErrorFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
+
+    /// What iOS publishes as `Event.coreError`, for the failures that are not an answer to a call: a money send whose publish failed once it had begun,
+    /// in words for the person ([AppPayments.mayHaveGone]). Nothing waits on it; a screen may show it.
+    val coreErrors: SharedFlow<String> = coreErrorFlow.asSharedFlow()
+    internal fun emitCoreError(message: String) { Log.w("PeelEngine", message); coreErrorFlow.tryEmit(message) }
+
     /// Called after each successful (re)connect, once registered and caught
     /// up — where `PushRegistrar` registers the push token (iOS:
     /// `PushCoordinator.connected()`).
@@ -319,7 +328,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                     while (after.tags.none { asyncPays[it] == true }) delay(100)
                 }
             }
-            val connection = transport ?: throw NotConnectedException()
+            val connection = transport ?: throw ConnectionLostAfterPayException()
             for ((topic, payload) in after.publishes) connection.publish(topic, payload)
         } finally {
             for (tag in after.tags) asyncPays.remove(tag)
@@ -664,14 +673,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (tag != null) {
             SendStatus.live(sentStatus.optString("status"))?.let { live ->
                 if (live == SendStatus.FAILED) Diagnostics.note(DiagnosticEvent.ErrorKind.server, "send failed: ${SendStatus.reason(sentStatus)}")
-                storage.markSendStatus(tag, live)
                 // The preimage the mixer sends with a COMPLETE is kept on the payment its tag names, only when it hashes to the payment hash. First, so that
                 // whoever sees the payment settled sees its proof (an app's answer waits for the one and reads the other).
                 if (live == SendStatus.DELIVERED) sentStatus.optString("preimage").takeIf { it.isNotEmpty() }?.let { storage.keepPreimage(it, tag) }
-                // Paying an invoice is tracked by its tag the same way.
-                if (live != SendStatus.UNSETTLED) {
-                    storage.markInvoiceSendStatus(tag, live == SendStatus.DELIVERED, SendStatus.reason(sentStatus))
-                }
+                // The message, the invoice we pay, the invite it funds and an app's keysend all follow by the one forward-only rule.
+                storage.markSendStatus(tag, live, SendStatus.reason(sentStatus))
             }
         }
         // The mixer's records for the tags `getTags` asked about
@@ -679,8 +685,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // FAILED only, through the same forward-only rule.
         val records = SendStatus.recorded(result.tags)
         for (record in records) {
-            storage.markSendStatus(record.tag, record.status)
-            storage.markInvoiceSendStatus(record.tag, record.status == SendStatus.DELIVERED, record.error)
+            storage.markSendStatus(record.tag, record.status, record.error)
         }
         if (result.tags != null) {
             val answered = runCatching { JSONArray(result.tags) }.getOrNull()
@@ -1678,6 +1683,43 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
     }
 
+    private val reconcileState = Any()
+    private var reconciling = false
+    private var reconcileAgain = false
+
+    /// Brings what this account believes about its own sends in line with the server's payment history, on coming online (PeelCore's
+    /// `reconcileInBackground`, its payment half): the newest history, then back to the oldest send still open ([fetchBackToOpenSends]), each page
+    /// settling or failing what it names (`Storage.insertPayments`). One at a time; a call during one runs it again after. Not ported: PeelCore also
+    /// runs it when the balance goes up and when someone's payment comes, and marks others' payments not arrived.
+    internal fun reconcileInBackground() {
+        synchronized(reconcileState) {
+            reconcileAgain = true
+            if (reconciling) return
+            reconciling = true
+        }
+        scope.launch {
+            try {
+                while (true) {
+                    synchronized(reconcileState) {
+                        if (!reconcileAgain) { reconciling = false; return@launch }
+                        reconcileAgain = false
+                    }
+                    try {
+                        refreshPaymentHistory()
+                        fetchBackToOpenSends()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("PeelEngine", "checking payments with the server failed", e)
+                        break
+                    }
+                }
+            } finally {
+                synchronized(reconcileState) { reconciling = false }
+            }
+        }
+    }
+
     /// The chat open on screen, if any (set by the conversation screen):
     /// history pages and a foreground check its own sends' statuses.
     @Volatile var openChat: String? = null
@@ -1726,13 +1768,14 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// restored send (no status at all) learns how it went. Also asks about
     /// the tags of the messages [resendRecent] may send again, and keeps what
     /// the server's records name (`resendGate`): the reconnect's automatic
-    /// resend only sends what the server has no record of. Not ported: the
-    /// 30-minute "never recorded" failing of payments.
+    /// resend only sends what the server has no record of; a payment it has no
+    /// record of 30 minutes on failed (`SendStatus.unrecorded`).
     private suspend fun checkPendingSends() {
         val now = System.currentTimeMillis()
         val candidates = runCatching { storage.undeliveredSends(now - SendRetry.AUTO_RESEND_WINDOW_MS) }.getOrDefault(emptyList())
             .filter { SendRetry.isAutoResendable(it, now) }.mapNotNull { it.tag }
-        val tags = (storage.pendingSendTags(now - SendRetry.CONFIRMATION_TIMEOUT_MS) + candidates).distinct()
+        val pending = storage.pendingSends(now - SendRetry.CONFIRMATION_TIMEOUT_MS)
+        val tags = (pending.map { it.tag } + candidates).distinct()
         val gate = SendRetry.Gate(asked = candidates.toSet())
         resendAnswers = 0
         resendGate = gate
@@ -1746,7 +1789,16 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (chunks.isEmpty()) return gate.settle()
         val deadline = SystemClock.elapsedRealtime() + RECORDS_WAIT_MS
         while (resendAnswers < chunks.size && SystemClock.elapsedRealtime() < deadline) delay(100)
-        if (resendAnswers >= chunks.size) gate.settle()
+        if (resendAnswers >= chunks.size) {
+            gate.settle()
+            // A payment the server has no record of this long after it was sent never reached it (it records every send it handles, an async one as
+            // pending): failed, so it may be sent again. iOS fails these on the first reply; with the tags asked in chunks here, only once every
+            // reply is in can a tag be called unnamed. A reply that never came fails nothing.
+            val named = gate.recorded ?: emptySet()
+            for (tag in SendStatus.failedForWantOfRecord(SendStatus.unrecorded(pending, System.currentTimeMillis()), named)) {
+                storage.markSendStatus(tag, SendStatus.FAILED)
+            }
+        }
     }
 
     /// Read markers and mutes live on the server, shared by every device
@@ -2074,6 +2126,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // What the server has no record of goes again by itself, on this
             // connection only; History does not wait on it.
             transport?.let { connection -> scope.launch { runCatching { resendRecent(connection) } } }
+            // Our own sends left pending, settled or failed by the server's payment history, reaching back for them (`reconcileInBackground`).
+            reconcileInBackground()
             // A restore that failed or was cut short resumes from its cursor.
             catchUpIndex = storage.maxServerIndex() ?: -1L
             val startedAt = SystemClock.elapsedRealtime()
