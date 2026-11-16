@@ -705,7 +705,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
     /// The app wallet's host (iOS `AppModel.walletReply`/`listenToWallet`): one for the account, so one sheet at a time across
     /// every page, and the notifications its pages listen to come from one place.
-    val walletHost: WalletHost by lazy { WalletHost(StorageWalletConnections(storage), visitorSigner) }
+    val walletHost: WalletHost by lazy { WalletHost(StorageWalletConnections(storage), engineWallet()).also { it.start() } }
 
     suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null): MessageRow {
         check(transport != null) { "Not connected." }

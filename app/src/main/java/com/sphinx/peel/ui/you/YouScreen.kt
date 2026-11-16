@@ -69,7 +69,11 @@ import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.LockoutPolicy
 import com.sphinx.peel.account.PinTimeout
 import com.sphinx.peel.account.SecretStoreFailure
+import com.sphinx.peel.engine.ConnectedAppRow
 import com.sphinx.peel.engine.ConnectionState
+import com.sphinx.peel.engine.OverBudget
+import com.sphinx.peel.engine.WalletConnection
+import androidx.compose.foundation.lazy.items
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.ProfilePhoto
 import com.sphinx.peel.ui.components.prepareImageForSending
@@ -96,7 +100,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class YouRoute { WORDS, CHANGE_PIN, BIOMETRIC_SETUP }
+private enum class YouRoute { WORDS, CHANGE_PIN, BIOMETRIC_SETUP, CONNECTED_APPS }
 
 /// "You" (docs/design/iphone.md, screen 6), reworked to match the iOS app's
 /// own Profile: a centred "You" title, the avatar/name/balance header, an
@@ -118,11 +122,13 @@ fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForg
         YouRoute.WORDS -> TwelveWordsScreen(secretStore, onBack = { route = null })
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
         YouRoute.BIOMETRIC_SETUP -> BiometricSetupScreen(engine, secretStore, onBack = { route = null })
+        YouRoute.CONNECTED_APPS -> ConnectedAppsScreen(storage, onBack = { route = null })
         null -> YouMain(
             engine, storage, secretStore, onForgotten,
             onOpenWords = { route = YouRoute.WORDS },
             onOpenChangePin = { route = YouRoute.CHANGE_PIN },
             onOpenBiometricSetup = { route = YouRoute.BIOMETRIC_SETUP },
+            onOpenConnectedApps = { route = YouRoute.CONNECTED_APPS },
         )
     }
 }
@@ -138,6 +144,7 @@ private fun YouMain(
     onOpenWords: () -> Unit,
     onOpenChangePin: () -> Unit,
     onOpenBiometricSetup: () -> Unit,
+    onOpenConnectedApps: () -> Unit,
 ) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -271,10 +278,6 @@ private fun YouMain(
         item { StadeumSection(Stadeum.model) }
         item { Spacer(Modifier.height(24.dp)) }
 
-        item { SectionHeader("Connected apps") }
-        item { ConnectedAppsSection(storage) }
-        item { Spacer(Modifier.height(24.dp)) }
-
         item { SectionHeader("Account") }
         item {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
@@ -308,6 +311,12 @@ private fun YouMain(
                     label = "Confirm payments",
                     value = if (confirmationMsat == 0L) "Always" else "Over ${Sats.format(confirmationMsat)}",
                     onClick = { editingConfirmation = true },
+                )
+                AccountDivider()
+                val walletVersion by storage.walletConnectionsVersion.collectAsState()
+                AccountRow(
+                    label = "Connected apps", value = ConnectedAppRow.summary(remember(walletVersion) { storage.walletConnections().size }),
+                    onClick = onOpenConnectedApps, chevron = true,
                 )
                 AccountDivider()
                 var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
@@ -1075,45 +1084,57 @@ private fun StadeumButton(label: String, color: Color, onClick: () -> Unit) {
     )
 }
 
-/// You › Connected apps (docs/phases/27-sign-in-with-sphinx.md): the pages a sign-in was agreed to, each with
-/// Disconnect, which deletes the connection so the next sign-in asks again.
+/// You › Connected apps (iOS `ConnectedAppsScreen`, docs/phases/33-wallet-host.md): each org or app the person connected, its spending
+/// limit (editable) and what it spent, what happens over it, Disconnect. Live from storage; the rows' rules are `ConnectedAppRow`.
 @Composable
-private fun ConnectedAppsSection(storage: Storage) {
+private fun ConnectedAppsScreen(storage: Storage, onBack: () -> Unit) {
     val version by storage.walletConnectionsVersion.collectAsState()
     val connections = remember(version) { storage.walletConnections() }
-    Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
-        if (connections.isEmpty()) {
-            StadeumNote("Apps you sign in to with your Sphinx account show here.")
-        }
-        connections.forEachIndexed { index, connection ->
-            if (index > 0) AccountDivider()
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        connection.title.ifEmpty { connection.place }, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text,
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        connection.place, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                    connectionLine(connection)?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
-                    }
-                }
-                TextButton(onClick = { storage.deleteWalletConnection(connection.key) }) {
-                    Text("Disconnect", color = Theme.colors.destructive)
-                }
-            }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)) {
+        item { RouteHeader("Connected apps", null, onBack) }
+        item { Spacer(Modifier.height(24.dp)) }
+        if (connections.isEmpty()) item { StadeumNote(ConnectedAppRow.EMPTY) }
+        items(connections, key = { it.key }) { connection ->
+            ConnectedAppCard(storage, connection)
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
 
-private fun connectionLine(connection: com.sphinx.peel.engine.WalletConnection): String? = when (connection.signIn) {
-    com.sphinx.peel.engine.SignInKey.root -> "Signs you in to ${connection.place} as you"
-    com.sphinx.peel.engine.SignInKey.domain -> "Signs you in to ${connection.place} as a new identity"
-    null -> null
+@Composable
+private fun ConnectedAppCard(storage: Storage, connection: WalletConnection) {
+    var usedMsat by remember(connection) { mutableStateOf<Long?>(null) }
+    var limitText by remember(connection) { mutableStateOf(ConnectedAppRow(connection).limitText) }
+    LaunchedEffect(connection) { usedMsat = withContext(Dispatchers.IO) { storage.walletUsage(connection.key)?.usedMsat } }
+    val row = ConnectedAppRow(connection, usedMsat, limitText)
+    Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).padding(vertical = 8.dp)) {
+        Text(row.title, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+        Text(row.place, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+        row.signInLine?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text) }
+        if (row.hasWallet) {
+            Text(row.limitSentence, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text)
+            Text(ConnectedAppRow.OVER_LIMIT, Modifier.padding(start = 16.dp, top = 8.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+            OverBudget.entries.forEach { choice ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { storage.setOverLimit(connection.key, choice) }.heightIn(min = 44.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.RadioButton(selected = row.overBudget == choice, onClick = null)
+                    Text(ConnectedAppRow.overLimitChoice(choice), Modifier.padding(start = 12.dp), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = limitText, onValueChange = { limitText = it.filter(Char::isDigit) }, modifier = Modifier.weight(1f), singleLine = true,
+                    placeholder = { Text("No limit") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Text("sats", Modifier.padding(horizontal = 8.dp), color = Theme.colors.secondaryText)
+                TextButton(onClick = { storage.setSpendingLimit(connection.key, row.typedMsat) }, enabled = row.canSave) { Text("Save") }
+            }
+            row.spentLine?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
+        }
+        TextButton(onClick = { storage.deleteWalletConnection(connection.key) }, Modifier.padding(horizontal = 8.dp)) {
+            Text(ConnectedAppRow.DISCONNECT, color = Theme.colors.destructive)
+        }
+    }
 }

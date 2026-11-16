@@ -229,6 +229,26 @@ data class WalletRecord(
             }
         }
 
+    companion object {
+        /// Read back from a contract `Payment` or transaction (a scripted wallet's answer in the tests, or a notification's payload); null when it is not one
+        /// (iOS `WalletRecord.init?(payment:)`).
+        fun fromPayment(
+            json: Any?, direction: Direction = Direction.OUTGOING, paymentType: PaymentType = PaymentType.KEYSEND, connection: String, app: String,
+        ): WalletRecord? {
+            val o = json as? JSONObject ?: return null
+            val id = o.opt("transaction_id") as? String ?: return null
+            val hash = o.opt("payment_hash") as? String ?: return null
+            val amount = WalletProtocol.integer(o.opt("amount")) ?: return null
+            val created = WalletProtocol.integer(o.opt("created_at")) ?: return null
+            val state = State.of(o.opt("state") as? String) ?: return null
+            return WalletRecord(
+                id, direction, paymentType, state, hash, amount, WalletProtocol.integer(o.opt("fees_paid")), o.opt("preimage") as? String, created,
+                WalletProtocol.integer(o.opt("settled_at")), WalletProtocol.integer(o.opt("expires_at")), o.opt("failure_reason") as? String,
+                o.opt("invoice") as? String, o.opt("description") as? String, null, connection, app,
+            )
+        }
+    }
+
     /// What a budget counts of it: an outgoing payment's amount while it is pending, with its fees once settled, nothing once it failed.
     val entry: WalletBudget.Entry?
         get() {

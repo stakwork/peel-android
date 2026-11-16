@@ -1,6 +1,11 @@
 package com.sphinx.peel.ui.apps
 
 import com.sphinx.peel.engine.PhonePage
+import com.sphinx.peel.engine.ScriptedWallet
+import com.sphinx.peel.engine.SignInApp
+import com.sphinx.peel.engine.WalletConnectAnswer
+import com.sphinx.peel.engine.WalletConnectSheet
+import com.sphinx.peel.engine.WalletPaymentSheet
 import com.sphinx.peel.engine.OrgPageRequest
 import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.PublicPage
@@ -43,7 +48,12 @@ class OrgWalletBridgeTest {
 
     private class Person : WalletPerson {
         val asks = mutableListOf<SignInAsk>()
-        override suspend fun askSignIn(ask: SignInAsk): SignInKey? { asks += ask; return ask.keys.first() }
+        override suspend fun connect(sheet: WalletConnectSheet): WalletConnectAnswer? {
+            val offer = sheet.signIn!!
+            asks += SignInAsk(offer.host, SignInApp(sheet.app, sheet.version, sheet.title), offer.keys)
+            return WalletConnectAnswer.asAsked(sheet)
+        }
+        override suspend fun pay(sheet: WalletPaymentSheet) = false
         override fun signedIn(host: String, key: SignInKey) {}
     }
 
@@ -54,7 +64,7 @@ class OrgWalletBridgeTest {
 
     private val connections = Connections()
     private val person = Person()
-    private val host = WalletHost(connections, VisitorSigner { _: VisitorChallenge, key: SignInKey -> VisitorSignature("pub", "sig-${key.wire}") }, { NOW_MS })
+    private val host = WalletHost(connections, ScriptedWallet(VisitorSigner { _: VisitorChallenge, key: SignInKey -> VisitorSignature("pub", "sig-${key.wire}") }), { NOW_MS })
     private val org = OrgPageRequest("https://acme.sphinx.chat/lab/?app=x&solo=1", "tok", "acme", "Acme")
     private val public = PublicPage(PublicAppLink.of("https://shop.example.com/?app=moon-game")!!)
     private var tapped = true
