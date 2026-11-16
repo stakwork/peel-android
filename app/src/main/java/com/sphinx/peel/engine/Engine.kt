@@ -174,6 +174,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// The highest server index of the history page the listener last left unread chunks out
     /// of (-1: none), so `page` still moves past the whole page.
     @Volatile private var skippedThrough = -1L
+    /// How many onions the listener left out of the history page just handled
+    /// (`skippedThrough`'s own count), folded into `restoreProgress.messagesSkipped`
+    /// once `page` reads it.
+    @Volatile private var skippedCountThisPage = 0
     /// A message the listener could not handle (the core refused it, storage failed), for the
     /// history asks waiting on an answer that will now never come: they fail at once rather than
     /// after [historyWaitMs].
@@ -553,7 +557,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 }
                 if (left.isNotEmpty()) {
                     skippedThrough = maxOf(skippedThrough, left.last()) // `left` is sorted
+                    skippedCountThisPage += left.size
                     Log.w("PeelHistory", "skipped messages in history that could not be read (server index ${left.joinToString(", ")})", e)
+                    Diagnostics.recordHistorySkip(left.size, left.last(), e.message ?: e.javaClass.simpleName)
                 }
                 read
             }
@@ -2549,6 +2555,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // be fixed (docs/phases/03-restoring.md, "Open").
             val askedAt = SystemClock.elapsedRealtime()
             skippedThrough = -1L
+            skippedCountThisPage = 0
             val result = askAndAwait(historyWaitMs, failOnFault = dropOnStall, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
             }
@@ -2576,8 +2583,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
             restored += result.msgs.size
             val progress = if (total != null) RestoreCount(minOf(restored, total), total) else RestoreCount((reached ?: next).toLong(), end)
+            val skippedOnPage = skippedCountThisPage
             restoreProgressFlow.update {
-                if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
+                val withCount = if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
+                if (skippedOnPage > 0) withCount.copy(messagesSkipped = withCount.messagesSkipped + skippedOnPage) else withCount
             }
             // A page of history may carry the open chat's echoes: ask about
             // the rest (PeelCore's `.history` event -> `checkOwnMessageStatus`).

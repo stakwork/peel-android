@@ -214,6 +214,21 @@ object Diagnostics {
         current?.record(E(E.Kind.historyPage, pageCount = count, pageMaxIndex = maxIndex?.let { maxOf(it, 0) }, pageNew = new, pageDup = maxOf(count - new, 0)))
     }
 
+    /// The core refused one or more onions in a history page and they were left
+    /// out (`HistoryPage.readablePart`): how many, the highest server index among
+    /// them, and the refusal's redacted text. The cursor still moves past the
+    /// whole page by design, so this is the only record of a restore/catch-up
+    /// having actually lost something, rather than it looking merely slow.
+    fun recordHistorySkip(count: Int, highestIndex: Long, detail: String) {
+        current?.record(
+            E(
+                E.Kind.historySkip, pageCount = count,
+                highestIndex = highestIndex.coerceIn(0, Int.MAX_VALUE.toLong()).toInt(),
+                errorDetail = redact(detail),
+            ),
+        )
+    }
+
     /// A message came live, as numbers: never its content.
     fun recordLiveMessage(index: Int, fromMe: Boolean?, type: Int?, new: Boolean) {
         current?.record(E(E.Kind.liveMessage, liveIndex = maxOf(index, 0), liveFromMe = fromMe, liveType = type, liveNew = new))

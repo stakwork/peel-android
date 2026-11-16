@@ -79,7 +79,12 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
         ),
         Line(
             title = "Messages",
-            detail = label(progress.messages, finished, noun = "received"),
+            // The cursor moves past a page the core refused part of by design
+            // (HistoryPage.readablePart), so a finished restore can still be
+            // short of its own total -- said here rather than left to look
+            // like a stall or a silent loss.
+            detail = label(progress.messages, finished, noun = "received") +
+                if (progress.messagesSkipped > 0) " (${progress.messagesSkipped} skipped)" else "",
             state = when {
                 finished -> LineState.DONE
                 progress.messages != null -> LineState.ACTIVE

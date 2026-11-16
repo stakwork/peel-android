@@ -22,4 +22,10 @@ data class RestoreProgress(
     val contacts: RestoreCount? = null,
     val messages: RestoreCount? = null,
     val outcome: RestoreOutcome? = null,
+    /// Onions the core refused and left out of a history page, summed over
+    /// the whole restore (`Engine.page`'s `skippedCountThisPage`, folded in
+    /// after every page). The cursor still moves past these by design — see
+    /// `HistoryPage.readablePart` — so a restore can finish with this above
+    /// zero; it is here so that is visible instead of silent.
+    val messagesSkipped: Long = 0,
 )

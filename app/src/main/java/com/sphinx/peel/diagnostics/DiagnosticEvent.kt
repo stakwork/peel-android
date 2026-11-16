@@ -105,7 +105,7 @@ data class DiagnosticEvent(
         foregroundPing, caughtUp, stallReconnect,
         catchUp, readFailure,
         foregroundDecision, forcedReconnect, pingResult, background, pathChangeFlagged,
-        catchUpCursor, historyPage, liveMessage, transportLifecycle, subscribed, selfCheck,
+        catchUpCursor, historyPage, historySkip, liveMessage, transportLifecycle, subscribed, selfCheck,
         coreFailure, coreRecovery,
         previousRunDetail, backgroundExpired,
         tribeTrace, tribeState,
