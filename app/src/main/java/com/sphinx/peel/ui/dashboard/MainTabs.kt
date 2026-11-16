@@ -94,7 +94,8 @@ private enum class MainTab { CHATS, PAYMENTS, YOU, SEARCH }
 @Composable
 fun MainTabs(
     engine: Engine, storage: Storage, secretStore: SecretStore,
-    deepLink: DeepLink? = null, onDeepLinkHandled: () -> Unit = {}, onForgotten: () -> Unit,
+    deepLink: DeepLink? = null, onDeepLinkHandled: () -> Unit = {}, pages: com.sphinx.peel.ui.page.PublicPageRouter = remember { com.sphinx.peel.ui.page.PublicPageRouter() },
+    onForgotten: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(MainTab.CHATS) }
     // An open chat replaces the whole tab area, bar included — PeelCore's
@@ -229,17 +230,22 @@ fun MainTabs(
 
     // An org's page over everything (iOS `router.orgPage`): a deliverable from the agent's DM, a workspace's app, a tapped Hive link or
     // a Talk card. Its workspace no longer in use (revoked, disconnected, renewed without it): the page and its token go.
-    var orgPage by remember { mutableStateOf<com.sphinx.peel.engine.OrgPageRequest?>(null) }
+    // The state is the router's (one holder of both pages, as iOS's `PhoneRouter`); a Talk card's page is the call screen's own (`talkOpener`).
     val live = Stadeum.live
+    val orgPage = pages.orgPage
     val shownPage = orgPage?.takeIf { it.isLive(live) }
-    LaunchedEffect(live.map { it.id }, orgPage) { if (orgPage != null && shownPage == null) orgPage = null }
+    LaunchedEffect(live.map { it.id }, orgPage) { pages.workspacesChanged(live) }
+    val talkOpener = remember { com.sphinx.peel.ui.talk.TalkOpener() }
+    LaunchedEffect(live.map { it.id }) { talkOpener.workspacesChanged(live) }
+    // The call screen gone: its sheet goes with it.
+    LaunchedEffect(talk.home == null) { if (talk.home == null) talkOpener.close() }
     // A tapped Hive link to an app opens it when its workspace is paired here. Otherwise it says to connect that workspace first and
     // still goes to the browser, so Hive shows its own sign-in or not-found; any other link is the system's, as before.
     val linkOpener = remember(toast, context) {
         val handler = com.sphinx.peel.engine.AppLinkHandler(
             tap = { Stadeum.openings.tap(it) },
             reopen = { Stadeum.openings.opening(it) },
-            openPage = { orgPage = it },
+            openPage = { pages.openOrg(it) },
             announce = { toast.show(it, com.sphinx.peel.ui.toast.ToastType.Warning) },
             system = { com.sphinx.peel.ui.apps.openInBrowser(context, it) },
         )
@@ -247,7 +253,8 @@ fun MainTabs(
     }
     androidx.compose.runtime.CompositionLocalProvider(
         com.sphinx.peel.ui.apps.LocalLinkOpener provides linkOpener,
-        com.sphinx.peel.ui.apps.LocalPageOpener provides { page: com.sphinx.peel.engine.OrgPageRequest -> orgPage = page },
+        com.sphinx.peel.ui.apps.LocalPageOpener provides { page: com.sphinx.peel.engine.OrgPageRequest -> pages.openOrg(page) },
+        com.sphinx.peel.ui.apps.LocalTalkOpener provides (if (talk.home != null) talkOpener else null),
     ) {
     Box(Modifier.fillMaxSize()) {
     val talkHome = talk.home
@@ -324,7 +331,11 @@ fun MainTabs(
         }
     }
     // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
-    shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = { orgPage = null }) }
+    shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg) }
+    // A Talk card's page: a sheet over the call screen (iOS `.sheet(item: $opener.opened)`); the call goes on behind it.
+    talkOpener.page?.takeIf { talk.home != null && it.isLive(live) }?.let {
+        com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = talkOpener::close)
+    }
     }
     }
 }

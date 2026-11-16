@@ -27,3 +27,7 @@ fun openInBrowser(context: Context, url: String) {
         // Nothing to open it: it simply does not open.
     }
 }
+
+/// The Talk call screen's sheet for a tapped card, while that screen is up (iOS `@Environment(TalkOpener.self)`, which `AgentArtifactLine`
+/// reads as `talkOpener`); null elsewhere, where a card opens through [LocalPageOpener] / [LocalLinkOpener].
+val LocalTalkOpener = staticCompositionLocalOf<com.sphinx.peel.ui.talk.TalkOpener?> { null }
