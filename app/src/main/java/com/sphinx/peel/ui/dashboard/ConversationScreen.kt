@@ -571,7 +571,7 @@ fun ConversationScreen(
             messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type != DELETE_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
-        // Control messages in a direct message (docs/phases/39-control-messages.md; iOS `ChatRow.rows`): a quiet line, a request's one row or
+        // Control messages in a direct message (docs/phases/40-control-messages.md; iOS `ChatRow.rows`): a quiet line, a request's one row or
         // nothing at all, never a bubble.
         val controlPlan = remember(sortedMessages, isTribe, isAgent, title) {
             ControlPlan.of(sortedMessages, inTribe = isTribe, agentDM = isAgent) { if (it.fromMe) "You" else title }

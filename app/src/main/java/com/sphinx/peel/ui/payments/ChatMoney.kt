@@ -163,7 +163,7 @@ fun RequestMessage(row: MessageRow, name: String, engine: Engine, storage: Stora
                     status == InvoiceRecord.Status.UNDERPAID -> "Partly paid. This invoice can't take the rest."
                     status == InvoiceRecord.Status.PAID -> (if (row.fromMe) "Paid" else "You paid") +
                         (record?.paidAt?.let { " · " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) } ?: "")
-                    status == InvoiceRecord.Status.PENDING -> "Paying…"
+                    status == InvoiceRecord.Status.PENDING || status == InvoiceRecord.Status.UNSETTLED -> "Paying…"
                     expired -> "Expired" + (invoice.expiresAtMs?.let { " at " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) } ?: "")
                     row.fromMe -> "Waiting to be paid" + (invoice.expiresAtMs?.let { " · expires " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) } ?: "")
                     else -> "Not paid yet"
@@ -171,7 +171,7 @@ fun RequestMessage(row: MessageRow, name: String, engine: Engine, storage: Stora
                 style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
             )
             val canPay = !row.fromMe && !expired && status != InvoiceRecord.Status.PAID && status != InvoiceRecord.Status.PENDING &&
-                status != InvoiceRecord.Status.UNDERPAID
+                status != InvoiceRecord.Status.UNSETTLED && status != InvoiceRecord.Status.UNDERPAID
             if (canPay) {
                 Button(
                     onClick = {

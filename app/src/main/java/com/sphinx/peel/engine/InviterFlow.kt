@@ -6,7 +6,11 @@ import kotlin.coroutines.cancellation.CancellationException
 
 /// Nothing could be published: the account has no connection right now.
 /// PeelCore's `Failure.notConnected`.
-class NotConnectedException(message: String = "Not connected.") : Exception(message)
+open class NotConnectedException(message: String = "Not connected.") : Exception(message)
+
+/// The connection went after the first publish of an ordered send (the rest, after the async pay, could not go): part of it may have gone, so it is
+/// not "nothing published" ([NotConnectedException]'s meaning for a money send; iOS's `.unknown`).
+class ConnectionLostAfterPayException : NotConnectedException("The connection was lost before the rest was sent.")
 
 /// Where the invite a new account signed up with waits (`Setting.INVITE`).
 interface PendingInviteStore {

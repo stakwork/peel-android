@@ -1,4 +1,4 @@
-# Phase 39 — Control messages of the agent's DM
+# Phase 40 — Control messages of the agent's DM
 
 Status: **built, compiled, unit-tested; UI compiled only, never run on a device.** An agent's control messages (the device channel's `metadata.peel` envelopes) are no longer plain bubbles: they are
 a quiet line, a request's one row, or nothing, as on the iPhone. Reply tool rows are drawn above an agent's reply. Control messages are never unread and never notify.

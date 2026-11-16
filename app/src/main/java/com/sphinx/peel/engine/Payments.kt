@@ -97,7 +97,8 @@ fun Engine.setPaymentConfirmation(msat: Long) {
 /// without one.
 fun Engine.checkPayment(amountMsat: Long, confirmedMsat: Long?, unasked: Boolean = false, reserveMsat: Long = 0L) {
     if (amountMsat <= 0) throw PaymentRefused("The amount must be more than zero.")
-    val balance = balanceMsat()
+    // Less what waits for people to come online (`Storage.spendableMsat`), as iOS's `checkPayment`.
+    val balance = storage.spendableMsat()
     if (balance == null) {
         if (!unasked) throw PaymentRefused("Your balance isn't known yet. Try again in a moment.")
     } else if (!PaymentRules.fits(amountMsat, reserveMsat, balance)) {
@@ -134,22 +135,21 @@ fun Engine.requestInvoiceOf(body: String?): Invoice? {
 /// Null when nothing does. Reads only storage, so a screen can ask before
 /// offering Pay. PeelCore also refuses an invoice another device made
 /// through the same server (`isOurRequest`) and subtracts sats waiting for
-/// people to come online; neither is tracked here.
+/// people to come online, as this does.
 fun Engine.invoiceProblem(invoice: Invoice): String? {
     if (invoice.amountMsat <= 0) return "This invoice names no amount, so it can't be paid here."
     if (invoice.isExpired()) return "This invoice has expired. Nothing was paid."
     val parts = PaymentRules.contactInfoParts(storage.value(Setting.CONTACT_INFO))
     if (invoice.payee == parts?.get(0)) return "This is your own invoice."
-    if (storage.invoice(invoice.paymentHash, incoming = true) != null) return "This is your own invoice."
-    when (storage.invoice(invoice.paymentHash, incoming = false)?.status) {
-        InvoiceRecord.Status.PENDING -> return "This invoice is being paid."
-        InvoiceRecord.Status.PAID -> return "This invoice was already paid."
-        else -> {}
+    when (storage.paidState(invoice.paymentHash)) {
+        Storage.PaidState.OWN -> return "This is your own invoice."
+        Storage.PaidState.PENDING -> return "This invoice is being paid."
+        Storage.PaidState.PAID -> return "This invoice was already paid."
+        null -> {}
     }
-    if (storage.payments(Int.MAX_VALUE).any { it.rhash == invoice.paymentHash && !it.incoming && !it.failed }) {
-        return "This invoice was already paid."
-    }
-    val balance = balanceMsat() ?: return "Your balance isn't known yet."
+    // Our own request, made by our server on another device: paying it would move sats from us to us, or mark it paid with none moved.
+    if (parts != null && invoice.payee == parts[1] && storage.isOurRequest(invoice.paymentHash, parts[0])) return "This is your own invoice."
+    val balance = storage.spendableMsat() ?: return "Your balance isn't known yet."
     if (!PaymentRules.fits(invoice.amountMsat, PaymentRules.feeReserveMsat(invoice.amountMsat), balance)) {
         return "That is more than your balance (with room for routing fees)."
     }
@@ -189,6 +189,21 @@ suspend fun Engine.refreshPaymentHistory() {
         val oldest = rows.minOfOrNull { it.ts }
         if (rows.size < PAYMENT_PAGE_SIZE.toInt() || newestStored == null || oldest == null || oldest <= newestStored) return
         before = oldest
+    }
+}
+
+/// How far back the history is fetched for a send of ours the server may have settled without telling this device: 30 days, 10 pages at most (iOS
+/// `openSendReach`, `openSendPages`).
+const val OPEN_SEND_REACH_MS = 30L * 24 * 60 * 60 * 1000
+const val OPEN_SEND_PAGES = 10
+
+/// Pages back through the history until it reaches the oldest send of ours still open, so that each page can settle it (iOS `fetchBackToOpenSends`).
+suspend fun Engine.fetchBackToOpenSends() {
+    val since = System.currentTimeMillis() - OPEN_SEND_REACH_MS
+    repeat(OPEN_SEND_PAGES) {
+        val open = storage.oldestOpenSend(since) ?: return
+        val oldest = storage.oldestPaymentTimestamp() ?: return
+        if (oldest <= open || fetchOlderPaymentHistory() < PAYMENT_PAGE_SIZE.toInt()) return
     }
 }
 
@@ -398,6 +413,7 @@ internal fun Engine.paymentRunner(): PaymentRunner = object : PaymentRunner {
     override val isConnected: Boolean get() = this@paymentRunner.isConnected
     override val network: String get() = this@paymentRunner.network
     override fun nowMs() = System.currentTimeMillis()
+    override fun coreError(message: String) = emitCoreError(message)
     override fun decodeInvoice(bolt11: String): Invoice = this@paymentRunner.decodeInvoice(bolt11)
 
     private suspend fun publish(commitWith: (RunReturn) -> Storage.Commit, call: (time: String, state: ByteArray) -> RunReturn): Published =
@@ -409,9 +425,14 @@ internal fun Engine.paymentRunner(): PaymentRunner = object : PaymentRunner {
         } catch (e: AppPaymentFailure) {
             throw e
         } catch (e: uniffi.sphinxrs.SphinxException) {
-            throw WalletRefusal(WalletError.PAYMENT_FAILED, "Could not pay: ${e.message ?: "the core refused"}")
+            // The core's own words, as iOS's `PeelError.readable` keeps them.
+            throw WalletRefusal(WalletError.PAYMENT_FAILED, e.message ?: "the core refused")
+        } catch (e: ConnectionLostAfterPayException) {
+            // Part of it went: it may have gone.
+            Published.Unknown(e)
         } catch (e: NotConnectedException) {
-            throw AppPaymentFailure(AppFailure.NOT_CONNECTED)
+            // The commit is written; nothing was published (iOS `.none`).
+            Published.None
         } catch (e: java.io.IOException) {
             // Committed, then a write failed: it may have gone.
             Published.Unknown(e)

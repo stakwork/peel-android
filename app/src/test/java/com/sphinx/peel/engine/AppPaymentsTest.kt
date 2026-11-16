@@ -39,6 +39,9 @@ class AppPaymentsTest {
         val invoices = mutableMapOf<String, Invoice>()
         var ownKeys0: Pair<String, String>? = self to lsp
         var next: String? = null // a hash the next keysend is made with
+        var outcome: Published = Published.All // how the next publish ends: the commit is written either way
+        val coreErrors = mutableListOf<String>()
+        override fun coreError(message: String) { coreErrors += message }
         override val accountKey get() = self
         override val ownKeys get() = ownKeys0
         override val isConnected get() = connected
@@ -48,7 +51,7 @@ class AppPaymentsTest {
         private fun commit(tag: String, hash: String, extra: (String?, String?) -> Storage.Commit): Published {
             storage.apply(extra(tag, hash))
             published += tag
-            return Published.All
+            return outcome
         }
         override suspend fun sendKeysend(to: String, amountMsat: Long, data: ByteArray?, routeHint: String?, extra: (String?, String?) -> Storage.Commit): Published {
             sent++
@@ -348,5 +351,95 @@ class AppPaymentsTest {
         assertEquals(WalletRecord.State.SETTLED, told.first().state)
         assertEquals(zeros, told.first().preimage)
         assertEquals(WalletRecord.State.FAILED, told.last().state)
+    }
+
+    // MARK: What the publish did (iOS `commitAndPublish`'s `.none` and `.unknown`)
+
+    /// The connection had gone before the first publish: nothing moved, so the payment is failed at once ("not connected") and may be paid again, rather
+    /// than pending for half an hour. The commit was written first, and the budget counted it until the failure refunded it.
+    @Test fun `a keysend that never left is failed at once and may go again`() {
+        balance(1_000_000)
+        runner.outcome = Published.None
+        assertEquals(AppFailure.NOT_CONNECTED, failure { payments.keysend(peer, 20_000, routeHint = hint, wallet = tag) })
+        val failed = storage.keysend("k1")!!
+        assertEquals(InvoiceRecord.Status.FAILED, failed.status)
+        assertEquals("not connected", failed.error)
+        assertEquals(0L, storage.waitingMsat(runner.clock))
+        assertEquals("not connected", storage.walletRecords(tag.connection).first().failureReason)
+        runner.outcome = Published.All
+        runBlocking { payments.keysend(peer, 20_000, routeHint = hint, wallet = tag) }
+        assertEquals(InvoiceRecord.Status.PENDING, storage.keysend("k2")!!.status)
+    }
+
+    @Test fun `an invoice that never left is failed at once and may be paid again`() {
+        balance(1_000_000)
+        val inv = invoice(1)
+        runner.outcome = Published.None
+        assertEquals(AppFailure.NOT_CONNECTED, failure { payments.payInvoice(inv, tag) })
+        assertEquals(InvoiceRecord.Status.FAILED, storage.invoice(inv.paymentHash, false)!!.status)
+        assertEquals("not connected", storage.invoice(inv.paymentHash, false)!!.error)
+        runner.outcome = Published.All
+        runBlocking { payments.payInvoice(inv, tag) }
+        assertEquals(InvoiceRecord.Status.PENDING, storage.invoice(inv.paymentHash, false)!!.status)
+    }
+
+    /// Something failed once publishing had begun: it may have gone, so it stays pending (never sent again), and the person is told in iOS's words.
+    @Test fun `a publish that may have gone stays pending and is told`() = runBlocking<Unit> {
+        balance(1_000_000)
+        runner.outcome = Published.Unknown(java.io.IOException("socket closed"))
+        val record = payments.keysend(peer, 20_000, wallet = tag)
+        assertEquals(InvoiceRecord.Status.PENDING, record.status)
+        payments.payInvoice(invoice(1), tag)
+        assertEquals(InvoiceRecord.Status.PENDING, storage.invoice(hashOf(201), false)!!.status)
+        assertEquals(
+            List(2) { "The connection failed while sending; the payment may have gone. It stays unconfirmed until the server says (socket closed)" },
+            runner.coreErrors,
+        )
+    }
+
+    // MARK: UNSETTLED, and the books' view of an invoice (iOS `paidState`, `isOurRequest`)
+
+    /// The server handed it on and did not settle it: an app's wallet still shows it pending, it is never paid again, and nothing waits on it.
+    @Test fun `an unsettled invoice is never paid again and an app still sees it pending`() {
+        balance(1_000_000)
+        runBlocking { payments.payInvoice(invoice(1), tag) }
+        storage.markSendStatus("i1", SendStatus.UNSETTLED)
+        assertEquals(InvoiceRecord.Status.UNSETTLED, storage.invoice(hashOf(201), false)!!.status)
+        assertEquals(AppFailure.INVOICE_PENDING, payments.invoiceProblem(invoice(1)))
+        assertEquals(WalletRecord.State.PENDING, storage.walletRecords(tag.connection).first().state)
+        // The server's later word still lands: failed, then settled after all.
+        storage.markSendStatus("i1", SendStatus.FAILED, "no route")
+        assertNull(payments.invoiceProblem(invoice(1)))
+        storage.markSendStatus("i1", SendStatus.DELIVERED)
+        assertEquals(AppFailure.INVOICE_ALREADY_PAID, payments.invoiceProblem(invoice(1)))
+    }
+
+    /// A payment that failed here but that the server's history shows paid (another device paid it) is paid.
+    @Test fun `a failed payment the history shows paid is already paid`() {
+        balance(1_000_000)
+        storage.saveInvoice(InvoiceRecord(hashOf(206), false, "lnbc6", 1_000, "", peer, 1, null, InvoiceRecord.Status.FAILED, tag = "t6", error = "x"))
+        assertNull(payments.invoiceProblem(invoice(6)))
+        storage.insertPayments(PaymentRecord.decode("""[{"amt_msat":1000,"rhash":"${hashOf(206)}","ts":5000}]"""))
+        assertEquals(AppFailure.INVOICE_ALREADY_PAID, payments.invoiceProblem(invoice(6)))
+    }
+
+    /// Our own request, made by our own server on another device, comes back from history with no invoice record: paying it would move sats from us to
+    /// us. Only an invoice of our server's, and only a request signed with our key.
+    @Test fun `our own request made on another device is not paid`() {
+        balance(1_000_000)
+        fun request(n: Int, signer: String, fromMe: Boolean = true, type: Int = 2) = storage.insertMessages(listOf(
+            com.sphinx.peel.storage.MessageRow(
+                uuid = "u$n", serverIndex = n.toLong(), type = type, chat = peer, fromMe = fromMe, sender = """{"pubkey":"$signer","alias":"me"}""",
+                body = "{}", msat = null, timestamp = 1, tag = null, paymentHash = hashOf(300 + n),
+            ),
+        ))
+        request(1, self)
+        request(2, peer)
+        request(3, self, fromMe = false)
+        request(4, self, type = 0)
+        assertEquals(AppFailure.OWN_INVOICE, payments.invoiceProblem(invoice(301, payee = lsp).copy(paymentHash = hashOf(301))))
+        // Another key's, someone else's, another type, or an invoice from another node: nothing says it is ours.
+        for (n in 2..4) assertNull(payments.invoiceProblem(invoice(300 + n, payee = lsp).copy(paymentHash = hashOf(300 + n))))
+        assertNull(payments.invoiceProblem(invoice(301, payee = peer).copy(paymentHash = hashOf(301))))
     }
 }

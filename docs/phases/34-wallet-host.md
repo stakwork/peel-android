@@ -26,7 +26,7 @@ iOS read from `main` (1778b01): `WalletHost.swift` (all but credit), `WalletHost
 
 ## Differences from iOS
 - **Scopes**: only `Org`/`Origin` (the Mac's `.app`/`.remote` do not exist), so the `capability` "that is not the app this page shows" check is not needed; an org's `get_info`, connect etc. work for any of its apps.
-- **No `stillOpen`** ("a yes once Peel locked is a no"): that is in iOS's `PhoneWalletSheets` (UI); on Android a lock closes the page (`PublicPageRouter.locked`, `MainTabs` leaving), which cancels the pending sheet.
+- **(Phase 38 adds `OrgPageDisposeTest` for this path.)** **No `stillOpen`** ("a yes once Peel locked is a no"): that is in iOS's `PhoneWalletSheets` (UI); on Android a lock closes the page (`PublicPageRouter.locked`, `MainTabs` leaving), which cancels the pending sheet.
 - **No withdrawal** (`withdrawnBy`) of a sheet by the page: credit's (step 7).
 - **A cancelled sheet**: iOS's task group cancels `present()`; here `withTimeoutOrNull` cancels the person's coroutine, which is the sheet taken down.
 - **`now` is `nowMs() / 1000`** (iOS has `now` and `nowMs`); connections' times are seconds.

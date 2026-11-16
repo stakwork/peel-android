@@ -41,8 +41,8 @@ iOS read from `main` (1778b01, #551 merged): `OrgPage.swift`, `Stadeum.swift` (`
 - `AgentArtifact` text is cut at 200 characters (iOS: 200 graphemes); an https link is kept as written, not re-serialised.
 - `Opening.NotPaired` vs `ConnectFirst` is decided by `link != null && !revoked`, as iOS's `link == nil || revoked`.
 - `strut.proposals` (a tribe's proposal cards) and `AgentJob`/`AgentToolLine` are not ported.
-- `Stadeum.opening(...)` returns the iOS cases; the Apps list still says "Connect <source> to open this app." (as step 1) for any case that is not a page, where iOS opens nothing.
-- A `peel://open` public page and an org page can both be open (iOS replaces one with the other): they are separate hosts here.
+- `Stadeum.opening(...)` returns the iOS cases; the Apps list now opens nothing for any case that is not a page, as iOS (phase 37).
+- A `peel://open` link replaces an org page, as iOS (one router, phase 37); the Talk card opening has its own opener (phase 37).
 
 ## Tests
 JVM/Robolectric: `AgentArtifactTest` (17: iOS `ControlEnvelopeTests`' deliverables/handles/apps tables, `CallChatTests`' strut entries, `ControlRowTests`' tribe entries and ask-first, `OrgPageTests`' `onOrg`),

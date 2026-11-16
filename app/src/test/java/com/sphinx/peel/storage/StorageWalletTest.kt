@@ -203,11 +203,12 @@ class StorageWalletTest {
         val records = storage.walletRecords(key)
         assertEquals("no route", records.first { it.paymentHash == hashOf(1) }.failureReason)
         assertEquals(WalletRecord.State.SETTLED, records.first { it.paymentHash == hashOf(2) }.state)
-        // A failure after it settled never moves it back; a word after a failure does not move it either.
+        // A failure after it settled never moves it back; a COMPLETE after a failure does (the server had it after all, iOS `applyStatus`).
         storage.markInvoiceSendStatus("k2", delivered = false, error = "late")
         assertEquals(InvoiceRecord.Status.PAID, storage.keysend("k2")!!.status)
         storage.markInvoiceSendStatus("k1", delivered = true)
-        assertEquals(InvoiceRecord.Status.FAILED, storage.keysend("k1")!!.status)
+        assertEquals(InvoiceRecord.Status.PAID, storage.keysend("k1")!!.status)
+        assertNull(storage.keysend("k1")!!.error)
     }
 
     /// The history settles or fails a keysend left open, by its payment hash; settled there, it has no preimage, and its fee is what left beyond its amount

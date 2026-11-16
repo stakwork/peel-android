@@ -93,11 +93,16 @@ sections for code that isn't written yet.
   - `engine/WalletProtocol.kt` (`checkParams`, `resultProblems`, `notificationProblems`, `connectionRequestProblems`, `WalletRefusal`), `AppPayments.kt` (`AppPayments`, `PaymentRunner`, `AppWallet`, `EngineWallet`) and
     `Payments.kt`'s `Engine.paymentRunner()`/`engineWallet()` — the app-payments engine over the core (`docs/phases/33-app-payments.md`).
   - `engine/WalletHost.kt` (`WalletHost`, `WalletConnectSheet`, `WalletPaymentSheet`, `WalletPerson`), `WalletWords.kt` — the wallet host over `EngineWallet` for every scope (`docs/phases/34-wallet-host.md`); `Engine.walletHost`. UI (6b): pure `engine/WalletSheetState.kt` (`ArmingGate`, `WalletPayStep`, `WalletConnectForm`, `ConnectedAppRow`), `ui/page/PhoneWalletSheets.kt` + `WalletSheets.kt` (connect and payment sheets), You › Connected apps in `ui/you/YouScreen.kt`.
+  - Wallet parity (`docs/phases/38-wallet-parity.md`): `InvoiceRecord.Status.UNSETTLED`, `Storage.markSendStatus` (the one forward-only rule over message/invoice/invite/keysend), `Storage.pendingSends`/`oldestOpenSend`/`paidState`/`isOurRequest`,
+    `SendStatus.unrecorded`, `Engine.reconcileInBackground`/`fetchBackToOpenSends`, `Published.None`/`Unknown` and `Engine.coreErrors` for app payments.
   - `engine/CreditPurchase.kt` (`CreditPurchase`, `CreditReply`, `HostCapability`), `WalletHost.kt` (`buy_credit*`, `WalletCreditSheet`, `creditKey`, sheet withdrawal) — buying a visitor's credit (`docs/phases/35-buy-credit.md`); sheet `WalletCreditPhoneSheet` in `ui/page/WalletSheets.kt`.
   - `engine/LucideNames.kt`, `TalkHistory.kt` (`TalkHistoryStore`, local saved Talk conversations), `ui/apps/AppIcons.kt`, `ui/talk/TalkHistoryScreen.kt` — Apps icons, pull-to-refresh and the Talk row menu
     (`docs/phases/36-apps-cosmetics.md`).
+  - `engine/SvgPath.kt`, `LucideSet.kt` (+ `LucideNames.kt`), `ui/apps/AppIcons.kt`, `assets/lucide/icons.json`, `tools/lucide-convert.py` — all of lucide as app icons (`docs/phases/37-lucide-icons.md`): pure path parser and
+    primitives→paths (JVM-tested), the bundled icon set (ISC, `assets/lucide/LICENSE`), `ImageVector`s in an LRU.
+  - `engine/AppsOpenDecision.kt` (Apps list rules), `ui/page/PublicPageRouter.kt` (iOS `PhoneRouter`'s `orgPage`/`publicPage`/`waitingLink`, held by `MainActivity` and passed to `MainTabs`), `ui/talk/TalkOpener.kt` (+ `LocalTalkOpener`: a Talk card's page/link) — page behaviour (`docs/phases/39-page-behaviour.md`).
   - `engine/ControlEnvelope.kt`, `AgentChat.kt` (`ControlEnvelope`, `ControlMessage`, `ControlMessages`, `AgentToolLine`, `AgentJob`, `AgentExtras`, `AgentRequest`, `AgentReads`, `AgentToolTitle`, `ControlPlan`) and `Storage` v15 (`message.isControl`) — the agent's control messages
-    (`docs/phases/39-control-messages.md`): a quiet line, a request's one row or nothing, tool rows above a reply, never unread or notified; UI `ui/dashboard/ControlRows.kt`. Proposals are Mac-only and not ported.
+    (`docs/phases/40-control-messages.md`): a quiet line, a request's one row or nothing, tool rows above a reply, never unread or notified; UI `ui/dashboard/ControlRows.kt`. Proposals are Mac-only and not ported.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
