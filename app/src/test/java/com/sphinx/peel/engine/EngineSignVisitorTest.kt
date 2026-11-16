@@ -1,9 +1,11 @@
 package com.sphinx.peel.engine
 
 import androidx.test.core.app.ApplicationProvider
+import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Ignore
 import org.junit.Test
@@ -31,5 +33,29 @@ class EngineSignVisitorTest {
         assertEquals(66, signed.key.length)
         assertTrue(signed.key.startsWith("02") || signed.key.startsWith("03"))
         assertEquals(130, signed.sig.length)
+    }
+
+    /// iOS `theEngineSendsItsAddressWithItsKeyAlone` (PR #557): with the account's key the engine sends the account's own address,
+    /// the contact info the core reported: none before registering, none with a domain's key, none that is another key's.
+    @Ignore("needs the native libsphinxrs, which the JVM unit-test classpath does not have: run on a device")
+    @Test fun theEngineSendsItsAddressWithItsKeyAlone() = runBlocking {
+        val storage = Storage(ApplicationProvider.getApplicationContext(), account = "sign-${System.nanoTime()}")
+        val engine = Engine(mnemonic, storage)
+        val challenge = VisitorChallenge.parse(ROOT_CHALLENGE)!!
+        assertNull(engine.signVisitor(challenge, SignInKey.root).address)
+
+        val lsp = "03" + "ab".repeat(32)
+        val own = "${engine.accountKey}_${lsp}_1099511627776"
+        storage.apply(Storage.Commit(settings = mapOf(Setting.CONTACT_INFO to own.uppercase())))
+        val signed = engine.signVisitor(challenge, SignInKey.root)
+        assertEquals(own, signed.address)
+        assertEquals(own, signed.toJson().getString("address"))
+        val domain = engine.signVisitor(VisitorChallenge.parse(challengeOf(claims(key = "domain")))!!, SignInKey.domain)
+        assertNull(domain.address)
+
+        storage.apply(Storage.Commit(settings = mapOf(Setting.CONTACT_INFO to "${"02" + "cd".repeat(32)}_${lsp}_1")))
+        assertNull(engine.signVisitor(challenge, SignInKey.root).address)
+        storage.apply(Storage.Commit(settings = mapOf(Setting.CONTACT_INFO to "${engine.accountKey}_$lsp")))
+        assertNull(engine.signVisitor(challenge, SignInKey.root).address)
     }
 }

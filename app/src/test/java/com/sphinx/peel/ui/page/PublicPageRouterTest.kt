@@ -48,4 +48,17 @@ class PublicPageRouterTest {
         assertNull(router.page)
         assertNull(router.waitingLink)
     }
+
+    /// Each page that comes on screen is told to [PublicPageRouter]'s `opened` (kept for the Apps list,
+    /// docs/phases/37-worker-onboarding.md); a link still waiting for the unlock is not, until it opens.
+    @Test fun eachPageOpenedIsTold() {
+        val seen = mutableListOf<PublicAppLink>()
+        val router = PublicPageRouter(opened = { seen += it })
+        router.open(a, ready = false)
+        assertEquals(emptyList<PublicAppLink>(), seen)
+        router.openWaitingLink()
+        router.open(b, ready = true)
+        router.openWaitingLink()
+        assertEquals(listOf(a, b), seen)
+    }
 }

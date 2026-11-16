@@ -1081,7 +1081,8 @@ private fun ConnectedAppCard(storage: Storage, connection: WalletConnection) {
             }
             row.spentLine?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
         }
-        TextButton(onClick = { storage.deleteWalletConnection(connection.key) }, Modifier.padding(horizontal = 8.dp)) {
+        // A stranger's app leaves the Apps list with its connection (docs/phases/37-worker-onboarding.md).
+        TextButton(onClick = { storage.deleteWalletConnection(connection.key); storage.forgetPublicAppsOf(connection.key) }, Modifier.padding(horizontal = 8.dp)) {
             Text(ConnectedAppRow.DISCONNECT, color = Theme.colors.destructive)
         }
     }

@@ -187,3 +187,17 @@ data class PublicAppLink(
         private fun decode(s: String): String = URLDecoder.decode(s.replace("+", "%2B"), "UTF-8")
     }
 }
+
+/// A stranger's public app opened here, kept for the Apps list (`Storage.openedApps`, docs/phases/37-worker-onboarding.md): its
+/// link, when it was last opened (unix seconds), and the title its origin's connection holds, if it signed in or connected.
+data class OpenedApp(val link: PublicAppLink, val openedAt: Long, val connectionTitle: String? = null) {
+    /// The connection's title (the app's own claim), else the host, as the page's own title is.
+    val title: String get() = connectionTitle?.takeIf { it.isNotBlank() } ?: link.host
+
+    /// Where it is: the host, and the app's name when the address gives one.
+    val caption: String get() = listOfNotNull(link.host, link.app).joinToString(" \u00B7 ")
+
+    /// Whether a search of the Apps list finds it: as a workspace app's (`WorkspaceApp.matches`), in its title, host or app name.
+    fun matches(query: String): Boolean =
+        listOfNotNull(title, link.host, link.app).any { it.contains(query.trim(), ignoreCase = true) }
+}

@@ -111,4 +111,17 @@ object InviteLink {
         if (scheme?.lowercase() != SCHEME || action != "i" || uri.isNullOrBlank()) return null
         return uri
     }
+
+    /// The section of a worker's invite link that names the app to open (docs/phases/37-worker-onboarding.md).
+    const val APP_SECTION = "a="
+
+    /// The public strut app a worker's invite link names, `…&a=<percent-encoded address>`, to open once the account is ready
+    /// (docs/phases/37-worker-onboarding.md). It lives only in the link: the core finds `d=`/`c=`/`t=` by prefix and passes
+    /// over it, so the link still goes to the core whole, and the mixer never sees it. Held to a `peel://open?url=` link's rules
+    /// ([PublicAppLink.of]); null when there is no `a=`, more than one, or it fails them, and the invite is read as before.
+    fun appOf(link: String): PublicAppLink? {
+        val sections = link.substringAfter('?', "").split('&').filter { it.startsWith(APP_SECTION) }
+        val encoded = sections.singleOrNull()?.removePrefix(APP_SECTION) ?: return null
+        return percentDecode(encoded)?.let(PublicAppLink::of)
+    }
 }

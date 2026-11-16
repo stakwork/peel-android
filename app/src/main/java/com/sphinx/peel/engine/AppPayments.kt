@@ -203,6 +203,8 @@ interface AppWallet {
     suspend fun records(connection: String): List<WalletRecord>
     suspend fun balance(): Long
     suspend fun payeeName(pubkey: String): String?
+    /// Signs a visitor in with the account's key, its Sphinx address beside it, or with a key of the challenge's host alone, no
+    /// address. Every way a sign-in is answered (the sheet's yes, a held connection) sends its `result` (iOS PR #557).
     suspend fun signVisitor(challenge: VisitorChallenge, key: SignInKey): VisitorSignature
     val signsPerDomain: Boolean
     fun updates(): kotlinx.coroutines.flow.Flow<WalletRecord>

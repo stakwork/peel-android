@@ -96,6 +96,9 @@ sections for code that isn't written yet.
   - `engine/CreditPurchase.kt` (`CreditPurchase`, `CreditReply`, `HostCapability`), `WalletHost.kt` (`buy_credit*`, `WalletCreditSheet`, `creditKey`, sheet withdrawal) — buying a visitor's credit (`docs/phases/35-buy-credit.md`); sheet `WalletCreditPhoneSheet` in `ui/page/WalletSheets.kt`.
   - `engine/LucideNames.kt`, `TalkHistory.kt` (`TalkHistoryStore`, local saved Talk conversations), `ui/apps/AppIcons.kt`, `ui/talk/TalkHistoryScreen.kt` — Apps icons, pull-to-refresh and the Talk row menu
     (`docs/phases/36-apps-cosmetics.md`).
+  - `InviteLink.appOf` (`engine/Invite.kt`), `OpenedApp` (`engine/PublicApp.kt`), `Storage` v15 `public_app`, `PublicPageRouter(opened)`,
+    `VisitorSignature.address`/`Engine.signInAddress` — worker onboarding (`docs/phases/37-worker-onboarding.md`): an invite link's `&a=`
+    opens a public app, `sign_in` sends the account's Sphinx address with the root key, opened public apps stay in Apps.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

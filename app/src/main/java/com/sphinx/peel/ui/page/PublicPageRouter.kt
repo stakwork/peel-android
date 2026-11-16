@@ -8,7 +8,10 @@ import com.sphinx.peel.engine.PublicAppLink
 /// Where a `peel://open?url=…` link goes (iOS `router.open(peelLink:)` / `openWaitingLink()`): open now when the
 /// account is unlocked, else wait for the unlock. A lock closes the page but keeps a waiting link (it opens at the next
 /// unlock); only a sign-out or wipe ([reset]) drops both (iOS `PhoneRouter.reset`).
-class PublicPageRouter {
+///
+/// [opened] is told of each page as it comes on screen, whichever way it came (a link, a worker's invite link, the Apps list):
+/// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/37-worker-onboarding.md; Android only).
+class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
     /// The page on screen, if any.
     var page by mutableStateOf<PublicAppLink?>(null)
         private set
@@ -23,6 +26,7 @@ class PublicPageRouter {
         if (ready) {
             waitingLink = null
             page = link
+            opened(link)
         } else {
             waitingLink = link
         }
@@ -32,6 +36,7 @@ class PublicPageRouter {
         val link = waitingLink ?: return
         waitingLink = null
         page = link
+        opened(link)
     }
 
     fun close() {

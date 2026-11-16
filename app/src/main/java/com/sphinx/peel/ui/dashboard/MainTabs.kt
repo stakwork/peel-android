@@ -263,7 +263,7 @@ fun MainTabs(
             if (route != null && chat == null) {
                 val back = { openRoute = null }
                 when (route) {
-                    DashboardRoute.APPS -> AppsScreen(onBack = back, onTalk = { home -> back(); talkToJamie(home) })
+                    DashboardRoute.APPS -> AppsScreen(storage, onBack = back, onTalk = { home -> back(); talkToJamie(home) })
                     DashboardRoute.THREADS -> ThreadsScreen(engine, storage, onBack = back, onOpenThread = { threadChat, root ->
                         openThreadRoot = root
                         openChat = threadChat
