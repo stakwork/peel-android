@@ -3,6 +3,7 @@ package com.sphinx.peel.engine
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -37,16 +38,21 @@ private class FakePerson : WalletPerson {
     var cancelled = false
     /// What a sheet does: answers at once with this by default.
     var answer: suspend (SignInAsk) -> SignInKey? = { it.keys.first() }
-    override suspend fun askSignIn(ask: SignInAsk): SignInKey? {
+    override suspend fun connect(sheet: WalletConnectSheet): WalletConnectAnswer? {
+        val offer = sheet.signIn!!
+        val ask = SignInAsk(offer.host, SignInApp(sheet.app, sheet.version, sheet.title), offer.keys)
         asks += ask
         asked.complete(Unit)
         try {
-            return answer(ask)
+            val key = answer(ask) ?: return null
+            return WalletConnectAnswer.asAsked(sheet).copy(signIn = key)
         } catch (e: kotlinx.coroutines.CancellationException) {
             cancelled = true
             throw e
         }
     }
+    override suspend fun pay(sheet: WalletPaymentSheet) = false
+    override suspend fun buyCredit(sheet: WalletCreditSheet) = false
     override fun signedIn(host: String, key: SignInKey) { notices += host to key }
 }
 
@@ -56,9 +62,10 @@ class WalletHostTest {
     private val connections = FakeConnections()
     private val signer = FakeSigner()
     private val person = FakePerson()
-    private fun host(sheetTimeoutMs: Long = 5000) = WalletHost(connections, signer, person, { now }, sheetTimeoutMs)
+    private fun host(sheetTimeoutMs: Long = 5000) = WalletHost(connections, ScriptedWallet(signer), { now }, sheetTimeoutMs)
     private val origin = "https://shop.example.com"
-    private fun caller(acted: Boolean = true) = WalletCaller.page(origin, acted)
+    private fun caller(acted: Boolean = true) = WalletCaller(WalletScope.Origin(origin), "shop.example.com", acted, person)
+    private fun orgCaller(acted: Boolean = true) = WalletCaller(WalletScope.Org("acme"), "Acme", acted, person)
     private val scope = "origin:$origin"
 
     private fun signIn(challenge: String = ROOT_CHALLENGE, seller: String = origin) = JSONObject().put("v", 1).put("op", "sign_in")
@@ -70,7 +77,7 @@ class WalletHostTest {
     private fun message(op: String, app: JSONObject? = JSONObject().put("name", "n").put("version", "1")) =
         JSONObject().put("v", 1).put("op", op).apply { if (app != null) put("app", app) }
     private fun app(request: Boolean = true) = JSONObject().put("name", "n").put("version", "1").apply {
-        if (request) put("request", JSONObject())
+        if (request) put("request", JSONObject().put("request_methods", org.json.JSONArray().put("pay_keysend")))
     }
     private fun JSONObject.text() = getJSONObject("error").getString("message")
 
@@ -78,7 +85,7 @@ class WalletHostTest {
         val r = host().handle(JSONObject().put("v", 1).put("op", "host_capability"), caller())
         val result = r.getJSONObject("result")
         assertEquals(1, result.getInt("version"))
-        assertEquals(JSONArray().put("sign_in").toString(), result.getJSONArray("ops").toString())
+        assertEquals(JSONArray(WalletHost.VISITOR_OPS).toString(), result.getJSONArray("ops").toString())
         assertEquals("Peel", result.getString("wallet"))
     }
 
@@ -115,8 +122,9 @@ class WalletHostTest {
         val h = host()
         val cap = h.handle(message("capability", app()), caller()).getJSONObject("result")
         assertEquals(1, cap.getInt("version"))
-        assertEquals(0, cap.getJSONArray("methods").length())
-        assertEquals(0, cap.getJSONArray("notifications").length())
+        // The methods Peel's wallet does (not pay_lightning_address), and every notification type.
+        assertEquals(WalletHost.OFFERED.map { it.wire }, List(cap.getJSONArray("methods").length()) { cap.getJSONArray("methods").getString(it) })
+        assertEquals(3, cap.getJSONArray("notifications").length())
         assertEquals("sphinx", cap.getString("wallet"))
         assertFalse(cap.getBoolean("connected"))
         val none = h.handle(message("capability", app(request = false)), caller())
@@ -140,9 +148,11 @@ class WalletHostTest {
         assertEquals("NOT_IMPLEMENTED", unknown.code())
         assertEquals("Peel's wallet has no method pay now.", unknown.text())
         assertEquals("Peel's wallet has no method ${"x".repeat(39)}….", h.handle(call("x".repeat(60)), caller()).text())
-        val known = h.handle(call("pay_invoice"), caller())
-        assertEquals("NOT_IMPLEMENTED", known.code())
-        assertEquals("Peel's wallet cannot do pay_invoice yet.", known.text())
+        // Params are checked first, then the methods offered: one Peel does not do (a Lightning address) is refused before any connection is looked at.
+        val lightning = h.handle(call("pay_lightning_address").put("params", JSONObject().put("address", "a@b.co").put("amount", 1000)), caller())
+        assertEquals("NOT_IMPLEMENTED", lightning.code())
+        assertEquals("Peel's wallet cannot do pay_lightning_address yet.", lightning.text())
+        assertEquals("BAD_REQUEST", h.handle(call("pay_invoice"), caller()).code())
         assertEquals("BAD_REQUEST", h.handle(message("call", null), caller()).code())
     }
 
@@ -189,7 +199,7 @@ class WalletHostTest {
     }
 
     @Test fun aHeldRootKeyDoesNotSignADomainChallenge() = runBlocking {
-        connections.save(WalletConnection(scope, "a", "A", "shop.example.com", emptyList(), SignInKey.root, 1))
+        connections.save(WalletConnection(scope, "a", "A", "shop.example.com", signIn = SignInKey.root, createdAt = 1))
         val domain = challengeOf(claims(key = "domain"))
         val r = host().handle(signIn(domain), caller(acted = false))
         assertEquals("RESTRICTED", r.code())
@@ -254,7 +264,7 @@ class WalletHostTest {
     }
 
     @Test fun aConnectionRevokedWhileTheSheetIsUpStaysRevoked() = runBlocking {
-        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", listOf("pay"), null, 1))
+        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", methods = listOf(WalletMethod.PAY_KEYSEND), createdAt = 1))
         person.answer = { connections.rows.remove(scope); SignInKey.root }
         val r = host().handle(signIn(), caller())
         assertNotNull(r.optJSONObject("result"))
@@ -265,9 +275,9 @@ class WalletHostTest {
     }
 
     @Test fun aHeldConnectionKeepsItsMethods() = runBlocking {
-        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", listOf("pay"), null, 1))
+        connections.save(WalletConnection(scope, "old", "Old", "shop.example.com", methods = listOf(WalletMethod.PAY_KEYSEND), createdAt = 1))
         host().handle(signIn(), caller())
-        assertEquals(listOf("pay"), connections.rows.getValue(scope).methods)
+        assertEquals(listOf(WalletMethod.PAY_KEYSEND), connections.rows.getValue(scope).methods)
         assertEquals(SignInKey.root, connections.rows.getValue(scope).signIn)
     }
 
@@ -281,10 +291,112 @@ class WalletHostTest {
     }
 
     @Test fun anUnexpectedFailureIsInternal() = runBlocking {
-        val failing = WalletHost(connections, { _, _ -> throw IllegalStateException("no key") }, person, { now })
+        val failing = WalletHost(connections, ScriptedWallet(VisitorSigner { _, _ -> throw IllegalStateException("no key") }), { now })
         val r = failing.handle(signIn(), caller())
         assertEquals("INTERNAL", r.code())
         assertEquals("no key", r.text())
         assertNull(r.optJSONObject("result"))
+    }
+
+    // MARK: Scopes (iOS `WalletScope`, `WalletCaller`; an org's page)
+
+    @Test fun scopeKeysAndVisitorHosts() {
+        assertEquals("org:acme", WalletScope.Org("acme").key)
+        assertEquals("origin:https://shop.example.com", WalletScope.Origin("https://shop.example.com").key)
+        assertNull(WalletScope.Org("acme").visitorHost)
+        assertEquals("shop.example.com", WalletScope.Origin("https://shop.example.com:8443").visitorHost)
+        assertEquals("127.0.0.1", WalletScope.Origin("http://127.0.0.1:3000").visitorHost)
+        // The page's address, not what it says: an origin that is no address has no host.
+        assertNull(WalletScope.Origin("not an origin").visitorHost)
+        // An org's page and a box Peel loaded are both named by the page rather than known to Peel.
+        assertTrue(WalletScope.Org("acme").byOrg)
+        assertTrue(WalletScope.Origin("https://x.example").byOrg)
+        assertEquals(WalletScope.Org("acme"), WalletScope.Org("acme"))
+        assertFalse(WalletScope.Org("acme") == WalletScope.Org("globex"))
+    }
+
+    @Test fun hostCapabilityIsPerScope() = runBlocking {
+        val ask = JSONObject().put("v", 1).put("op", "host_capability")
+        val org = host().handle(ask, orgCaller()).getJSONObject("result")
+        assertEquals(1, org.getInt("version"))
+        assertEquals(0, org.getJSONArray("ops").length())
+        assertEquals("Peel", org.getString("wallet"))
+        val origin = host().handle(ask, caller()).getJSONObject("result")
+        assertEquals(JSONArray(listOf("buy_credit", "buy_credit_status", "buy_credit_cancel", "sign_in")).toString(), origin.getJSONArray("ops").toString())
+        assertEquals("Peel", origin.getString("wallet"))
+    }
+
+    @Test fun anOrgPageIsNeverSignedIn() = runBlocking {
+        val r = host().handle(signIn(seller = "https://acme.example.com"), orgCaller())
+        assertEquals("RESTRICTED", r.code())
+        assertEquals(-32000, r.numeric())
+        assertEquals("Peel signs you in only to a public app it opened itself.", r.text())
+        // Not even for a held connection, a tap, or a challenge that names the org's own host; no sheet, no signature, nothing kept.
+        connections.save(WalletConnection("org:acme", "x", "X", "Acme", signIn = SignInKey.root, createdAt = 1))
+        assertEquals("RESTRICTED", host().handle(signIn(), orgCaller(acted = true)).code())
+        assertTrue(person.asks.isEmpty())
+        assertTrue(signer.signed.isEmpty())
+        assertTrue(person.notices.isEmpty())
+    }
+
+    @Test fun creditIsNotBoughtForAnOrg() = runBlocking {
+        for (op in listOf("buy_credit", "buy_credit_status")) {
+            val r = host().handle(message(op), orgCaller())
+            assertEquals(op, "RESTRICTED", r.code())
+            assertEquals("Peel buys credit only for a public app it opened itself.", r.text())
+        }
+    }
+
+    @Test fun anOrgPageCancelsNothing() = runBlocking {
+        // `buy_credit_cancel` can only take down the asking page's own sheet: for an org it is `{}`, as iOS answers.
+        assertEquals("{\"result\":{}}", host().handle(message("buy_credit_cancel").put("payment_hash", "a".repeat(64)), orgCaller()).toString())
+    }
+
+    @Test fun anOrgPageAsksTheSameWalletQuestions() = runBlocking {
+        val cap = host().handle(message("capability", app()), orgCaller()).getJSONObject("result")
+        assertEquals(WalletHost.OFFERED.size, cap.getJSONArray("methods").length())
+        assertEquals("RESTRICTED", host().handle(message("capability", app(request = false)), orgCaller()).code())
+        // get_info needs no connection: connect and itself, nothing else, and the network.
+        val info = host().handle(message("call", app()).put("method", "get_info"), orgCaller()).getJSONObject("result")
+        assertEquals("bitcoin", info.getString("network"))
+        assertEquals(listOf("connect", "get_info"), List(info.getJSONArray("methods").length()) { info.getJSONArray("methods").getString(it) })
+        // Not connected: a payment is UNAUTHORIZED.
+        val call = host().handle(message("call", app()).put("method", "get_balance"), orgCaller())
+        assertEquals("UNAUTHORIZED", call.code())
+        assertEquals("BAD_REQUEST", host().handle("x", orgCaller()).code())
+    }
+
+    @Test fun theCallersPersonIsTheOneAsked() = runBlocking {
+        val other = FakePerson()
+        val r = host().handle(signIn(), WalletCaller(WalletScope.Origin(origin), "shop.example.com", true, other))
+        assertNotNull(r.optJSONObject("result"))
+        assertEquals(1, other.asks.size)
+        assertTrue(person.asks.isEmpty())
+        // The sheet names the host from the scope, the connection the place from the caller's own record.
+        assertEquals("shop.example.com", other.asks.single().host)
+        assertEquals("shop.example.com", connections.rows.getValue(scope).place)
+    }
+
+    @Test fun aConnectionIsKeptUnderItsScopesKey() = runBlocking {
+        host().handle(signIn(), caller())
+        assertEquals(setOf(scope), connections.rows.keys)
+        // A silent sign-in reads the same key, and tells the person by the scope's host.
+        host().handle(signIn(), caller(acted = false))
+        assertEquals(listOf("shop.example.com" to SignInKey.root), person.notices)
+    }
+
+    @Test fun notificationsReachEveryListenerAndOnlyTheirOwnIsForAPage() = runBlocking {
+        val h = host()
+        val first = mutableListOf<WalletPush>()
+        val second = mutableListOf<WalletPush>()
+        val job1 = kotlinx.coroutines.GlobalScope.launch(Dispatchers.Unconfined) { h.notifications.collect { first += it } }
+        val job2 = kotlinx.coroutines.GlobalScope.launch(Dispatchers.Unconfined) { h.notifications.collect { second += it } }
+        val push = WalletPush("org:acme", "acme/board", JSONObject().put("v", 1))
+        assertTrue(h.publish(push))
+        assertEquals(listOf(push), first)
+        assertEquals(listOf(push), second)
+        job1.cancel(); job2.cancel()
+        // Nobody listening: nothing is lost that anyone wanted, and it is no failure.
+        assertTrue(h.publish(push))
     }
 }

@@ -1,11 +1,8 @@
 package com.sphinx.peel.ui.apps
 
-import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -29,9 +26,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -52,8 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import com.sphinx.peel.engine.AppPage
+import com.sphinx.peel.engine.Opening
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
@@ -69,10 +68,11 @@ import kotlinx.coroutines.coroutineScope
 /// each workspace, then the apps the Stadeum workspaces pinned as tabs, A–Z,
 /// each read and opened on its workspace's own strut with the person's token.
 /// Search, a source filter (with several workspaces), Refresh, long-press to
-/// copy a share link. Not ported: pull-to-refresh (Refresh does it), the
-/// Mac-only own-strut apps, the lucide icon table (a generic glyph instead).
+/// copy a share link, pull to refresh, lucide icons (`LucideNames`/`AppIcons`), Talk rows' long-press menu
+/// (New conversation, History). Not ported: the Mac-only own-strut apps.
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
@@ -83,8 +83,11 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     var read by remember { mutableStateOf<List<WorkspaceApp>>(emptyList()) }
     var reading by remember { mutableStateOf(false) }
     var unread by remember { mutableStateOf<List<String>>(emptyList()) }
-    var page by remember { mutableStateOf<AppPage?>(null) }
+    val openPage = LocalPageOpener.current
     var refresh by remember { mutableStateOf(0) }
+    var historyHome by remember { mutableStateOf<TalkHome?>(null) }
+    val context2 = LocalContext.current
+    val history = remember { com.sphinx.peel.engine.TalkHistoryStore(java.io.File(context2.filesDir, "talk_history")) }
 
     // Read again on opening, and when the workspaces (or Refresh) change.
     LaunchedEffect(live.map { it.id }, refresh) {
@@ -103,12 +106,12 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
         }
     }
 
-    val shownPage = page
-    if (shownPage != null) {
-        AppPageScreen(shownPage, onBack = { page = null }, modifier)
+    BackHandler(onBack = onBack)
+    // Conversations: a screen over the list (iOS pushes `TalkHistoryScreen`); Back returns to the list.
+    historyHome?.let { home ->
+        com.sphinx.peel.ui.talk.TalkHistoryScreen(home, history, onBack = { historyHome = null }, onTalk = onTalk, modifier = modifier)
         return
     }
-    BackHandler(onBack = onBack)
 
     val liveIds = live.map { it.id }.toSet()
     val apps = read.filter { it.peer in liveIds }
@@ -145,28 +148,31 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
             query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), singleLine = true,
             placeholder = { Text("Search apps") },
         )
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        // Pulling reads again, as Refresh does, and waits for the read (`reading`).
+        PullToRefreshBox(
+            isRefreshing = reading,
+            onRefresh = { if (!reading) refresh++ },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
                 if (homes.isNotEmpty()) {
                     item { Text("Talk to Jamie", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
                     items(homes, key = { "talk-${it.id}" }) { home ->
-                        TalkRow(home) {
-                            onTalk(home)
-                        }
+                        TalkRow(home, onClick = { onTalk(home) }, onHistory = { historyHome = home })
                     }
                     item { Spacer(Modifier.size(12.dp)) }
                 }
                 items(shown, key = { it.id }) { app ->
                     AppRow(app, several, onOpen = {
-                        val opening = AppPage.opening(app, live)
-                        if (opening != null) page = opening else toast.show("Connect ${app.source} to open this app.", ToastType.Warning)
+                        val opening = Stadeum.openings.opening(app)
+                        if (opening is Opening.Page) openPage(opening.request) else toast.show("Connect ${app.source} to open this app.", ToastType.Warning)
                     }, onShare = { link ->
                         copy(context, link)
                         toast.show("Link copied", ToastType.Success)
                     })
                 }
                 if (unread.isNotEmpty() && apps.isNotEmpty() && !reading) {
-                    item { Note("Couldn't read ${unread.joinToString(", ")} just now. Refresh to try again.") }
+                    item { Note("Couldn't read ${unread.joinToString(", ")} just now. Pull to try again.") }
                 } else if (apps.isEmpty() && homes.isNotEmpty() && !reading) {
                     item { Note(emptyText(live, unread)) }
                 }
@@ -176,7 +182,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                 apps.isEmpty() && homes.isNotEmpty() -> if (reading) Spinner()
                 apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", "Connect Stadeum under You to open the apps your workspaces pin.")
                 apps.isEmpty() && reading -> Spinner()
-                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", "${unread.joinToString(", ")} did not answer. Refresh to try again.")
+                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", "${unread.joinToString(", ")} did not answer. Pull to try again.")
                 apps.isEmpty() -> Centered("No apps yet", "Apps your Stadeum workspaces pin show here.")
             }
         }
@@ -186,7 +192,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
 private fun emptyText(live: List<HivePeer>, unread: List<String>) = when {
     live.isEmpty() -> "Connect Stadeum under You to open the apps your workspaces pin."
     unread.isEmpty() -> "Apps your Stadeum workspaces pin show here."
-    else -> "${unread.joinToString(", ")} did not answer. Refresh to try again."
+    else -> "${unread.joinToString(", ")} did not answer. Pull to try again."
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -199,7 +205,7 @@ private fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, 
             Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = { if (link != null) menu = true }).padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Filled.Apps, null, Modifier.size(26.dp), tint = Theme.colors.secondaryText)
+            WorkspaceAppIcon(app.icon, Theme.colors.secondaryText, Modifier.size(26.dp), 20.dp)
             Column(Modifier.weight(1f)) {
                 Text(app.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
                 app.about?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
@@ -214,10 +220,13 @@ private fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, 
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TalkRow(home: TalkHome, onClick: () -> Unit) {
+private fun TalkRow(home: TalkHome, onClick: () -> Unit, onHistory: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = { menu = true }).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -228,13 +237,18 @@ private fun TalkRow(home: TalkHome, onClick: () -> Unit) {
         }
         Icon(Icons.Filled.Mic, "Talk to Jamie on ${home.name}", tint = Theme.colors.accent)
     }
+    DropdownMenu(menu, { menu = false }) {
+        DropdownMenuItem(text = { Text("New conversation") }, leadingIcon = { Icon(Icons.Filled.Mic, null) }, onClick = { menu = false; onClick() })
+        DropdownMenuItem(text = { Text("History") }, leadingIcon = { Icon(Icons.Filled.History, null) }, onClick = { menu = false; onHistory() })
+    }
+    }
 }
 
 @Composable
-private fun Note(text: String) = Text(text, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+private fun Spinner() = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 
 @Composable
-private fun Spinner() = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+private fun Note(text: String) = Text(text, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
 
 @Composable
 private fun Centered(title: String, body: String) = Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -242,52 +256,6 @@ private fun Centered(title: String, body: String) = Box(Modifier.fillMaxSize().p
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
         Text(body, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
     }
-}
-
-/// An app's page in an in-app web view, as iOS's org page sheet does: the
-/// person's token goes in an `Authorization` header on the first request
-/// only (never in the URL, which would leak it to history and logs).
-/// Navigation is kept inside the strut's own origin; anything else is not
-/// loaded here.
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun AppPageScreen(page: AppPage, onBack: () -> Unit, modifier: Modifier) {
-    BackHandler(onBack = onBack)
-    var web by remember { mutableStateOf<WebView?>(null) }
-    val origin = remember(page) { android.net.Uri.parse(page.url).let { it.scheme to it.authority } }
-    Column(modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
-            }
-            Spacer(Modifier.width(12.dp))
-            Text(page.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
-        }
-        AndroidView(
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
-                    webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
-                            val u = request.url
-                            // Same origin loads here, with the token, since a redirect drops headers.
-                            if (u.scheme == origin.first && u.authority == origin.second) {
-                                view.loadUrl(u.toString(), mapOf("Authorization" to "Bearer ${page.token}"))
-                            }
-                            return true
-                        }
-                    }
-                    loadUrl(page.url, mapOf("Authorization" to "Bearer ${page.token}"))
-                    web = this
-                }
-            },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
-    }
-    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { web?.destroy() } }
 }
 
 private fun copy(context: Context, text: String) {

@@ -118,6 +118,11 @@ data class InvoiceRecord(
     /// The chat a payment request went to or came from.
     val chat: String? = null,
     val error: String? = null,
+    /// The preimage the server sent with the COMPLETE of a payment of ours, kept only when it hashes to the payment hash (`Storage.keepPreimage`).
+    val preimage: String? = null,
+    /// The wallet connection ([WalletConnection.key]) an invoice made or paid for an app belongs to, and the app (`<peer>/<name>`); null for our own.
+    val connection: String? = null,
+    val app: String? = null,
 ) {
     enum class Status(val raw: String) {
         /// Made here and not paid yet.

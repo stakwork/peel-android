@@ -12,6 +12,7 @@ import android.content.Intent
 import com.sphinx.peel.call.CallController
 import com.sphinx.peel.call.CallNotice
 import androidx.compose.runtime.LaunchedEffect
+import com.sphinx.peel.engine.Stadeum
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -225,6 +226,30 @@ fun MainTabs(
         )
     }
 
+
+    // An org's page over everything (iOS `router.orgPage`): a deliverable from the agent's DM, a workspace's app, a tapped Hive link or
+    // a Talk card. Its workspace no longer in use (revoked, disconnected, renewed without it): the page and its token go.
+    var orgPage by remember { mutableStateOf<com.sphinx.peel.engine.OrgPageRequest?>(null) }
+    val live = Stadeum.live
+    val shownPage = orgPage?.takeIf { it.isLive(live) }
+    LaunchedEffect(live.map { it.id }, orgPage) { if (orgPage != null && shownPage == null) orgPage = null }
+    // A tapped Hive link to an app opens it when its workspace is paired here. Otherwise it says to connect that workspace first and
+    // still goes to the browser, so Hive shows its own sign-in or not-found; any other link is the system's, as before.
+    val linkOpener = remember(toast, context) {
+        val handler = com.sphinx.peel.engine.AppLinkHandler(
+            tap = { Stadeum.openings.tap(it) },
+            reopen = { Stadeum.openings.opening(it) },
+            openPage = { orgPage = it },
+            announce = { toast.show(it, com.sphinx.peel.ui.toast.ToastType.Warning) },
+            system = { com.sphinx.peel.ui.apps.openInBrowser(context, it) },
+        )
+        com.sphinx.peel.ui.apps.LinkOpener { handler.open(it) }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.sphinx.peel.ui.apps.LocalLinkOpener provides linkOpener,
+        com.sphinx.peel.ui.apps.LocalPageOpener provides { page: com.sphinx.peel.engine.OrgPageRequest -> orgPage = page },
+    ) {
+    Box(Modifier.fillMaxSize()) {
     val talkHome = talk.home
     if (talkHome != null) TalkScreen(talk, onClose = CallController::hangUpTalk) else Column(Modifier.fillMaxSize()) {
         CallController.notice?.let { CallNoticeBar(it, onDismiss = CallController::dismissNotice) }
@@ -297,6 +322,10 @@ fun MainTabs(
                 BottomBar(tab) { tab = it }
             }
         }
+    }
+    // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
+    shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = { orgPage = null }) }
+    }
     }
 }
 
