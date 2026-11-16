@@ -36,6 +36,7 @@ android {
         // unless -Ppeel.push.registerWithHub=true. Debug builds: on when
         // google-services.json exists. -P always overrides.
         buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", "false")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Own app id on the hub (NOT applicationId, which equals the iOS bundle id).
         buildConfigField("String", "PUSH_APP_ID", "\"com.sphinx.peel.android\"")
     }
@@ -82,6 +83,18 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        unitTests {
+            // Compose UI tests under Robolectric need the merged manifest and resources.
+            isIncludeAndroidResources = true
+        }
+    }
+
+    sourceSets {
+        // The strut wallet vectors live with the JVM tests; the instrumented signing test reads the same file.
+        getByName("androidTest").resources.srcDir("src/test/resources")
     }
 
     packaging {
@@ -137,4 +150,15 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.test.manifest)
+
+    // Instrumented tests (app/src/androidTest): need a device or emulator; see docs/phases/40-test-coverage.md.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.okhttp.mockwebserver)
 }

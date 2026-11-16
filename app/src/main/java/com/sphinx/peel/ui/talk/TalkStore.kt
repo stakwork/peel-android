@@ -137,13 +137,19 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
         // Persist the transcript before the room is left, off the main thread.
         val on = (state as? State.On)?.session
         val was = home
-        if (on != null && was != null) {
-            val lines = on.transcript.lines
-            if (lines.isNotEmpty()) scope.launch(Dispatchers.IO) { history.save(lines, was.id, was.name) }
-        }
+        if (on != null && was != null) saveTranscript(history, was, on.transcript.lines, scope)
         on?.leave()
         home = null
         state = State.Starting
         onChanged()
+    }
+
+    companion object {
+        /// The save `hangUp` does for a call that reached the room (pulled out of `hangUp` unchanged, so it can be tested without a
+        /// LiveKit room): an empty transcript is not saved; the write is off the main thread. Null when nothing was started.
+        internal fun saveTranscript(
+            history: TalkHistoryStore, home: TalkHome, lines: List<com.sphinx.peel.engine.TalkLine>, scope: CoroutineScope,
+            io: kotlin.coroutines.CoroutineContext = Dispatchers.IO,
+        ): Job? = if (lines.isEmpty()) null else scope.launch(io) { history.save(lines, home.id, home.name) }
     }
 }

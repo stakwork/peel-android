@@ -197,7 +197,7 @@ private fun emptyText(live: List<HivePeer>, unread: List<String>) = when {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit) {
+internal fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val link = app.shareLink()
     Box {
@@ -222,7 +222,7 @@ private fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, 
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TalkRow(home: TalkHome, onClick: () -> Unit, onHistory: () -> Unit) {
+internal fun TalkRow(home: TalkHome, onClick: () -> Unit, onHistory: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Box {
     Row(
