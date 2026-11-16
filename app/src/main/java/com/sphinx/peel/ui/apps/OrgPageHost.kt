@@ -405,14 +405,15 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
 /// view for both. The page's title (an org's app's own, else its workspace; a public page's host), a Back when the page can go
 /// back, Reload, progress while it loads, a failure screen with Try again, Done, the app wallet's sheet and the notice a
 /// connection leaves with no sheet ([PhoneWalletSheets.toast]) over it. A tap in the page counts for the wallet for
-/// [StrutWallet.GESTURE_WINDOW_MS] and for a link out for [OrgNavigation.TAP_WINDOW_MS].
+/// [StrutWallet.GESTURE_WINDOW_MS] and for a link out for [OrgNavigation.TAP_WINDOW_MS]. [sheets] is the person's side of the wallet, made here
+/// unless a test brings its own (closing the page, which a lock does, answers whatever it waits on as a no).
 @Composable
-fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modifier: Modifier = Modifier) {
+fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null) {
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     @Suppress("DEPRECATION")
-    val sheets = remember(page) { PhoneWalletSheets(scope) { words -> view.announceForAccessibility(words) } }
+    val sheets = remember(page) { sheets ?: PhoneWalletSheets(scope) { words -> view.announceForAccessibility(words) } }
     val controller = remember(page) {
         val profile = if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) "peel_org_" + UUID.randomUUID().toString().replace("-", "") else null
         OrgPageController(page, OrgDownloads(orgDownloadsRoot(context)), scope, profile).also { c ->

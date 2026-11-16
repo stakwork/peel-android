@@ -199,6 +199,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 35 | Buying credit for a visitor's page: `buy_credit`, `buy_credit_status`, `buy_credit_cancel` (strut §1.2), `CreditPurchase`, the credit sheet, sheet withdrawal; step 7 of the org-page port | compiled and unit-tested over a scripted wallet; sheet UI compiled only | [phases/35-buy-credit.md](phases/35-buy-credit.md) |
 | 36 | Apps and Talk cosmetics: lucide app icons (`LucideNames`, `AppIcons`), pull-to-refresh, Talk row menu (New conversation, History) and the local Talk history; step 8 | compiled and unit-tested; UI compiled only | [phases/36-apps-cosmetics.md](phases/36-apps-cosmetics.md) |
 | 37 | All of lucide for app icons: bundled icon set, `SvgPath`/`LucideSet`, iOS alias table, `ImageVector` LRU | compiled and unit-tested; drawing not run on a device | [phases/37-lucide-icons.md](phases/37-lucide-icons.md) |
+| 38 | Wallet parity: `UNSETTLED` for invoices and keysends with iOS's one forward-only rule, `pendingSends`/`oldestOpenSend` over keysends, the unrecorded-payment failing, `reconcileInBackground`, `paidState`/`isOurRequest`, publish none/unknown for app payments, dispose-path test | compiled and unit-tested; native-core paths untested; see the file | [phases/38-wallet-parity.md](phases/38-wallet-parity.md) |
 
 ## Open questions
 
