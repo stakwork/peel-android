@@ -110,6 +110,7 @@ data class DiagnosticEvent(
         previousRunDetail, backgroundExpired,
         tribeTrace, tribeState,
         callAudio,
+        rememberedPinProblem,
     }
     enum class CallAudioStage {
         sessionActivated, interruptionBegan, interruptionEnded, routeChanged, micState,
