@@ -177,27 +177,15 @@ private fun Transcript(session: TalkSession, modifier: Modifier) {
                     }
                 }
                 is TalkRow.Card -> {
-                    val card = row.card.card
-                    val url = card.url
-                    Column(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Theme.colors.fieldFill)
-                            .then(if (url != null) Modifier.clickable { openLink(context, url) } else Modifier)
-                            .padding(12.dp),
-                    ) {
-                        Text(card.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text, maxLines = 2)
-                        card.summary?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 3) }
-                        if (url != null) Text("Open", style = MaterialTheme.typography.labelSmall, color = Theme.colors.accent)
-                    }
+                    // The app's own line for it (`AgentArtifactLine`): says where it lives, opens it (on its org's strut in the page host
+                    // over the call, else its link in the browser) or says why it cannot be opened here. The call stays up behind it.
+                    com.sphinx.peel.ui.apps.AgentArtifactLines(
+                        listOf(row.card.card),
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Theme.colors.fieldFill).padding(12.dp),
+                    )
                 }
             }
         }
-    }
-}
-
-/// Opens an https link in the browser (cards carry only those); the call stays up.
-private fun openLink(context: android.content.Context, url: String) {
-    runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
     }
 }
 

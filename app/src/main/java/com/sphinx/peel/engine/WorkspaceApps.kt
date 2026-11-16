@@ -1,6 +1,5 @@
 package com.sphinx.peel.engine
 
-import java.net.URI
 import java.net.URLEncoder
 import java.text.Collator
 import kotlinx.coroutines.Dispatchers
@@ -142,21 +141,5 @@ data class WorkspaceApp(
             }
 
         private const val MAX_BODY = 2 * 1024 * 1024
-    }
-}
-
-/// How an app opens: its own strut's UI, alone (`?app=<name>&solo=1`), with
-/// the person's token (iOS `Stadeum.opening`, `StrutUI.page`).
-data class AppPage(val url: String, val token: String, val title: String) {
-    companion object {
-        /// Null when the app has no live workspace or the base is not a URL.
-        fun opening(app: WorkspaceApp, live: List<HivePeer>): AppPage? {
-            val peer = live.firstOrNull { it.id == app.peer } ?: return null
-            val base = runCatching { URI(peer.baseUrl) }.getOrNull()?.takeIf { it.host != null } ?: return null
-            val path = base.rawPath.orEmpty().let { if (it.endsWith("/")) it else "$it/" }
-            val value = URLEncoder.encode(app.name, "UTF-8").replace("+", "%20")
-            val url = "${base.scheme}://${base.rawAuthority}$path?app=$value&solo=1"
-            return AppPage(url, peer.token, app.title)
-        }
     }
 }

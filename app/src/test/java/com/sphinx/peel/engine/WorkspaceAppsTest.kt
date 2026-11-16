@@ -54,10 +54,10 @@ class WorkspaceAppsTest {
     @Test
     fun `opening builds the solo app url on the peer strut`() {
         val peer = HivePeer("w1", "https://w1.example.com/lab", "tok", null)
-        val page = AppPage.opening(WorkspaceApp("w1", "pkg/a", "A"), listOf(peer))!!
+        val page = OrgPageRequest.opening(WorkspaceApp("w1", "pkg/a", "A"), listOf(peer))!!
         assertEquals("https://w1.example.com/lab/?app=pkg%2Fa&solo=1", page.url)
         assertTrue("tok" !in page.url)
-        assertNull(AppPage.opening(WorkspaceApp("other", "a", "A"), listOf(peer)))
+        assertNull(OrgPageRequest.opening(WorkspaceApp("other", "a", "A"), listOf(peer)))
     }
 
     @Test
