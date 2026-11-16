@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.talk
 
+import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.diagnostics.Diagnostics
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -95,12 +97,16 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: TalkRefusal) {
+                Diagnostics.note(DiagnosticEvent.ErrorKind.refused)
                 State.Failed(e.message ?: "${target.name} could not start the call.")
             } catch (e: HiveException) {
+                Diagnostics.note(DiagnosticEvent.ErrorKind.call)
                 State.Failed(e.message ?: "${target.name} could not start the call.")
             } catch (e: IOException) {
+                Diagnostics.note(DiagnosticEvent.ErrorKind.call)
                 State.Failed("Peel could not reach ${target.name}: ${e.message ?: e.javaClass.simpleName}.")
             } catch (e: Exception) {
+                Diagnostics.note(DiagnosticEvent.ErrorKind.call)
                 State.Failed("Peel could not start the call: ${e.message ?: e.javaClass.simpleName}.")
             }
             state = next

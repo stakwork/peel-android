@@ -69,6 +69,11 @@ sections for code that isn't written yet.
     show); `Engine.signVisitor`; `Storage` table `wallet_connection` (v13).
     UI in `ui/page/` (`PublicPageScreen` = WebView + `addWebMessageListener` bridge, `SignInSheet`, `PublicPageRouter`) and
     You › Connected apps.
+  - `diagnostics/` — on-device diagnostics (`docs/phases/28-diagnostics.md`, port of `peel`'s `PeelDiagnostics`): `Diagnostics` (the
+    entry point: `record*`, `note`, `setAction`; no-ops before `CrashRecorder.install`), `DiagnosticEvent`, `DiagnosticsRing`,
+    `RunMarker`, `Redactor`, `CrashRecord`, `ExitInfo` (pure, JVM-tested) and `CrashRecorder.kt` (the Android parts: crash handler,
+    `ApplicationExitInfo`, lifecycle). Events carry enums and numbers only; free text goes through `Diagnostics.redact`. UI in
+    `ui/diagnostics/` (You › Diagnostics, the Chats notice, the problem record).
   - `call/` — `CallController` (application-scoped owner of the group call and Talk to Jamie; `MainTabs` only observes it),
     `CallService` (foreground service, the lifecycle anchor), `ForegroundTypes` (pure type selection, JVM-tested);
     `PeelApplication` installs the controller (`docs/phases/15-call-background.md`).

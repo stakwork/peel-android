@@ -5,7 +5,11 @@ import com.hivemq.client.mqtt.MqttGlobalPublishFilter
 import com.hivemq.client.mqtt.datatypes.MqttQos
 import com.hivemq.client.mqtt.lifecycle.MqttDisconnectSource
 import com.hivemq.client.mqtt.mqtt3.Mqtt3AsyncClient
+import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.diagnostics.Diagnostics
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -67,6 +71,8 @@ class Transport(
                 // unless automaticReconnect() is called, which this builder
                 // never does), so the socket stays down either way; this
                 // only decides whether Engine hears about it.
+                // A drop the client saw on the socket (no error text kept): iOS's `readFailure`.
+                if (context.source != MqttDisconnectSource.USER && context.cause != null) Diagnostics.recordReadFailure()
                 if (context.source != MqttDisconnectSource.USER) onUnexpectedDisconnect()
             }
         if (server.tls) {
@@ -83,6 +89,12 @@ class Transport(
             builder.sslWithDefaultConfig()
         }
         builder.buildAsync()
+    }
+
+    private val closed = AtomicBoolean(false)
+
+    init {
+        Diagnostics.recordTransportLifecycle(DiagnosticEvent.LifecycleStage.opened, alive.incrementAndGet())
     }
 
     /// Messages from the broker, from the moment this is collected.
@@ -109,13 +121,19 @@ class Transport(
 
     suspend fun subscribe(topics: List<String>) {
         check(isConnected) { "MQTT client is not connected." }
-        for (topic in topics) {
-            client.subscribeWith()
-                .topicFilter(topic)
-                .qos(MqttQos.AT_MOST_ONCE)
-                .send()
-                .await()
+        try {
+            for (topic in topics) {
+                client.subscribeWith()
+                    .topicFilter(topic)
+                    .qos(MqttQos.AT_MOST_ONCE)
+                    .send()
+                    .await()
+            }
+        } catch (e: Exception) {
+            Diagnostics.recordSubscribed(topics.size, ok = false)
+            throw e
         }
+        Diagnostics.recordSubscribed(topics.size, ok = true)
     }
 
     suspend fun publish(topic: String, payload: ByteArray) {
@@ -129,7 +147,16 @@ class Transport(
     }
 
     suspend fun close() {
-        client.disconnect().await()
+        try {
+            client.disconnect().await()
+        } finally {
+            if (closed.compareAndSet(false, true)) Diagnostics.recordTransportLifecycle(DiagnosticEvent.LifecycleStage.closed, alive.decrementAndGet())
+        }
+    }
+
+    private companion object {
+        /// Transports made and not yet closed: a number that keeps growing is a leak (iOS `TransportRegistry`).
+        val alive = AtomicInteger(0)
     }
 }
 

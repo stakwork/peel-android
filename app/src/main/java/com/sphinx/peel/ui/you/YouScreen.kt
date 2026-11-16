@@ -96,7 +96,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class YouRoute { WORDS, CHANGE_PIN }
+private enum class YouRoute { WORDS, CHANGE_PIN, DIAGNOSTICS }
 
 /// "You" (docs/design/iphone.md, screen 6), reworked to match the iOS app's
 /// own Profile: a centred "You" title, the avatar/name/balance header, an
@@ -117,10 +117,12 @@ fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForg
     when (route) {
         YouRoute.WORDS -> TwelveWordsScreen(secretStore, onBack = { route = null })
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
+        YouRoute.DIAGNOSTICS -> com.sphinx.peel.ui.diagnostics.DiagnosticsScreen(onBack = { route = null })
         null -> YouMain(
             engine, storage, secretStore, onForgotten,
             onOpenWords = { route = YouRoute.WORDS },
             onOpenChangePin = { route = YouRoute.CHANGE_PIN },
+            onOpenDiagnostics = { route = YouRoute.DIAGNOSTICS },
         )
     }
 }
@@ -135,6 +137,7 @@ private fun YouMain(
     onForgotten: () -> Unit,
     onOpenWords: () -> Unit,
     onOpenChangePin: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
 ) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -334,6 +337,8 @@ private fun YouMain(
                         engine.setAutoDownloadsMedia(it)
                     })
                 }
+                AccountDivider()
+                AccountRow(label = "Diagnostics", onClick = onOpenDiagnostics, chevron = true)
                 AccountDivider()
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
@@ -649,7 +654,7 @@ private fun AccountDivider() {
 }
 
 @Composable
-private fun BackButton(onBack: () -> Unit) {
+internal fun BackButton(onBack: () -> Unit) {
     Box(
         Modifier.size(44.dp).clip(CircleShape).border(1.dp, Theme.colors.inputBorder, CircleShape)
             .clickable(onClick = onBack),
@@ -660,7 +665,7 @@ private fun BackButton(onBack: () -> Unit) {
 }
 
 @Composable
-private fun BackButtonRow(onBack: () -> Unit, trailing: @Composable () -> Unit = {}) {
+internal fun BackButtonRow(onBack: () -> Unit, trailing: @Composable () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         BackButton(onBack)
         Spacer(Modifier.weight(1f))

@@ -1,6 +1,9 @@
 package com.sphinx.peel.push
 
+import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
+import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.diagnostics.Diagnostics
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -26,7 +29,19 @@ class PeelMessagingService : FirebaseMessagingService() {
         PushRegistrar.onNewToken(applicationContext, token)
     }
 
+    /// The push's own work, timed in the diagnostics (iOS `pushFetch`): begin, then end with the seconds taken.
     override fun onMessageReceived(message: RemoteMessage) {
+        val startedAt = SystemClock.elapsedRealtime()
+        Diagnostics.recordPushFetch(DiagnosticEvent.PushFetchStage.begin)
+        try {
+            handlePush(message)
+        } finally {
+            Diagnostics.recordPushFetch(DiagnosticEvent.PushFetchStage.end, elapsed = (SystemClock.elapsedRealtime() - startedAt) / 1000.0)
+            Diagnostics.markAlive()
+        }
+    }
+
+    private fun handlePush(message: RemoteMessage) {
         val app = applicationContext
         val engine = PushRegistrar.activeEngine()
         val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
