@@ -12,7 +12,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /// strut's wallet vectors (specs/WALLET.md §7), the same file iOS holds (`Tests/PeelCoreTests/WalletVectors/vectors.json`, byte for byte; copied again from
-/// strut main at 319d3d6 for docs/phases/38-worker-onboarding.md, which adds #689's `sign_in_replies`/`sign_in_addresses` and #690's `native_apps`, not run
+/// strut main at 319d3d6 for docs/phases/41-worker-onboarding.md, which adds #689's `sign_in_replies`/`sign_in_addresses` and #690's `native_apps`, not run
 /// here; every older list unchanged) run through the port of the checks, as iOS's `WalletProtocolTests` does. `scenarios` are a host's behaviour against a
 /// scripted wallet (their replay is the wallet host's, step 6); `host_capabilities`, `credit_*` and `sign_in_*` belong to the host's own ops.
 @RunWith(RobolectricTestRunner::class)

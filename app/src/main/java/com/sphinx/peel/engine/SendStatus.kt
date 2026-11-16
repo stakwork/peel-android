@@ -63,6 +63,15 @@ enum class SendStatus(val raw: String) {
             }
         }
 
+        /// The tags to fail after the server answered about [asked] ones (iOS `recordedStatuses(_, unrecorded:)`): a payment past
+        /// [SendRetry.UNRECORDED_PAYMENT_TIMEOUT_MS] that the server has no record of (a record of any status counts) never reached it, and failed.
+        /// [pending] are `Storage.PendingSend`s as `checkPendingSends` read them; only a payment (`movesMoney`) and only an old one.
+        fun unrecorded(pending: List<com.sphinx.peel.storage.Storage.PendingSend>, now: Long): Set<String> =
+            pending.filter { it.movesMoney && it.createdAt < now - SendRetry.UNRECORDED_PAYMENT_TIMEOUT_MS }.map { it.tag }.toSet()
+
+        /// What those [unrecorded] payments become once every answer is in: failed, unless a record [named] them. Sorted, as iOS.
+        fun failedForWantOfRecord(unrecorded: Set<String>, named: Set<String>): List<String> = (unrecorded - named).sorted()
+
         fun reason(o: JSONObject): String? =
             (o.optString("message").ifEmpty { o.optString("error") }).takeIf { it.isNotEmpty() }
     }

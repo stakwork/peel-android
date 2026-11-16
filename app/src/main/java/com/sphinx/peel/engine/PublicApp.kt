@@ -188,7 +188,7 @@ data class PublicAppLink(
     }
 }
 
-/// A stranger's public app opened here, kept for the Apps list (`Storage.openedApps`, docs/phases/38-worker-onboarding.md): its
+/// A stranger's public app opened here, kept for the Apps list (`Storage.openedApps`, docs/phases/41-worker-onboarding.md): its
 /// link, when it was last opened (unix seconds), and the title its origin's connection holds, if it signed in or connected.
 data class OpenedApp(val link: PublicAppLink, val openedAt: Long, val connectionTitle: String? = null) {
     /// The connection's title (the app's own claim), else the host, as the page's own title is.

@@ -28,7 +28,7 @@ iOS read from `main` (1778b01): `Storage+Wallet.swift`, `WalletLedger.swift`, `S
 | `reconcile` (history rows settle or fail a keysend by hash) | `Storage.reconcileKeysends`, run by every history write (`insertPayments`, `Commit.payments`); fees are read from the `payment` table by `walletRecords` (what left beyond the amount, plus the 1-sat ping for an async keysend) |
 
 ## Differences from iOS
-- **No `UNSETTLED` status** (Android has none for invoices or messages), so "a PENDING leaves a keysend unsettled" is not ported; a keysend is open (`PENDING`) until COMPLETE or FAILED.
+- **(Closed in [phase 38](38-wallet-parity.md): `UNSETTLED`, `pendingSendTags`/`oldestOpenSend` over keysends and `init?(payment:)` are ported.)** Original note: **No `UNSETTLED` status** (Android has none for invoices or messages), so "a PENDING leaves a keysend unsettled" is not ported; a keysend is open (`PENDING`) until COMPLETE or FAILED.
 - **`waitingMsat`/`spendableMsat` over keysends** came with step 5 (`docs/phases/33-app-payments.md`); `pendingSendTags`/`oldestOpenSend` are still not ported.
 - **Amounts are `Long`**: `WalletBudget.used` saturates at `Long.MAX_VALUE` where iOS's `UInt64` sum wraps; `admits` is false past it.
 - **Invoice insert rule** in a commit is Android's (`saveInvoice`: a record that is not failed or open is never written over; throws `IllegalStateException`), iOS's is `ON CONFLICT … WHERE status = 'FAILED'`.

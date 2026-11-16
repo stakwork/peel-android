@@ -94,7 +94,7 @@ class InviteLinkTest {
         assertNull(Invite.fromJson("{not json"))
     }
 
-    // A worker's invite link (docs/phases/38-worker-onboarding.md): `&a=` names the public app to open.
+    // A worker's invite link (docs/phases/41-worker-onboarding.md): `&a=` names the public app to open.
     private val worker = "https%3A%2F%2Facme.example.com%2Fpublic%2F%3Fapp%3Dworker"
 
     @Test

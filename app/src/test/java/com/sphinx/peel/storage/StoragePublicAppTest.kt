@@ -12,7 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/// `public_app` (v15, docs/phases/38-worker-onboarding.md): the strangers' public apps opened here, kept for the Apps list.
+/// `public_app` (v15, docs/phases/41-worker-onboarding.md): the strangers' public apps opened here, kept for the Apps list.
 @RunWith(RobolectricTestRunner::class)
 class StoragePublicAppTest {
     private fun newStorage() = Storage(ApplicationProvider.getApplicationContext(), account = "test-${System.nanoTime()}")

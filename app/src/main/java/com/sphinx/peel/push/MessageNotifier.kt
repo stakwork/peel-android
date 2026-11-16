@@ -3,6 +3,7 @@ package com.sphinx.peel.push
 import android.content.Context
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.sphinx.peel.engine.ControlMessages
 import com.sphinx.peel.engine.ATTACHMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.Engine
@@ -36,6 +37,8 @@ class MessageNotifier(private val context: Context, private val storage: Storage
 
     private fun notify(row: MessageRow) {
         if (row.fromMe || !fresh(row.timestamp)) return
+        // A control message in a direct message is a line, never news (iOS `NotificationPolicy`: `isControl != true`).
+        if (ControlMessages.control(row.type, row.deleted, row.body) != null && storage.contact(row.chat)?.isTribe != true) return
         val index = row.serverIndex
         if (index != null && index <= (storage.lastRead(row.chat) ?: -1L)) return
         if (storage.muteLevel(row.chat) != 0) return

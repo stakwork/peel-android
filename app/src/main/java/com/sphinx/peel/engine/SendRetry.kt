@@ -20,6 +20,10 @@ object SendRetry {
     /// (`Message.confirmationTimeout`: 30 s, as in the official apps).
     const val CONFIRMATION_TIMEOUT_MS = 30_000L
 
+    /// How long after a payment was sent the server may have no record of it before it is taken never to have reached it (iOS
+    /// `Message.unrecordedPaymentTimeout`): the mixer records every send it handles, an async one as pending.
+    const val UNRECORDED_PAYMENT_TIMEOUT_MS = 30 * 60 * 1000L
+
     /// How old an undelivered message may be and still go again by itself
     /// when the connection comes back (`Message.autoResendWindow`).
     const val AUTO_RESEND_WINDOW_MS = 60 * 60 * 1000L

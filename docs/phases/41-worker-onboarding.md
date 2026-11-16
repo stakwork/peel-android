@@ -1,7 +1,8 @@
-# Phase 38 — Worker onboarding (strut's human steps)
+# Phase 41 — Worker onboarding (strut's human steps)
 
 Status: **written without a build here: no Android SDK on this Mac (Homebrew's JDK 21 only), so `testDebugUnitTest`, lint and
 `assembleDebug` ran only in the PR's CI. Nothing was run on a device or against a real Stadeum, daemon or mixer.**
+Written as phase 37, then 38; renumbered 41 when main landed 37–40 first (its `Storage` v15 is phase 40's `isControl`, so `public_app` is v16).
 
 Why: a client's Stadeum (a self-hosted strut) runs workflows with `human` steps (strut's `plans/human-steps.md`). Workers do the
 tasks in a worker app the Stadeum serves publicly, sign in with Peel (root key), and are paid from the Stadeum's wallet (a Sphinx
@@ -33,12 +34,12 @@ this half depends on neither.
   a held connection) return `signVisitor`'s result, so both carry it; `WalletHost` is unchanged.
 - **Vectors**: `src/test/resources/wallet-vectors.json` is strut main at 319d3d6, byte for byte the copy iOS #557 holds: it adds
   #689's two `sign_in_replies` and `sign_in_addresses`, and #690's `native_apps` (not run here). Every older list is unchanged.
-- **Opened public apps stay in Apps** (Android only; iOS keeps none): `Storage` v15 `public_app(seller, app, url, origin,
+- **Opened public apps stay in Apps** (Android only; iOS keeps none): `Storage` v16 `public_app(seller, app, url, origin,
   openedAt)`, one row per app on a seller (`app` '' for the seller's own page), the address it was last opened at.
   `PublicPageRouter(opened)` tells the account of every page that comes on screen, whichever way it came; `MainActivity` saves it
   (`rememberPublicApp`). `AppsScreen` lists them under "Apps you opened" (last opened first; titled by the origin's connection
   title, else the host; caption host · app name; found by the search; hidden while a workspace source filter is chosen), and a tap
-  opens one through the router (`LocalPublicAppOpener`, provided where `MainTabs` is). Disconnect in You › Connected apps forgets
+  opens one through the router (`AppsScreen(onOpenPublic)`, the router `MainTabs` holds since phase 39). Disconnect in You › Connected apps forgets
   that origin's apps with its connection (`forgetPublicAppsOf`); long-press › "Remove from Apps" takes one off the list (its
   connection stays), so a link someone sent never sticks there for good.
 
@@ -57,7 +58,7 @@ fragment/credentials/two apps/two `a=`/a broken escape/`aa=`/`app=`; the core st
 `sign_in_replies`: the address Peel sends is the one strut keeps and the answer is the reply, field for field; `sign_in_addresses`;
 case folding, another key's address, not registered, malformed), `WalletHostTest.theAddressGoesWithTheAccountKeyAlone` (from the
 sheet and from the held connection; none with a new identity), `PublicPageRouterTest.eachPageOpenedIsTold`, `StoragePublicAppTest`
-(order, one row per app, connection title, remove, disconnect by origin only, search), `StorageWalletMigrationTest` (v13 → v15 has the
+(order, one row per app, connection title, remove, disconnect by origin only, search), `StorageWalletMigrationTest` (v13 → v16 has the
 same `public_app` as a fresh database).
 `@Ignore`d (need the native `libsphinxrs`): `SignInAddressNativeTest.peelsOwnAddressIsStrutsVector` (strut's seed through
 `initialSetup` + `handle` gives the vector's address), `EngineSignVisitorTest.theEngineSendsItsAddressWithItsKeyAlone`.

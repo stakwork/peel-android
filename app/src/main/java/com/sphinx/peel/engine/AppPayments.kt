@@ -44,9 +44,12 @@ enum class AppFailure(val description: String, val code: WalletError) {
 /// An app's payment that did not go: why ([failure]).
 class AppPaymentFailure(val failure: AppFailure) : Exception(failure.description)
 
-/// How a core call's result was published (iOS `commitAndPublish`'s `.all`/`.unknown`; nothing at all published is [AppFailure.NOT_CONNECTED], thrown before).
+/// How a core call's result was published (iOS `commitAndPublish`'s `.all`/`.none`/`.unknown`).
 sealed interface Published {
     data object All : Published
+
+    /// Nothing left: the connection had gone before the first publish, so nothing moved and the payment is failed at once (iOS `.none`).
+    data object None : Published
 
     /// Published, but a write may or may not have left: the payment stays pending and is never sent again; the server's word settles it.
     data class Unknown(val error: Throwable) : Published
@@ -64,6 +67,9 @@ interface PaymentRunner {
     val network: String
     fun nowMs(): Long
 
+    /// iOS `emit.yield(.coreError)`: a failure no call answers, in words for the person. Nothing by default.
+    fun coreError(message: String) {}
+
     /// Reads an invoice through the core (`parse_invoice`); throws on one it cannot read.
     fun decodeInvoice(bolt11: String): Invoice
 
@@ -77,6 +83,24 @@ interface PaymentRunner {
 
 class AppPayments(private val storage: Storage, private val runner: PaymentRunner) {
     private val inFlight: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+
+    /// What a publish that ended [Published.None] or [Published.Unknown] means for the payment under [tag] (iOS `commitAndPublish`'s callers):
+    /// nothing left, so nothing moved: failed now, rather than pending for half an hour, and free to be paid again; or it may have gone, so it stays
+    /// pending (never sent again) until the server says how it went, and the person is told.
+    private fun settle(published: Published, tag: String, what: String) {
+        when (published) {
+            Published.All -> {}
+            Published.None -> {
+                storage.markSendStatus(tag, SendStatus.FAILED, "not connected")
+                throw AppPaymentFailure(AppFailure.NOT_CONNECTED)
+            }
+            is Published.Unknown -> runner.coreError(mayHaveGone(published.error, what))
+        }
+    }
+
+    /// What a money send whose publish ended unknown reports (iOS `mayHaveGone`).
+    private fun mayHaveGone(error: Throwable, what: String) =
+        "The connection failed while sending; the $what may have gone. It stays unconfirmed until the server says (${error.message ?: error.javaClass.simpleName})"
 
     /// What the balance must cover for an app's payment: the amount and its reserve, from the balance less what waits; never the person's confirmation
     /// threshold (iOS `checkPayment(_, .unasked, reserve:)`).
@@ -122,8 +146,7 @@ class AppPayments(private val storage: Storage, private val runner: PaymentRunne
             throw AppPaymentFailure(AppFailure.OVER_BUDGET)
         }
         val made = record ?: throw AppPaymentFailure(AppFailure.CORE_RETURNED_NOTHING)
-        // `Unknown`: it may have gone, so it stays pending (never sent again) until the server says how it went.
-        check(published is Published.All || published is Published.Unknown)
+        settle(published, made.tag, "payment")
         return storage.keysendByHash(made.paymentHash) ?: made
     }
 
@@ -133,13 +156,14 @@ class AppPayments(private val storage: Storage, private val runner: PaymentRunne
         if (invoice.amountMsat <= 0) return AppFailure.INVOICE_WITHOUT_AMOUNT
         if (invoice.isExpired(runner.nowMs())) return AppFailure.INVOICE_EXPIRED
         if (invoice.payee == runner.ownKeys?.first) return AppFailure.OWN_INVOICE
-        if (storage.invoice(invoice.paymentHash, incoming = true) != null) return AppFailure.OWN_INVOICE
-        when (storage.invoice(invoice.paymentHash, incoming = false)?.status) {
-            InvoiceRecord.Status.PENDING -> return AppFailure.INVOICE_PENDING
-            InvoiceRecord.Status.PAID -> return AppFailure.INVOICE_ALREADY_PAID
-            else -> {}
+        when (storage.paidState(invoice.paymentHash)) {
+            Storage.PaidState.OWN -> return AppFailure.OWN_INVOICE
+            Storage.PaidState.PENDING -> return AppFailure.INVOICE_PENDING
+            Storage.PaidState.PAID -> return AppFailure.INVOICE_ALREADY_PAID
+            null -> {}
         }
-        if (storage.payments(Int.MAX_VALUE).any { it.rhash == invoice.paymentHash && !it.incoming && !it.failed }) return AppFailure.INVOICE_ALREADY_PAID
+        // Our own request, made by our server on another device: paying it would move sats from us to us, or mark it paid with none moved.
+        runner.ownKeys?.let { (key, server) -> if (invoice.payee == server && storage.isOurRequest(invoice.paymentHash, key)) return AppFailure.OWN_INVOICE }
         val balance = storage.spendableMsat(runner.nowMs()) ?: return AppFailure.BALANCE_UNKNOWN
         val reserve = PaymentRules.feeReserveMsat(invoice.amountMsat)
         return if (invoice.amountMsat > Long.MAX_VALUE - reserve || invoice.amountMsat + reserve > balance) AppFailure.INSUFFICIENT_BALANCE else null
@@ -153,7 +177,7 @@ class AppPayments(private val storage: Storage, private val runner: PaymentRunne
         if (!inFlight.add(hash)) throw AppPaymentFailure(AppFailure.INVOICE_PENDING)
         try {
             var record: InvoiceRecord? = null
-            try {
+            val published = try {
                 runner.sendInvoice(invoice) { tag, _ ->
                     if (tag == null) throw AppPaymentFailure(AppFailure.CORE_RETURNED_NOTHING)
                     val made = InvoiceRecord(
@@ -170,7 +194,9 @@ class AppPayments(private val storage: Storage, private val runner: PaymentRunne
                 // The write refused an invoice already being paid or paid.
                 throw AppPaymentFailure(AppFailure.INVOICE_PENDING)
             }
-            return record ?: throw AppPaymentFailure(AppFailure.CORE_RETURNED_NOTHING)
+            val made = record ?: throw AppPaymentFailure(AppFailure.CORE_RETURNED_NOTHING)
+            settle(published, made.tag ?: "", "payment")
+            return made
         } finally {
             inFlight.remove(hash)
         }

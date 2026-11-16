@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.sphinx.peel.engine.OrgPageRequest
-import com.sphinx.peel.engine.PublicAppLink
 
 /// What a link in the app does (iOS `\.openURL`): provided once, at `MainTabs`, so a tapped Hive app link opens its page from any
 /// message, deliverable or card; the default is the system's, as before.
@@ -20,10 +19,6 @@ val LocalLinkOpener = staticCompositionLocalOf<LinkOpener?> { null }
 /// it when its workspace is no longer in use. The default opens nothing.
 val LocalPageOpener = staticCompositionLocalOf<(OrgPageRequest) -> Unit> { {} }
 
-/// Opens a stranger's public app (the Apps list's opened apps, docs/phases/38-worker-onboarding.md) the way a `peel://open` link
-/// does: provided where the account is open, over `PublicPageRouter`. The default opens nothing.
-val LocalPublicAppOpener = staticCompositionLocalOf<(PublicAppLink) -> Unit> { {} }
-
 /// An address in the system's browser (a link that is not Peel's to open).
 fun openInBrowser(context: Context, url: String) {
     try {
@@ -32,3 +27,7 @@ fun openInBrowser(context: Context, url: String) {
         // Nothing to open it: it simply does not open.
     }
 }
+
+/// The Talk call screen's sheet for a tapped card, while that screen is up (iOS `@Environment(TalkOpener.self)`, which `AgentArtifactLine`
+/// reads as `talkOpener`); null elsewhere, where a card opens through [LocalPageOpener] / [LocalLinkOpener].
+val LocalTalkOpener = staticCompositionLocalOf<com.sphinx.peel.ui.talk.TalkOpener?> { null }

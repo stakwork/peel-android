@@ -54,9 +54,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.sphinx.peel.engine.Opening
+import com.sphinx.peel.engine.AppsOpenDecision
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.OpenedApp
+import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
 import com.sphinx.peel.engine.WorkspaceApp
@@ -77,11 +78,11 @@ import kotlinx.coroutines.coroutineScope
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
 /// Android only: the strangers' public apps opened here ("Apps you opened", `Storage.openedApps`, last opened first), so a worker
-/// opens a Stadeum's worker app again with one tap (docs/phases/38-worker-onboarding.md); long-press removes one, and Disconnect in
+/// opens a Stadeum's worker app again with one tap (docs/phases/41-worker-onboarding.md); long-press removes one, and Disconnect in
 /// You › Connected apps removes an origin's.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
+fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit, onOpenPublic: (PublicAppLink) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -89,9 +90,8 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     var source by remember { mutableStateOf<String?>(null) }
     var read by remember { mutableStateOf<List<WorkspaceApp>>(emptyList()) }
     var reading by remember { mutableStateOf(false) }
-    var unread by remember { mutableStateOf<List<String>>(emptyList()) }
+    var unreadIds by remember { mutableStateOf<List<String>>(emptyList()) }
     val openPage = LocalPageOpener.current
-    val openPublic = LocalPublicAppOpener.current
     val publicVersion by storage.publicAppsVersion.collectAsState()
     // The connection titles move too (a first sign-in names the app).
     val connectionsVersion by storage.walletConnectionsVersion.collectAsState()
@@ -112,7 +112,7 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
             // A workspace that did not answer keeps the apps it last listed.
             val kept = read.filter { app -> results.any { (p, r) -> p.id == app.peer && r.isFailure } }
             read = kept + results.flatMap { it.second.getOrNull().orEmpty() }
-            unread = results.filter { it.second.isFailure }.map { it.first.name }
+            unreadIds = results.filter { it.second.isFailure }.map { it.first.id }
         } finally {
             reading = false
         }
@@ -126,7 +126,8 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     }
 
     val liveIds = live.map { it.id }.toSet()
-    val apps = read.filter { it.peer in liveIds }
+    val apps = AppsOpenDecision.visible(read, liveIds)
+    val unread = AppsOpenDecision.unreadNames(unreadIds, live)
     val several = apps.mapNotNull { it.peer }.toSet().size > 1
     val sources = WorkspaceApp.sources(apps)
     val shownSource = if (sources.size > 1 && source in sources) source else null
@@ -179,23 +180,23 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
                 if (openedShown.isNotEmpty()) {
                     item { Text("Apps you opened", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
                     items(openedShown, key = { "opened-${it.link.seller} ${it.link.app ?: ""}" }) { app ->
-                        OpenedAppRow(app, onOpen = { openPublic(app.link) }, onRemove = { storage.forgetPublicApp(app.link) })
+                        OpenedAppRow(app, onOpen = { onOpenPublic(app.link) }, onRemove = { storage.forgetPublicApp(app.link) })
                     }
                     item { Spacer(Modifier.size(12.dp)) }
                 }
                 items(shown, key = { it.id }) { app ->
                     AppRow(app, several, onOpen = {
-                        val opening = Stadeum.openings.opening(app)
-                        if (opening is Opening.Page) openPage(opening.request) else toast.show("Connect ${app.source} to open this app.", ToastType.Warning)
+                        // iOS opens a page when there is one and otherwise nothing, with no word said.
+                        AppsOpenDecision.page(Stadeum.openings.opening(app))?.let(openPage)
                     }, onShare = { link ->
                         copy(context, link)
                         toast.show("Link copied", ToastType.Success)
                     })
                 }
                 if (unread.isNotEmpty() && apps.isNotEmpty() && !reading) {
-                    item { Note("Couldn't read ${unread.joinToString(", ")} just now. Pull to try again.") }
+                    item { Note(AppsOpenDecision.unreadNote(unread)) }
                 } else if (apps.isEmpty() && homes.isNotEmpty() && !reading) {
-                    item { Note(emptyText(live, unread)) }
+                    item { Note(AppsOpenDecision.emptyText(live.isEmpty(), unread)) }
                 }
             }
             when {
@@ -203,19 +204,13 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
                 apps.isNotEmpty() && shown.isEmpty() -> Centered("No results", "Nothing matches \u201c${query.trim()}\u201d.")
                 opened.isNotEmpty() && shown.isEmpty() && query.isNotBlank() -> Centered("No results", "Nothing matches \u201c${query.trim()}\u201d.")
                 apps.isEmpty() && homes.isNotEmpty() -> if (reading) Spinner()
-                apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", "Connect Stadeum under You to open the apps your workspaces pin.")
+                apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", AppsOpenDecision.CONNECT_STADEUM)
                 apps.isEmpty() && reading -> Spinner()
-                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", "${unread.joinToString(", ")} did not answer. Pull to try again.")
-                apps.isEmpty() -> Centered("No apps yet", "Apps your Stadeum workspaces pin show here.")
+                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", AppsOpenDecision.didNotAnswer(unread))
+                apps.isEmpty() -> Centered("No apps yet", AppsOpenDecision.NO_APPS)
             }
         }
     }
-}
-
-private fun emptyText(live: List<HivePeer>, unread: List<String>) = when {
-    live.isEmpty() -> "Connect Stadeum under You to open the apps your workspaces pin."
-    unread.isEmpty() -> "Apps your Stadeum workspaces pin show here."
-    else -> "${unread.joinToString(", ")} did not answer. Pull to try again."
 }
 
 @OptIn(ExperimentalFoundationApi::class)
