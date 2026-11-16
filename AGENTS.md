@@ -101,6 +101,8 @@ sections for code that isn't written yet.
   - `engine/SvgPath.kt`, `LucideSet.kt` (+ `LucideNames.kt`), `ui/apps/AppIcons.kt`, `assets/lucide/icons.json`, `tools/lucide-convert.py` — all of lucide as app icons (`docs/phases/37-lucide-icons.md`): pure path parser and
     primitives→paths (JVM-tested), the bundled icon set (ISC, `assets/lucide/LICENSE`), `ImageVector`s in an LRU.
   - `engine/AppsOpenDecision.kt` (Apps list rules), `ui/page/PublicPageRouter.kt` (iOS `PhoneRouter`'s `orgPage`/`publicPage`/`waitingLink`, held by `MainActivity` and passed to `MainTabs`), `ui/talk/TalkOpener.kt` (+ `LocalTalkOpener`: a Talk card's page/link) — page behaviour (`docs/phases/39-page-behaviour.md`).
+  - `engine/ControlEnvelope.kt`, `AgentChat.kt` (`ControlEnvelope`, `ControlMessage`, `ControlMessages`, `AgentToolLine`, `AgentJob`, `AgentExtras`, `AgentRequest`, `AgentReads`, `AgentToolTitle`, `ControlPlan`) and `Storage` v15 (`message.isControl`) — the agent's control messages
+    (`docs/phases/40-control-messages.md`): a quiet line, a request's one row or nothing, tool rows above a reply, never unread or notified; UI `ui/dashboard/ControlRows.kt`. Proposals are Mac-only and not ported.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

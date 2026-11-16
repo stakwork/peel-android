@@ -201,6 +201,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 37 | All of lucide for app icons: bundled icon set, `SvgPath`/`LucideSet`, iOS alias table, `ImageVector` LRU | compiled and unit-tested; drawing not run on a device | [phases/37-lucide-icons.md](phases/37-lucide-icons.md) |
 | 38 | Wallet parity: `UNSETTLED` for invoices and keysends with iOS's one forward-only rule, `pendingSends`/`oldestOpenSend` over keysends, the unrecorded-payment failing, `reconcileInBackground`, `paidState`/`isOurRequest`, publish none/unknown for app payments, dispose-path test | compiled and unit-tested; native-core paths untested; see the file | [phases/38-wallet-parity.md](phases/38-wallet-parity.md) |
 | 39 | Page behaviour: Apps tap opens nothing when not connected (`AppsOpenDecision`), one holder of org/public pages as `PhoneRouter` (`PublicPageRouter`), Talk cards in the call screen's own opener (`TalkOpener`), Back on wallet sheets pinned | compiled and unit-tested; UI compiled only | [phases/39-page-behaviour.md](phases/39-page-behaviour.md) |
+| 40 | Control messages of the agent's DM: envelope reader, quiet lines, request rows with their outcome, folded reads, tool rows, never unread/notified (`isControl`, Storage v15); proposals are Mac-only, skipped | compiled and unit-tested; UI compiled only | [phases/40-control-messages.md](phases/40-control-messages.md) |
 
 ## Open questions
 

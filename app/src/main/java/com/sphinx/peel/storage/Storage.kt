@@ -1,5 +1,7 @@
 package com.sphinx.peel.storage
 
+import com.sphinx.peel.engine.ControlMessage
+import com.sphinx.peel.engine.ControlMessages
 import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
 import com.sphinx.peel.engine.MONEY_SEND_TYPES
 import com.sphinx.peel.engine.MuteLevel
@@ -813,6 +815,8 @@ class Storage(context: Context, account: String = "default") {
                     // only ever sets `body`).
                     put("replyUuid", extractReplyUuid(row.body))
                     put("threadUuid", extractThreadUuid(row.body))
+                    // A control message in a direct message is a line, never unread (iOS `isControl`; not in a tribe).
+                    put("isControl", if (ControlMessages.control(row.type, row.deleted, row.body) != null && !isTribe(db, row.chat)) 1 else 0)
                 }
                 // The echo of a message this device already stored optimistically, under
                 // no uuid or another one (a call, say): it takes that row over rather than
@@ -843,6 +847,9 @@ class Storage(context: Context, account: String = "default") {
             db.endTransaction()
         }
     }
+
+    private fun isTribe(db: SQLiteDatabase, chat: String): Boolean =
+        db.rawQuery("SELECT 1 FROM contact WHERE pubkey = ? AND isTribe = 1", arrayOf(chat)).use { it.moveToFirst() }
 
     /// Whether [row], an echo of our own message (it has a server index), was folded into the
     /// optimistic row this device stored when sending: a pending row with no server index
@@ -1328,7 +1335,7 @@ class Storage(context: Context, account: String = "default") {
                 l.timestamp,
                 l.fromMe,
                 (SELECT COUNT(*) FROM message m
-                    WHERE m.chat = c.pubkey AND m.fromMe = 0
+                    WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.isControl = 0
                         AND m.type IN (0, 5, 6, 2, 32, 29)
                         AND m.serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)
                         AND (m.type != 29 OR EXISTS (
@@ -2090,6 +2097,7 @@ class Storage(context: Context, account: String = "default") {
             v12(db)
             v13(db)
             v14(db)
+            v15(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -2109,6 +2117,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 12) v12(db)
             if (oldVersion < 13) v13(db)
             if (oldVersion < 14) v14(db)
+            if (oldVersion < 15) v15(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -2403,8 +2412,26 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("CREATE INDEX keysend_connection ON keysend(connection) WHERE connection IS NOT NULL")
         }
 
+        // A control message in a direct message (iOS v27, `Message.isControl`; docs/phases/40-control-messages.md): drawn as a line or not at all, so never
+        // unread. Set when stored; here for the rows stored before, read as `ControlMessage.read` reads them (a cheap filter first: the key, or an escape
+        // that could spell it). Not in a tribe: there the same metadata leaves a member's message a message.
+        private fun v15(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE message ADD COLUMN isControl INTEGER NOT NULL DEFAULT 0")
+            val ids = mutableListOf<Long>()
+            db.rawQuery(
+                """
+                SELECT id, body FROM message
+                WHERE type = 0 AND deleted = 0
+                    AND (instr(body, '\"peel\"') AND instr(body, '\"op\"') OR instr(body, '\u'))
+                    AND chat NOT IN (SELECT pubkey FROM contact WHERE isTribe = 1)
+                """.trimIndent(),
+                null,
+            ).use { c -> while (c.moveToNext()) if (ControlMessage.read(c.getString(1)) != null) ids += c.getLong(0) }
+            for (id in ids) db.execSQL("UPDATE message SET isControl = 1 WHERE id = ?", arrayOf<Any>(id))
+        }
+
         companion object {
-            const val VERSION = 14
+            const val VERSION = 15
         }
     }
 }

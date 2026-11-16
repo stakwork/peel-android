@@ -31,6 +31,9 @@ class StorageWalletMigrationTest {
                 "error TEXT, PRIMARY KEY (paymentHash, incoming))",
         )
         db.execSQL("CREATE INDEX invoice_tag ON invoice(tag)")
+        // The tables v15 (control messages) reads, as the app stored them by v13.
+        db.execSQL("CREATE TABLE contact (pubkey TEXT PRIMARY KEY NOT NULL, isTribe INTEGER NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE TABLE message (id INTEGER PRIMARY KEY AUTOINCREMENT, type INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, chat TEXT NOT NULL, body TEXT)")
         db.execSQL(
             "CREATE TABLE payment (rhash TEXT PRIMARY KEY NOT NULL, ts INTEGER NOT NULL, amountMsat INTEGER NOT NULL, incoming INTEGER NOT NULL, msgIndex INTEGER, " +
                 "remote INTEGER NOT NULL, error TEXT)",
@@ -118,7 +121,7 @@ class StorageWalletMigrationTest {
         Storage(context, migrated).also { it.value(Setting.NETWORK) }.close()
         for (account in listOf(fresh, migrated)) {
             val db = SQLiteDatabase.openDatabase(context.getDatabasePath("peel-$account.db").path, null, SQLiteDatabase.OPEN_READWRITE)
-            assertEquals(14, db.version)
+            assertEquals(15, db.version)
             assertEquals(setOf("invoice_connection", "keysend_tag", "keysend_connection"), indexes(db))
             db.close()
         }
