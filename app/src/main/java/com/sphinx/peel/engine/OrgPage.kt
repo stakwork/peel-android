@@ -259,12 +259,14 @@ data class OrgPage(val peer: String, val query: String, val value: String) {
     }
 }
 
-/// A request the web view makes for an org page: the address, and the token as its bearer. Never described with its token.
-class OrgRequest internal constructor(val url: String, private val token: String) {
-    /// The headers to load it with: the bearer, which a swarm's gate wants for the page itself.
-    val headers: Map<String, String> get() = mapOf("Authorization" to "Bearer $token")
+/// A request the web view makes for a page: the address, and the person's token as its bearer when the page has one (an
+/// org's); a stranger's public page is loaded with no credential at all, so its request has no headers. Never described with
+/// its token.
+class OrgRequest internal constructor(val url: String, private val token: String? = null) {
+    /// The headers to load it with: the bearer, which a swarm's gate wants for the page itself; none for a page with no token.
+    val headers: Map<String, String> get() = token?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
 
-    override fun toString() = "OrgRequest(url=$url, Authorization=<redacted>)"
+    override fun toString() = "OrgRequest(url=$url, Authorization=${if (token == null) "none" else "<redacted>"})"
 }
 
 /// An org's page as a device with no strut opens it (iOS `Stadeum.opening`, `OrgPageRequest`): strut's UI there showing one
@@ -274,7 +276,7 @@ class OrgRequest internal constructor(val url: String, private val token: String
 /// ([handOver]). Never described with its token. Two requests are the same only when they are the same request (`id`), as on iOS.
 class OrgPageRequest(
     /// strut's UI showing it alone; no credential in it.
-    val url: String,
+    override val url: String,
     /// The person's token for the org: never shown, logged or kept.
     private val token: String,
     /// The org's peer id.
@@ -283,7 +285,7 @@ class OrgPageRequest(
     val workspace: String,
     /// The app's or artifact's own title, when it has one: what a page shows before the workspace.
     val title: String? = null,
-) {
+) : PhonePage {
     val id: UUID = UUID.randomUUID()
 
     override fun toString() = "org page on $workspace"
@@ -291,39 +293,39 @@ class OrgPageRequest(
     override fun hashCode() = id.hashCode()
 
     /// `url`'s origin as a page reads it (`location.origin`).
-    val origin: String get() = UrlParts.origin(url) ?: ""
+    override val origin: String get() = UrlParts.origin(url) ?: ""
 
     /// The folder strut's UI is served from (`/`, or a swarm's `/lab/`): `url`'s path, which [StrutUI.page] ends with its `/`.
     val folder: String get() = UrlParts.parse(url)?.path ?: ""
 
     /// Whether `other` is strut's: on `url`'s origin, in its UI's folder (a swarm's `/lab/` shares its host with other services).
-    fun serves(other: String): Boolean {
+    override fun serves(other: String): Boolean {
         val there = UrlParts.origin(other) ?: return false
         return there == origin && (UrlParts.parse(other)?.path ?: "").startsWith(folder)
     }
 
     /// The request that loads it: the token as its bearer.
-    val request: OrgRequest get() = OrgRequest(url, token)
+    override val request: OrgRequest get() = OrgRequest(url, token)
 
     /// The request that loads it again where the page went (`current`, its web view's address: strut keeps an app's view
     /// there), when that is still strut's UI: as [request], the token its bearer. Null anywhere else (a file opened in place).
-    fun request(at: String?): OrgRequest? =
+    override fun request(at: String?): OrgRequest? =
         if (at != null && serves(at) && StrutUI.isPage(at, folder)) OrgRequest(at, token) else null
 
     /// The app a link names (strut's page alone hands a link to another app to its host), one of this org's own, when the page
     /// it came from (`current`) shows one of the org's apps: never from a file, whose links an org or a model wrote and which
     /// is no app's. Null for a link to anything else.
-    fun appLink(other: String, from: String?): StrutAppLink? {
+    override fun appLink(other: String, from: String?): StrutAppLink? {
         if (from == null || shownApp(from) == null || !serves(other)) return null
         return StrutAppLink.parse(other, folder, StrutAppLink.Source.Org)
     }
 
     /// The org's app the page at `current` shows, as its address names it; null for a file, or anything not this strut's UI.
-    fun shownApp(current: String): StrutAppHandle? =
+    override fun shownApp(current: String): StrutAppHandle? =
         if (serves(current)) StrutAppLink.parse(current, folder, StrutAppLink.Source.Org)?.app else null
 
     /// The request for `link`'s app alone on this org's strut, at the view it names, loaded as this page is.
-    fun request(link: StrutAppLink): OrgRequest? {
+    override fun request(link: StrutAppLink): OrgRequest? {
         val there = StrutUI.page(url, "app", link.app.app, input = link.input) ?: return null
         return OrgRequest(there, token)
     }
@@ -343,32 +345,19 @@ class OrgPageRequest(
     /// origin too: only the top window runs it.
     val mainFrameHandOver: String get() = "if (window.top === window) {\n$handOver\n}"
 
+    /// What runs before the page's own script: the token's hand-over, main frame only (iOS `script`).
+    override val script: String get() = mainFrameHandOver
+
+    override fun isUIPage(other: String): Boolean = StrutUI.isPage(other, folder)
+
+    /// An org's page: the org is what Peel trusts, whichever of its apps strut's UI names (`WalletScope.Org`).
+    override val walletScope: WalletScope get() = WalletScope.Org(peer)
+    override val walletPlace: String get() = workspace
+
     /// The title the page shows: the app's or artifact's own, else the workspace. Another app a link opened here is named by
     /// its workspace: its title is not known here (iOS `OrgPageSheet` navigation title).
-    fun title(showingAnotherApp: Boolean): String =
+    override fun title(showingAnotherApp: Boolean): String =
         if (showingAnotherApp) workspace else title?.takeIf { it.isNotEmpty() } ?: workspace
-
-    /// Whether the page `current` shows an app other than the one it opened with: a link in it opened that one here.
-    fun showsAnotherApp(current: String?): Boolean {
-        val shown = current?.let { shownApp(it) } ?: return false
-        return shown != shownApp(url)
-    }
-
-    /// How to load the page again where the person went (iOS `OrgPageController.reload`): strut's UI with the page's bearer
-    /// (an app at the view it moved to, or another app a link opened), a file opened in place as it is, and the page's own
-    /// request with no address yet.
-    fun reload(current: String?): Reload =
-        request(current)?.let { Reload.Load(it) } ?: if (current != null) Reload.InPlace else Reload.Load(request)
-
-    sealed interface Reload {
-        data class Load(val request: OrgRequest) : Reload
-        /// Reload what is there, as it is.
-        data object InPlace : Reload
-    }
-
-    /// What Try again loads (iOS `retry`): what failed, with the page's bearer, when that was strut's UI; else where the page is,
-    /// or its own request.
-    fun retry(failed: String?, current: String?): OrgRequest = request(failed) ?: request(current) ?: request
 
     /// Whether the workspace the page is on is still live: when it is not, the page closes and the token goes (iOS `MainTabs`).
     fun isLive(live: List<HivePeer>): Boolean = live.any { it.id == peer }
@@ -418,7 +407,7 @@ object OrgNavigation {
     /// The page's navigation policy: anywhere in the org's strut's UI ([OrgPageRequest.serves]); its own frames (`about:`, and a
     /// data or blob frame, never as the whole page); a link elsewhere out to the system, only from the main frame and only on
     /// the person's own tap (`linkActivated`: a gesture, within a second of a touch); and no other scheme.
-    fun decide(page: OrgPageRequest, url: String, isMainFrame: Boolean, hasGesture: Boolean, lastTouchAt: Long?, now: Long): Decision {
+    fun decide(page: PhonePage, url: String, isMainFrame: Boolean, hasGesture: Boolean, lastTouchAt: Long?, now: Long): Decision {
         val parts = UrlParts.parse(url) ?: return Decision(false)
         if (page.serves(url)) return Decision(true)
         return when (parts.scheme.lowercase()) {
@@ -442,11 +431,11 @@ object OrgNavigation {
     /// "open in a new tab") as it is; anything else of strut's UI (a run, a job) nowhere. A link elsewhere goes out as a link
     /// does (http or https, the person's tap). `personActed` is the person's own tap: the opener's frame is not known on
     /// Android, so unlike iOS a file also opens only on one.
-    fun window(page: OrgPageRequest, url: String, current: String?, personActed: Boolean): Window {
+    fun window(page: PhonePage, url: String, current: String?, personActed: Boolean): Window {
         val parts = UrlParts.parse(url) ?: return Window.Nothing
         if (page.serves(url)) {
             if (!personActed) return Window.Nothing
-            if (StrutUI.isPage(url, page.folder)) {
+            if (page.isUIPage(url)) {
                 val link = page.appLink(url, current) ?: return Window.Nothing
                 val there = page.request(link) ?: return Window.Nothing
                 return Window.Here(there, there.url)

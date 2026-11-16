@@ -67,13 +67,16 @@ sections for code that isn't written yet.
     injected storage/signer/person/clock (all JVM-tested), `WalletProtocol` (iOS `integer` reading) and `WalletErrors`
     (strut's error body) in `WalletProtocol.kt`/`WalletHost.kt`, `TextLine.kt` (`TextLine.clean`, page text made safe to
     show); `Engine.signVisitor`; `Storage` table `wallet_connection` (v13).
-    UI in `ui/page/` (`PublicPageScreen` = WebView + `addWebMessageListener` bridge, `SignInSheet`, `PublicPageRouter`) and
+    UI in `ui/page/` (`SignInSheet`, `PublicPageRouter`; the page itself is the one host, below) and
     You › Connected apps.
   - `engine/OrgPage.kt`, `OrgPageRules.kt`, `OrgDownloads.kt` — the org-page host (`docs/phases/28-org-page-host.md`): pure `StrutUI`,
     `StrutAppLink`, `OrgPageRequest` (url + token + `handOver` script, `serves`, `request(at:)`), `OrgNavigation` (navigation and
     new-window policy), `OrgPageRules` (iOS wording, download names), `OrgDownloads`; JVM-tested. The web view that applies them is
     `ui/apps/OrgPageHost.kt` (`OrgPageScreen`, `OrgPageClient`, `OrgPageController`); `AppsScreen` opens it and closes it when
     its workspace leaves `Stadeum.live`.
+  - `engine/PhonePage.kt` (`PhonePage`, `PublicPage`), `StrutWallet.kt`, `WalletHost.kt` (`WalletScope`, `WalletCaller`, `WalletPush`) — one page host
+    (`docs/phases/29-one-page-host.md`): `ui/apps/OrgPageHost.kt` (`OrgPageScreen`) shows an org's page and a stranger's public page alike,
+    `ui/apps/OrgWalletBridge.kt` is the app wallet's bridge on both, `ui/page/SignInSheet.kt` (`PhoneWalletSheets`) its sheet and notice; `Engine.walletHost`.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

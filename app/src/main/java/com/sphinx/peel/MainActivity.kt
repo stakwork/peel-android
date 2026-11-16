@@ -37,7 +37,8 @@ import com.sphinx.peel.engine.InviteLink
 import com.sphinx.peel.engine.InviterFlow
 import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.ui.page.PublicPageRouter
-import com.sphinx.peel.ui.page.PublicPageScreen
+import com.sphinx.peel.ui.apps.OrgPageScreen
+import com.sphinx.peel.engine.PublicPage
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.dashboard.MainTabs
 import com.sphinx.peel.ui.lock.LockScreen
@@ -183,7 +184,7 @@ private fun PeelApp(
             }
             Box(Modifier.fillMaxSize()) {
                 MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { router.reset(); screen = Screen.Onboarding }
-                router.page?.let { PublicPageScreen(it, current.engine, storage, onClose = router::close) }
+                router.page?.let { link -> val page = remember(link) { PublicPage(link) }; OrgPageScreen(page, current.engine.walletHost, onClose = router::close) }
             }
         }
     }

@@ -281,9 +281,9 @@ class OrgPageTest {
         val request = page("https://acme.sphinx.chat/lab/?app=x&solo=1")
         val moved = "https://acme.sphinx.chat/lab/?app=x&input=v%3D2&solo=1"
         val file = "https://acme.sphinx.chat/lab/jobs/j/files/a.pdf?t=1"
-        assertEquals(moved, (request.reload(moved) as OrgPageRequest.Reload.Load).request.url)
-        assertEquals(OrgPageRequest.Reload.InPlace, request.reload(file))
-        assertEquals(request.url, (request.reload(null) as OrgPageRequest.Reload.Load).request.url)
+        assertEquals(moved, (request.reload(moved) as PhonePage.Reload.Load).request.url)
+        assertEquals(PhonePage.Reload.InPlace, request.reload(file))
+        assertEquals(request.url, (request.reload(null) as PhonePage.Reload.Load).request.url)
         // Try again: what failed when that was strut's UI; else where the page is; else its own request.
         assertEquals(moved, request.retry(moved, null).url)
         assertEquals(moved, request.retry(file, moved).url)

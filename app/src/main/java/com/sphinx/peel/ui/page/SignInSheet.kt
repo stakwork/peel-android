@@ -29,18 +29,42 @@ import com.sphinx.peel.engine.WalletPerson
 import com.sphinx.peel.ui.theme.Theme
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 
-/// The person's side of the wallet host: one sign-in sheet at a time ([ask] is what `SignInSheet` draws), and the
-/// notice of a sign-in that went through silently. State is read on the main thread by Compose and written by the
-/// wallet host's coroutine (the main one, from `PublicPageScreen`).
-class SignInSheets(private val onSignedIn: (host: String, key: SignInKey) -> Unit) : WalletPerson {
+/// The person's side of the wallet host on a page (iOS `PhoneWalletSheets`): one sign-in sheet at a time ([ask] is what
+/// `SignInSheet` draws), and the notice of a connection that did something with no sheet ([toast], over the page for a moment
+/// and said to TalkBack). State is read on the main thread by Compose and written by the wallet host's coroutine (the main
+/// one, from the page host).
+class PhoneWalletSheets(private val scope: CoroutineScope, private val announce: (String) -> Unit = {}) : WalletPerson {
     var ask by mutableStateOf<SignInAsk?>(null)
         private set
+    /// What a connection did with no sheet, for a moment over the page.
+    var toast by mutableStateOf<String?>(null)
+        private set
     private var pending: CancellableContinuation<SignInKey?>? = null
+    private var toastShown: Job? = null
+
+    /// Shows [words] for a moment over the page, and says them to TalkBack.
+    fun show(words: String) {
+        toast = words
+        announce(words)
+        toastShown?.cancel()
+        toastShown = scope.launch {
+            delay(TOAST_MS)
+            toast = null
+        }
+    }
 
     override suspend fun askSignIn(ask: SignInAsk): SignInKey? = suspendCancellableCoroutine { continuation ->
+        // One at a time: another asked while this is up is a no.
+        if (pending != null) {
+            continuation.resume(null)
+            return@suspendCancellableCoroutine
+        }
         pending = continuation
         this.ask = ask
         // The host cancels it on timeout (or the page closes): the sheet comes down with it.
@@ -60,7 +84,15 @@ class SignInSheets(private val onSignedIn: (host: String, key: SignInKey) -> Uni
         if (continuation.isActive) continuation.resume(key)
     }
 
-    override fun signedIn(host: String, key: SignInKey) = onSignedIn(host, key)
+    /// Taken down unanswered: a no.
+    fun dismiss() = answer(null)
+
+    override fun signedIn(host: String, key: SignInKey) = show(SignInWords.toast(host, key))
+
+    companion object {
+        /// How long the notice stays over the page (iOS 2.5 s).
+        const val TOAST_MS = 2_500L
+    }
 }
 
 /// Copy of iOS `WalletWords` for the connect sheet of a stranger's page.
