@@ -99,6 +99,7 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
             )
             ConnectionBolt(connected = connection == ConnectionState.Connected)
         }
+        com.sphinx.peel.ui.diagnostics.DiagnosticsNotice(storage)
         ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenRoute = onOpenRoute, onOpenChat = onOpenChat)
     }
 }

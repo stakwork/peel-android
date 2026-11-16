@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.call
 
+import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.diagnostics.Diagnostics
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -279,6 +281,7 @@ class CallSession(
     fun pauseCameraForBackground() {
         if (leaving || !cameraOn) return
         cameraPausedByBackground = true
+        Diagnostics.recordCallAudio(DiagnosticEvent.CallAudioStage.cameraPaused)
         scope.launch { setCamera(false, keepWish = true) }
     }
 
@@ -287,6 +290,7 @@ class CallSession(
     fun resumeCameraFromBackground() {
         if (!cameraPausedByBackground) return
         cameraPausedByBackground = false
+        Diagnostics.recordCallAudio(DiagnosticEvent.CallAudioStage.cameraResumed)
         if (wantsCamera && !leaving) scope.launch { setCamera(true) }
     }
 

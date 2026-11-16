@@ -32,6 +32,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.FileSecretStore
 import com.sphinx.peel.account.LockDecision
+import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.diagnostics.Diagnostics
+import com.sphinx.peel.diagnostics.LockTrace
 import com.sphinx.peel.account.RememberedPIN
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.Engine
@@ -150,6 +153,11 @@ private fun PeelApp(
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
+    // The PIN asked at a cold launch (not again for a rotation: the process has noted it once).
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (!coldLockNoted && screen == Screen.Lock) Diagnostics.recordLock(DiagnosticEvent.LockReason.coldLaunch)
+        coldLockNoted = true
+    }
 
     // A stranger's public app (`peel://open?url=…`): opened when the account is unlocked, kept until it is
     // (also across a lock: only the open page closes then). Page and waiting link both go on sign-out or wipe.
@@ -222,11 +230,13 @@ private fun RelockWhenIdle(engine: Engine, secretStore: SecretStore, relock: () 
     val context = LocalContext.current.applicationContext
     DisposableEffect(engine, lifecycleOwner) {
         var stopped = false
+        var stoppedAt = System.currentTimeMillis()
         val observer = LifecycleEventObserver { _, event ->
             val remembered = secretStore.remembered
             when (event) {
                 Lifecycle.Event.ON_STOP -> {
                     stopped = true
+                    stoppedAt = System.currentTimeMillis()
                     remembered?.touch(RememberedPIN.nowSeconds())
                     // A synced change of the setting reaches what is kept.
                     remembered?.timeoutChanged(engine.pinTimeoutHours())
@@ -238,7 +248,13 @@ private fun RelockWhenIdle(engine: Engine, secretStore: SecretStore, relock: () 
                         biometricsEnabled = secretStore.biometricEnrolled,
                         biometricsAvailable = com.sphinx.peel.ui.lock.BiometricUnlock.available(context),
                     )
-                    if (step != LockDecision.Step.OpenWithRememberedPin) relock()
+                    if (step != LockDecision.Step.OpenWithRememberedPin) {
+                        val hours = engine.pinTimeoutHours()
+                        Diagnostics.recordLock(
+                            LockTrace.reason(step, hours), idleSeconds = ((System.currentTimeMillis() - stoppedAt) / 1000).toInt(), timeoutHours = hours,
+                        )
+                        relock()
+                    }
                 }
                 else -> {}
             }
@@ -306,3 +322,6 @@ private fun InviterNotice(engine: Engine) {
         }
     }
 }
+
+/// Whether this process has already noted its cold-launch lock (`Diagnostics.recordLock`).
+private var coldLockNoted = false

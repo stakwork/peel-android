@@ -1,5 +1,7 @@
 package com.sphinx.peel.call
 
+import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.diagnostics.Diagnostics
 import android.Manifest
 import android.app.Application
 import android.content.Context
@@ -106,8 +108,12 @@ object CallController {
         ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
                 // iOS parity: the camera goes off with the app, the wish stays; the microphone is untouched.
-                Lifecycle.Event.ON_STOP -> activeSession()?.pauseCameraForBackground()
+                Lifecycle.Event.ON_STOP -> {
+                    if (activeSession() != null) Diagnostics.recordCallAudio(DiagnosticEvent.CallAudioStage.scene, scenePhase = DiagnosticEvent.ScenePhase.background)
+                    activeSession()?.pauseCameraForBackground()
+                }
                 Lifecycle.Event.ON_START -> {
+                    if (activeSession() != null) Diagnostics.recordCallAudio(DiagnosticEvent.CallAudioStage.scene, scenePhase = DiagnosticEvent.ScenePhase.active)
                     activeSession()?.resumeCameraFromBackground()
                     Notifications.cancelCallEnded(app)
                 }
@@ -201,6 +207,7 @@ object CallController {
                 CallService.refresh()
             } catch (e: Exception) {
                 if (phase !== requested) return@launch
+                Diagnostics.note(DiagnosticEvent.ErrorKind.call, e.message)
                 phase = CallPhase.Failed(chat, title, link, camera, e.message ?: "Could not join the call.")
                 finishIfIdle()
             }
@@ -342,6 +349,7 @@ object CallController {
     }
 
     private fun endedInBackground(line: String) {
+        Diagnostics.note(DiagnosticEvent.ErrorKind.call)
         finishIfIdle()
         notice = CallNotice(line, error = true)
         Notifications.callEnded(app, line)
@@ -362,6 +370,7 @@ object CallController {
 
     /// The service could not run: the call carries on while Peel is on screen, and this says why not beyond.
     fun serviceRefused(reason: String) {
+        Diagnostics.note(DiagnosticEvent.ErrorKind.call)
         notice = CallNotice("$reason Keep Peel open to stay on the call.", error = true)
         if (!visible) Notifications.callEnded(app, reason)
     }

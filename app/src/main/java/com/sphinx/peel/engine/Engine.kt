@@ -2,6 +2,9 @@ package com.sphinx.peel.engine
 
 import android.os.SystemClock
 import android.util.Log
+import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.diagnostics.Diagnostics
+import com.sphinx.peel.diagnostics.ErrorKinds
 import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.PinTimeout
 import com.sphinx.peel.storage.CONTACT_KEY_MESSAGE_TYPE
@@ -519,6 +522,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                     throw e
                 } catch (e: Exception) {
                     Log.w("PeelEngine", "handling an inbound message failed", e)
+                    Diagnostics.recordCoreFailure(DiagnosticEvent.CoreFailureSite.receive, "inbound", e.message ?: e.javaClass.simpleName)
                     inboundFaults.tryEmit(e.message ?: e.javaClass.simpleName)
                 }
             }
@@ -627,6 +631,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val tag = sentStatus?.optString("tag")?.takeIf { it.isNotEmpty() }
         if (tag != null) {
             SendStatus.live(sentStatus.optString("status"))?.let { live ->
+                if (live == SendStatus.FAILED) Diagnostics.note(DiagnosticEvent.ErrorKind.server, "send failed: ${SendStatus.reason(sentStatus)}")
                 storage.markSendStatus(tag, live)
                 // Paying an invoice is tracked by its tag the same way.
                 if (live != SendStatus.UNSETTLED) {
@@ -742,6 +747,20 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     val visitorSigner: VisitorSigner = VisitorSigner { challenge, key -> signVisitor(challenge, key) }
 
     suspend fun sendMessage(chat: String, text: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null): MessageRow {
+        Diagnostics.setAction(DiagnosticEvent.Action.send)
+        try {
+            return sendMessageNow(chat, text, isTribe, replyTo, inThread)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Diagnostics.note(ErrorKinds.of(e), e.message)
+            throw e
+        } finally {
+            Diagnostics.setAction(DiagnosticEvent.Action.other)
+        }
+    }
+
+    private suspend fun sendMessageNow(chat: String, text: String, isTribe: Boolean, replyTo: String?, inThread: String?): MessageRow {
         check(transport != null) { "Not connected." }
         val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
         val body = JSONObject().put("content", text).apply {
@@ -823,6 +842,20 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// balance is checked when known (`checkPayment`, `Payments.kt`), so a
     /// boost that can't be afforded is refused with words instead of failing at the server.
     suspend fun sendBoost(chat: String, targetUuid: String, isTribe: Boolean): MessageRow {
+        Diagnostics.setAction(DiagnosticEvent.Action.send)
+        try {
+            return sendBoostNow(chat, targetUuid, isTribe)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Diagnostics.note(ErrorKinds.of(e), e.message)
+            throw e
+        } finally {
+            Diagnostics.setAction(DiagnosticEvent.Action.other)
+        }
+    }
+
+    private suspend fun sendBoostNow(chat: String, targetUuid: String, isTribe: Boolean): MessageRow {
         check(transport != null) { "Not connected." }
         val amountMsat = boostAmountMsat() + (if (isTribe) tribePaymentPriceMsat(chat) else 0L)
         // One tap sends unasked (PeelCore's `.unasked`): only the balance
@@ -1862,6 +1895,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
             isRegistered
         } catch (e: Exception) {
+            Diagnostics.note(ErrorKinds.of(e), e.message)
             connectionStateFlow.value = ConnectionState.Failed(e.message ?: "Could not connect to the server.")
             false
         }
@@ -2000,9 +2034,21 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             transport?.let { connection -> scope.launch { runCatching { resendRecent(connection) } } }
             // A restore that failed or was cut short resumes from its cursor.
             catchUpIndex = storage.maxServerIndex() ?: -1L
+            val startedAt = SystemClock.elapsedRealtime()
+            Diagnostics.recordCatchUp(DiagnosticEvent.CatchUpStage.start, DiagnosticEvent.CatchUpReason.cameOnline)
+            Diagnostics.recordCatchUpCursor((catchUpIndex ?: -1L) + 1, (catchUpIndex ?: -1L) + 1, DiagnosticEvent.CatchUpReason.cameOnline)
             caughtUp = if (restoreProgressFlow.value.restoring) runRestore() else catchUpMessages()
+            val took = (SystemClock.elapsedRealtime() - startedAt).toInt()
+            if (caughtUp) {
+                Diagnostics.recordCatchUp(DiagnosticEvent.CatchUpStage.finish, DiagnosticEvent.CatchUpReason.cameOnline, took)
+                Diagnostics.recordCaughtUp(took)
+            } else {
+                Diagnostics.recordCatchUp(DiagnosticEvent.CatchUpStage.abandon, DiagnosticEvent.CatchUpReason.error, took)
+            }
         }.onFailure {
             caughtUp = false
+            Diagnostics.recordCatchUp(DiagnosticEvent.CatchUpStage.abandon, DiagnosticEvent.CatchUpReason.error)
+            Diagnostics.recordCoreFailure(DiagnosticEvent.CoreFailureSite.catchUp, "afterConnect", it.message ?: it.javaClass.simpleName)
             Log.w("PeelEngine", "catch-up after connect failed", it)
         }
         // Local unread is settled (reads synced, history caught up): reset the mixer's badge if it is 0.
@@ -2033,6 +2079,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// restore, from its cursor (`afterConnect`).
     fun networkChanged() {
         if (connectionStateFlow.value == ConnectionState.Connecting) return
+        Diagnostics.recordForcedReconnect(DiagnosticEvent.ReconnectReason.pathChange)
         resume()
     }
 
@@ -2245,6 +2292,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.recordCoreFailure(DiagnosticEvent.CoreFailureSite.resumeHistory, "restore", e.message ?: e.javaClass.simpleName)
             restoreProgressFlow.update { it.copy(outcome = RestoreOutcome.Failed(e.message ?: "Restoring stopped.")) }
             return false
         } finally {
@@ -2261,6 +2309,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     private suspend fun dropOnPurpose() {
         if (!keepConnected) return
         Log.w("PeelHistory", "no answer from the server for ${historyWaitMs / 1000} seconds: reconnecting")
+        Diagnostics.recordStallReconnect()
+        Diagnostics.recordForcedReconnect(DiagnosticEvent.ReconnectReason.stall)
         transport?.let { runCatching { it.close() } }
         // Not `onConnectionDropped`: its guard ignores a drop while a reconnect job is
         // active, and the job that connected this restore is still active (it is
@@ -2534,6 +2584,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             openChat?.let { runCatching { checkOwnMessageStatus(it) } }
             if (reached == null) break
             next = reached + 1uL
+            Diagnostics.recordHistoryPage(result.msgs.size, reached?.toLong()?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt(), result.msgs.size)
             onPage(next, result.msgs.size.toLong())
             if (end != null && next > end.toULong()) break
         }
