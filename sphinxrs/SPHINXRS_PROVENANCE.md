@@ -2,9 +2,9 @@
 
 Source repo: https://github.com/stakwork/sphinx-rs
 
-Built from sphinx-rs commit: 09d7a790779592cf8731b0b08e85494c3c16039c
+Built from sphinx-rs commit: 2d7db82422d933dfc3a9b70bcf40c5d84a842f48
 
-That commit is the `v0.8.44` release tag — also what `sphinxrs/sphinxrs.lock`
+That commit is the `v0.8.45` release tag — also what `sphinxrs/sphinxrs.lock`
 pins (`scripts/build-ffi.sh`, which is how these binaries actually got here:
 downloaded from that release's own GitHub assets, not built locally). The
 lock is the automation-friendly record (a tag plus checksums
