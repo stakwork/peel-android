@@ -46,7 +46,8 @@ internal data class RestoreCursor(
     /// No more pages to ask for: `next` is past the highest index.
     val isPastEnd: Boolean get() = end != null && next > end
 
-    /// The same run after a page whose highest index was `reached` and which
+    /// The same run after a page whose highest index was `reached` (the max
+    /// raw onion index on the page, decoded or not, as iOS's `HistoryCursor.advance`) and which
     /// carried `items` items. Never moves backwards: a stale or duplicate
     /// page changes nothing, and its items are not counted twice.
     fun advanced(reached: Long, items: Long = 0): RestoreCursor =
@@ -123,8 +124,16 @@ internal object RestorePage {
     /// never "complete" (it would mark history done with a gap). A reply
     /// whose highest index is below `next` is stale (the answer to an
     /// earlier ask): ignored, so `next` never moves backwards.
-    fun verdict(reached: Long?, next: Long, end: Long?): PageVerdict = when {
-        reached == null -> if (end == null || next > end) PageVerdict.END else PageVerdict.RETRY
+    ///
+    /// [endRequired] is a restore's: its `end` must be known (the server
+    /// held messages), so an empty page with no `end` is a page lost, not the
+    /// end, and never marks the restore complete.
+    fun verdict(reached: Long?, next: Long, end: Long?, endRequired: Boolean = false): PageVerdict = when {
+        reached == null -> when {
+            end == null -> if (endRequired) PageVerdict.RETRY else PageVerdict.END
+            next > end -> PageVerdict.END
+            else -> PageVerdict.RETRY
+        }
         reached < next -> PageVerdict.RETRY
         else -> PageVerdict.ADVANCE
     }

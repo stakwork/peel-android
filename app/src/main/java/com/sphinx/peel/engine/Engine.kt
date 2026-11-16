@@ -178,6 +178,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// (`skippedThrough`'s own count), folded into `restoreProgress.messagesSkipped`
     /// once `page` reads it.
     @Volatile private var skippedCountThisPage = 0
+    /// The highest raw onion index of the history page just handled, every onion on it
+    /// whether or not the core decoded it (-1: none, or not a page), and how many onions.
+    /// `page` advances the cursor from this, as iOS's `HistoryCursor.advance` does.
+    @Volatile private var rawPageMax = -1L
+    @Volatile private var rawPageCount = 0
+    /// Messages `storeMessages` could only file as unfiled since `page` last reset it.
+    @Volatile private var unfiledThisPage = 0
     /// A message the listener could not handle (the core refused it, storage failed), for the
     /// history asks waiting on an answer that will now never come: they fail at once rather than
     /// after [historyWaitMs].
@@ -537,6 +544,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// exchange, stored and broadcast on [inboundResults].
     private suspend fun handleInbound(message: Inbound) {
         val startedAt = SystemClock.elapsedRealtime()
+        val rawOnions = HistoryPage.onions(message.payload)
+        if (rawOnions != null && rawOnions.isNotEmpty()) {
+            rawPageMax = maxOf(rawPageMax, rawOnions.maxOf { HistoryPage.index(it) })
+            rawPageCount += rawOnions.size
+        }
         val handled = mutex.withLock {
             val handleTime = clock.next()
             val stateBytes = StateCodec.encode(state)
@@ -577,7 +589,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (handled.msgs.isNotEmpty()) {
             Log.d("PeelHistory", "${handled.msgs.size} msgs: core handle+commit ${handledAt - startedAt}ms, store ${SystemClock.elapsedRealtime() - handledAt}ms")
             onIncoming?.let { notify ->
-                val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe }
+                val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe && it.chat != UNFILED_CHAT }
                 if (rows.isNotEmpty()) runCatching { notify(rows) }
             }
         }
@@ -617,6 +629,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// message either way.
     private fun storeMessages(result: RunReturn) {
         val rows = result.msgs.mapNotNull { mapMessage(it, accountKey) }
+        val unfiled = rows.count { it.chat == UNFILED_CHAT }
+        if (unfiled > 0) {
+            unfiledThisPage += unfiled
+            Log.w("PeelHistory", "$unfiled messages kept unfiled (no type, chat or sender), highest index ${rows.filter { it.chat == UNFILED_CHAT }.maxOfOrNull { it.serverIndex ?: -1 }}")
+            Diagnostics.note(DiagnosticEvent.ErrorKind.decoding, "unfiled messages: count=$unfiled indices=${rows.filter { it.chat == UNFILED_CHAT }.mapNotNull { it.serverIndex }.take(20)}")
+        }
         if (rows.isNotEmpty()) {
             // Messages and the contacts they reveal in one transaction.
             storage.insertMessages(rows, rows.mapNotNull { contactHint(it) })
@@ -2287,24 +2305,42 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 cursor = planRestore()
             }
             while (cursor != null) cursor = restoreRun(cursor)
+            // Only a restore that reached its end gets here: `restoreRun` throws otherwise.
             storage.apply(
                 Storage.Commit(
                     settings = mapOf(Setting.NEEDS_RESTORE to "0"),
                     deleteSettings = listOf(Setting.RESTORE_CURSOR),
                 ),
             )
+            logRestoreEnd("finished")
             restoreProgressFlow.update { it.copy(restoring = false, outcome = RestoreOutcome.Finished) }
             return true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Diagnostics.recordCoreFailure(DiagnosticEvent.CoreFailureSite.resumeHistory, "restore", e.message ?: e.javaClass.simpleName)
+            logRestoreEnd("failed: ${e.message}")
             restoreProgressFlow.update { it.copy(outcome = RestoreOutcome.Failed(e.message ?: "Restoring stopped.")) }
             return false
         } finally {
             restoreRunning = false
         }
     }
+
+    /// Where the restore stopped, for the log and Diagnostics: the last page's raw indices,
+    /// the cursor and what was stored, skipped and unfiled.
+    private fun logRestoreEnd(how: String) {
+        val cursor = RestoreCursor.decode(storage.value(Setting.RESTORE_CURSOR))
+        val progress = restoreProgressFlow.value
+        val line = "restore $how: lastPageRawMax=$lastRawMax lastPageRawCount=$lastRawCount next=${cursor?.next} end=${cursor?.end} " +
+            "messages=${progress.messages?.reached} skipped=${progress.messagesSkipped} unfiled=${progress.messagesUnfiled} stored=${storage.maxServerIndex()}"
+        Log.i("PeelHistory", line)
+        Diagnostics.note(DiagnosticEvent.ErrorKind.engine, line)
+    }
+
+    /// The raw index and size of the last history page `page` read.
+    @Volatile private var lastRawMax = -1L
+    @Volatile private var lastRawCount = 0
 
     /// Drops the connection on purpose, the way a failed ping does (PeelCore's
     /// `dropOnPurpose`): a history ask nothing answered usually means a
@@ -2342,6 +2378,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // An item count, not the highest server index (that only says when
         // to stop paging) — peel's `HistoryCursor` fix.
         restoreProgressFlow.update { it.copy(contacts = RestoreCount(0, counts.firstForEachKey)) }
+        Log.i("PeelHistory", "restore plan: total=${counts.total} first_for_each_scid=${counts.firstForEachKey} total_highest_index=${counts.totalHighestIndex} first_for_each_scid_highest_index=${counts.firstForEachKeyHighestIndex}")
+        Diagnostics.note(DiagnosticEvent.ErrorKind.engine, "restore plan: total=${counts.total} firstForEach=${counts.firstForEachKey} totalHighest=${counts.totalHighestIndex} firstHighest=${counts.firstForEachKeyHighestIndex}")
         val plan = RestoreCursor.plan(counts)
         if (plan != null) keepCursor(plan)
         return plan
@@ -2357,6 +2395,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// missing.
     private suspend fun restoreRun(cursor: RestoreCursor): RestoreCursor? {
         val contactsRun = cursor.phase == RestoreCursor.Phase.CONTACTS
+        if (cursor.end == null) {
+            // The server said it holds history but not where it ends: never "finished" by an empty
+            // page. Forget the cursor so the next attempt asks for the counts again.
+            storage.apply(Storage.Commit(deleteSettings = listOf(Setting.RESTORE_CURSOR)))
+            throw IllegalStateException("The server did not say where your history ends. Will retry.")
+        }
         val phase = if (contactsRun) HistoryPhase.CONTACTS else HistoryPhase.MESSAGES
         val total = cursor.contactsTotal
         // The Contacts line is right however the run was reached, fresh or
@@ -2385,6 +2429,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
         }
         if (!complete) throw IllegalStateException("Restoring ${if (contactsRun) "contacts" else "messages"} timed out. Will retry.")
+        if (!current.isPastEnd) {
+            throw IllegalStateException("Restoring ${if (contactsRun) "contacts" else "messages"} stopped at ${current.next}, short of ${current.end}. Will retry.")
+        }
         if (contactsRun) {
             // Once, with every contacts page's own state already folded in
             // — not per page: `listContacts` decodes the core's *entire*
@@ -2556,6 +2603,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             val askedAt = SystemClock.elapsedRealtime()
             skippedThrough = -1L
             skippedCountThisPage = 0
+            rawPageMax = -1L
+            rawPageCount = 0
+            unfiledThisPage = 0
             val result = askAndAwait(historyWaitMs, failOnFault = dropOnStall, expect = { it.msgsTotal != null }) {
                 run { time, stateBytes -> call(time, stateBytes, next) }
             }
@@ -2570,8 +2620,16 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // core refused was left out of it (`handleInbound`) but its index still
             // counts as reached: the cursor moves past the whole page.
             val storedReached = result.msgs.mapNotNull { it.index?.toULongOrNull() }.maxOrNull()
-            val reached = listOfNotNull(storedReached?.toLong(), skippedThrough.takeIf { it >= 0 }).maxOrNull()?.toULong()
-            when (RestorePage.verdict(reached?.toLong(), next.toLong(), end)) {
+            // The cursor moves by the raw onion indices of everything on the page (iOS
+            // `HistoryCursor.advance`), including onions the core did not return or could not read.
+            val rawReached = rawPageMax
+            val reached = listOfNotNull(storedReached?.toLong(), skippedThrough.takeIf { it >= 0 }, rawReached.takeIf { it >= 0 }).maxOrNull()?.toULong()
+            lastRawMax = rawReached
+            lastRawCount = rawPageCount
+            if (reached != null && storedReached != null && reached > storedReached) {
+                Log.d("PeelHistory", "$phase page at $next: raw max $rawReached beyond decoded max $storedReached (${rawPageCount} onions, ${result.msgs.size} decoded)")
+            }
+            when (RestorePage.verdict(reached?.toLong(), next.toLong(), end, endRequired = dropOnStall)) {
                 PageVerdict.RETRY -> {
                     if (++retries > RestorePage.MAX_RETRIES) {
                         throw IllegalStateException("The server's history ended early at ${next.toLong()}. Will retry.")
@@ -2584,9 +2642,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             restored += result.msgs.size
             val progress = if (total != null) RestoreCount(minOf(restored, total), total) else RestoreCount((reached ?: next).toLong(), end)
             val skippedOnPage = skippedCountThisPage
+            val unfiledOnPage = unfiledThisPage
             restoreProgressFlow.update {
                 val withCount = if (phase == HistoryPhase.CONTACTS) it.copy(contacts = progress) else it.copy(messages = progress)
-                if (skippedOnPage > 0) withCount.copy(messagesSkipped = withCount.messagesSkipped + skippedOnPage) else withCount
+                withCount.copy(
+                    messagesSkipped = withCount.messagesSkipped + skippedOnPage,
+                    messagesUnfiled = withCount.messagesUnfiled + unfiledOnPage,
+                )
             }
             // A page of history may carry the open chat's echoes: ask about
             // the rest (PeelCore's `.history` event -> `checkOwnMessageStatus`).
@@ -2610,27 +2672,32 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// unauthenticated publish stream the way PeelCore's check guards
     /// against. No tribe membership, replay or reply/thread handling yet.
     private fun mapMessage(msg: Msg, ownKey: String): MessageRow? {
-        val type = msg.type ?: return null
+        // Nothing is dropped: what cannot be filed (no type, no resolvable chat or sender) is kept
+        // under [UNFILED_CHAT], as iOS keeps it unfiled. Not a contact, so no chat list shows it.
+        // Port gap: iOS resolves the chat later through `state["c/<claimed>"]`; here the claimed
+        // pubkey is used as the chat when present and the placeholder only when it is not.
+        val type = msg.type?.toInt() ?: UNTYPED_MESSAGE_TYPE
         val fromMe = msg.fromMe ?: false
         val sender = msg.sender?.let { runCatching { JSONObject(it) }.getOrNull() }
         val claimed = sender?.optString("pubkey")?.takeIf { it.isNotEmpty() }
-        val chat = if (fromMe) {
-            val to = msg.sentTo ?: claimed?.takeIf { it != ownKey } ?: return null
-            if (claimed != ownKey && claimed != to) return null
-            to
+        val chat = if (msg.type == null) {
+            if (fromMe) msg.sentTo ?: claimed?.takeIf { it != ownKey } ?: UNFILED_CHAT else claimed ?: UNFILED_CHAT
+        } else if (fromMe) {
+            val to = msg.sentTo ?: claimed?.takeIf { it != ownKey }
+            if (to == null || (claimed != ownKey && claimed != to)) UNFILED_CHAT else to
         } else {
-            claimed ?: return null
+            claimed ?: UNFILED_CHAT
         }
         // A tribe echoes our own boost back with no `msat`; the amount is
         // only in the body's `amount` (iOS does the same, also for another
         // member's tribe boost, recognised by the sender's `host`).
         val inTribe = !sender?.optString("host").isNullOrEmpty()
         val msat = msg.msat?.toLong()
-            ?: if (type.toInt() == BOOST_MESSAGE_TYPE && (fromMe || inTribe)) declaredAmountMsat(msg.message) else null
+            ?: if (type == BOOST_MESSAGE_TYPE && (fromMe || inTribe)) declaredAmountMsat(msg.message) else null
         return MessageRow(
             uuid = msg.uuid,
             serverIndex = msg.index?.toLongOrNull(),
-            type = type.toInt(),
+            type = type,
             chat = chat,
             fromMe = fromMe,
             sender = msg.sender,
@@ -2721,6 +2788,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     }
 
     companion object {
+        /// The chat a message is kept under when none can be resolved for it (see `mapMessage`).
+        const val UNFILED_CHAT = "unfiled"
+
+        /// The type stored for a message the core gave no type for.
+        const val UNTYPED_MESSAGE_TYPE = -1
+
         /// How long a chat's own messages are left before they are asked
         /// about again (PeelCore's `ownStatusWait`), and how many tags one
         /// `getTags` carries (`ownStatusChunk`).
