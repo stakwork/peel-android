@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.sphinx.peel.engine.TalkAgentState
 import com.sphinx.peel.engine.TalkArtifacts
+import com.sphinx.peel.engine.AgentArtifact
 import com.sphinx.peel.engine.TalkCardAnchor
 import com.sphinx.peel.engine.TalkEncryption
 import com.sphinx.peel.engine.TalkHome
@@ -32,7 +33,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /// One artifact Jamie sent on the call, shown where its anchor puts it in the transcript.
-data class TalkCard(val id: String, val card: TalkArtifacts.Card, val anchor: TalkCardAnchor)
+data class TalkCard(val id: String, val card: AgentArtifact, val anchor: TalkCardAnchor)
 
 /// A Talk call's room (iOS `TalkSession`): the LiveKit room an org's home
 /// named for a call with its agent, the microphone, and what the call screen
@@ -212,7 +213,7 @@ class TalkSession(
     /// payload seen before (by its id) adds nothing.
     private fun receivedArtifacts(text: String) {
         if (leaving || text.toByteArray(Charsets.UTF_8).size > TalkArtifacts.MAX_PAYLOAD) return
-        val batch = TalkArtifacts.batch(text) ?: return
+        val batch = TalkArtifacts.batch(text, home.id) ?: return
         if (!seenArtifacts.add(batch.id)) return
         val anchor = TalkCardAnchor.of(transcript)
         val next = cards + batch.artifacts.mapIndexed { i, card -> TalkCard("${batch.id}/$i", card, anchor) }

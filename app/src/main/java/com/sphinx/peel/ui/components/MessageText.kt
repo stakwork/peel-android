@@ -49,7 +49,7 @@ import com.sphinx.peel.ui.theme.Theme
 /// emphasis marked, list items with a hanging indent, headings larger, quotes
 /// behind a bar, ``` blocks as code. Drawn like peel's `Apps/Shared/MessageText.swift`.
 /// `myAliases` are what a mention of you looks like (`Mentions.ownAliases`);
-/// empty in the agent chat. `maxLines` caps each paragraph (a list row's preview). Only https links open, with ACTION_VIEW; a long
+/// empty in the agent chat. `maxLines` caps each paragraph (a list row's preview). Only https links open, through the app's link handler (`LocalLinkOpener`: a Hive app link opens its page) or ACTION_VIEW; a long
 /// press anywhere else falls through to the row (the message menu).
 @Composable
 fun MessageText(
@@ -63,12 +63,18 @@ fun MessageText(
     val blocks = remember(text) { MessageMarkup.blocks(text) }
     val palette = Theme.colors
     val context = LocalContext.current
-    val openLink = remember(context) {
+    // The app's one link handler (a Hive app link opens its page), else the system's.
+    val linkOpener = com.sphinx.peel.ui.apps.LocalLinkOpener.current
+    val openLink = remember(context, linkOpener) {
         { url: String ->
-            try {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
-            } catch (_: Exception) {
-                // No browser to open it: nothing to do.
+            if (linkOpener != null) {
+                linkOpener.open(url)
+            } else {
+                try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
+                } catch (_: Exception) {
+                    // No browser to open it: nothing to do.
+                }
             }
         }
     }

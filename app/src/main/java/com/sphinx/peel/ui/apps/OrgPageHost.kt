@@ -347,14 +347,6 @@ internal class OrgPageChromeClient(
 /// Where downloads wait: each in a folder of its own (iOS `Peel Org Downloads`); shared through `res/xml/file_paths.xml`.
 internal fun orgDownloadsRoot(context: Context) = File(context.cacheDir, "org-downloads")
 
-private fun openInBrowser(context: Context, url: String) {
-    try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    } catch (e: ActivityNotFoundException) {
-        // Nothing to open it: it simply does not open.
-    }
-}
-
 private fun share(context: Context, file: OrgPageController.SharedFile) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file.file)
     val send = Intent(Intent.ACTION_SEND).apply {

@@ -8,9 +8,8 @@ import java.util.UUID
 /// token (iOS `PeelCore/OrgPage.swift`: `StrutUI`, `StrutAppLink`, `OrgPage`; `PeelUI/Stadeum.swift`: `OrgPageRequest`).
 /// Nothing here touches Android, so all of it is JVM-tested (`OrgPageTest`).
 ///
-/// Not ported (iOS-only or later steps): `OrgPage.hiveApp` and `AgentArtifact.Handle.onOrg` (a Hive link or an agent's
-/// deliverable opening a page: step 3), and `AgentArtifact.Handle`'s file shapes (only an app's handle, which is all
-/// [StrutAppLink] needs, is here: [StrutAppHandle]).
+/// [StrutAppHandle] is the app shape of `AgentArtifact.Handle`, which is all [StrutAppLink] needs; the whole handle (files too,
+/// `onOrg`) is [AgentHandle], and `OrgPage.hiveApp` is here too (`docs/phases/30-open-paths.md`).
 
 /// A URL taken apart as RFC 3986 does, without `java.net.URI` (which refuses hosts with an underscore and throws on odd
 /// input) or `android.net.Uri` (not on a plain JVM). Query and path stay percent-encoded exactly as written.
@@ -222,29 +221,33 @@ data class StrutAppLink(val app: StrutAppHandle, val input: String?) {
 
         /// As strut's UI reads its address (`URLSearchParams`): `+` is a space; null when a `%` escape is malformed or the
         /// bytes are not UTF-8 (Swift `removingPercentEncoding`).
-        internal fun decoded(part: String): String? {
-            val s = part.replace('+', ' ')
-            val bytes = java.io.ByteArrayOutputStream()
-            var i = 0
-            while (i < s.length) {
-                if (s[i] == '%') {
-                    val hex = s.substring(i + 1, minOf(i + 3, s.length))
-                    if (hex.length < 2 || !hex.all { it in "0123456789abcdefABCDEF" }) return null
-                    bytes.write(hex.toInt(16))
-                    i += 3
-                } else {
-                    val cp = s.codePointAt(i)
-                    bytes.write(String(Character.toChars(cp)).toByteArray(Charsets.UTF_8))
-                    i += Character.charCount(cp)
-                }
-            }
-            return try {
-                Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes.toByteArray())).toString()
-            } catch (e: java.nio.charset.CharacterCodingException) {
-                null
-            }
+        internal fun decoded(part: String): String? = percentDecode(part.replace('+', ' '))
+
+    }
+}
+
+/// `s` with its `%XX` escapes read as UTF-8 bytes (Swift `removingPercentEncoding`: `+` stays); null when an escape is malformed or
+/// the bytes are not UTF-8.
+internal fun percentDecode(s: String): String? {
+    val bytes = java.io.ByteArrayOutputStream()
+    var i = 0
+    while (i < s.length) {
+        if (s[i] == '%') {
+            val hex = s.substring(i + 1, minOf(i + 3, s.length))
+            if (hex.length < 2 || !hex.all { it in "0123456789abcdefABCDEF" }) return null
+            bytes.write(hex.toInt(16))
+            i += 3
+        } else {
+            val cp = s.codePointAt(i)
+            bytes.write(String(Character.toChars(cp)).toByteArray(Charsets.UTF_8))
+            i += Character.charCount(cp)
         }
+    }
+    return try {
+        Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes.toByteArray())).toString()
+    } catch (e: java.nio.charset.CharacterCodingException) {
+        null
     }
 }
 
@@ -256,6 +259,25 @@ data class OrgPage(val peer: String, val query: String, val value: String) {
     companion object {
         /// A workspace's app, by its name on its own strut.
         fun app(name: String, peer: String) = OrgPage(peer, "app", name)
+
+        /// The app a link to Hive's page for it names ([WorkspaceApp.shareLink]): https on Hive's own host and port, no userinfo,
+        /// and exactly `/w/<slug>/apps/<name>`, the slug a peer id and the name one strut takes. Its query and fragment are
+        /// ignored. Null for anything else (http, another or a lookalike host, an empty, dotted or version segment, an encoded
+        /// `/`, trailing junk): the link is only ever a name, never a way in; the person's own pairing decides whether it opens.
+        fun hiveApp(url: String, hive: String = WorkspaceApp.HIVE_PRODUCTION): OrgPage? {
+            val parts = UrlParts.parse(url) ?: return null
+            val host = parts.host ?: return null
+            if (host != UrlParts.parse(hive)?.host || parts.scheme.lowercase() != "https" || parts.port != null ||
+                parts.authority?.contains('@') == true
+            ) return null
+            val segments = parts.path.split("/")
+            if (segments.size < 5 || segments[0].isNotEmpty() || segments[1] != "w" || segments[3] != "apps") return null
+            val decoded = segments.drop(2).map { segment -> percentDecode(segment)?.takeIf { !it.contains('/') } ?: return null }
+            val slug = decoded[0]
+            val name = decoded.drop(2).joinToString("/")
+            if (!StrutAppHandle.isPeerId(slug) || !AgentHandle.isAppName(name)) return null
+            return app(name, slug)
+        }
     }
 }
 
@@ -365,12 +387,8 @@ class OrgPageRequest(
     companion object {
         /// How a workspace's app opens: its own strut's UI, alone (`?app=<name>&solo=1`), with the person's token (iOS
         /// `Stadeum.opening`). Null when the app has no live workspace or the base is not a URL.
-        fun opening(app: WorkspaceApp, live: List<HivePeer>): OrgPageRequest? {
-            val peerId = app.peer ?: return null
-            val peer = live.firstOrNull { it.id == peerId } ?: return null
-            val url = OrgPage.app(app.name, peerId).url(peer.baseUrl) ?: return null
-            return OrgPageRequest(url, peer.token, peer.id, peer.name, app.title)
-        }
+        fun opening(app: WorkspaceApp, live: List<HivePeer>): OrgPageRequest? =
+            (Openings(live, connected = true).opening(app) as? Opening.Page)?.request
 
         /// A string as a JSON literal as Foundation's `JSONEncoder` writes it with `.withoutEscapingSlashes`.
         internal fun jsonLiteral(s: String): String {

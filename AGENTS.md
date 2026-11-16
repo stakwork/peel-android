@@ -77,6 +77,9 @@ sections for code that isn't written yet.
   - `engine/PhonePage.kt` (`PhonePage`, `PublicPage`), `StrutWallet.kt`, `WalletHost.kt` (`WalletScope`, `WalletCaller`, `WalletPush`) — one page host
     (`docs/phases/29-one-page-host.md`): `ui/apps/OrgPageHost.kt` (`OrgPageScreen`) shows an org's page and a stranger's public page alike,
     `ui/apps/OrgWalletBridge.kt` is the app wallet's bridge on both, `ui/page/SignInSheet.kt` (`PhoneWalletSheets`) its sheet and notice; `Engine.walletHost`.
+  - `engine/AgentArtifact.kt` (`AgentHandle`, `AgentArtifact`, `AgentMessages`), `Openings.kt` (`Opening`, `LinkTap`, `AppLinkHandler`) — the ways things open in the page host
+    (`docs/phases/30-open-paths.md`): a Hive link tapped in any message (`ui/apps/PageOpening.kt` `LocalLinkOpener`, provided at `MainTabs`, which also holds the one org page), the agent's
+    DM and a tribe's deliverable lines (`ui/apps/AgentArtifactLines.kt`), Talk cards.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

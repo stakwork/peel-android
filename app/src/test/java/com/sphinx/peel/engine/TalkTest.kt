@@ -423,38 +423,65 @@ class TalkTest {
         assertEquals("line 204", t.lines.last().text)
     }
 
-    // MARK: - Artifacts
+    // MARK: - Artifacts (iOS `TalkArtifactsTests`)
+
+    private fun payload(entries: String, id: String = "p-1") = """{"id":"$id","timestamp":1760000000000,"artifacts":[$entries]}"""
 
     @Test
-    fun `an artifacts payload reads its id and cards`() {
-        val text = """{"id":"p1","timestamp":1,"artifacts":[
-            {"title":"Report","summary":"Q3\nnumbers","url":"https://acme.example.com/r"},
-            {"label":"By label","url":"/relative"},
-            {"summary":"no title"},
-            "junk",
-            {"title":"Plain http","url":"http://acme.example.com"}]}"""
-        val batch = TalkArtifacts.batch(text)!!
-        assertEquals("p1", batch.id)
-        assertEquals(listOf("Report", "By label", "Plain http"), batch.artifacts.map { it.title })
-        assertEquals("Q3 numbers", batch.artifacts[0].summary)
-        assertEquals("https://acme.example.com/r", batch.artifacts[0].url)
-        assertNull(batch.artifacts[1].url)
-        assertNull(batch.artifacts[2].url)
+    fun `a plan on the homes strut`() {
+        val text = payload("""{"id":"a1","kind":"plan","title":"Reminders for Jamie, plan","label":"Plan","url":"/jobs/j1/files/plan.md","path":"plan.md"}""")
+        val card = TalkArtifacts.decode(text, "acme").first()
+        assertEquals("Reminders for Jamie, plan", card.title)
+        assertEquals("Plan", card.label)
+        assertEquals("a1", card.id)
+        assertEquals(AgentHandle.file("/peers/acme/jobs/j1/files/plan.md"), card.handle)
+        assertEquals("p-1", TalkArtifacts.batch(text, "acme")?.id)
     }
 
     @Test
-    fun `a payload with no id or list, or bad json, is nothing`() {
-        assertNull(TalkArtifacts.batch("nope"))
-        assertNull(TalkArtifacts.batch("""{"artifacts":[]}"""))
-        assertNull(TalkArtifacts.batch("""{"id":"","artifacts":[]}"""))
-        assertNull(TalkArtifacts.batch("""{"id":"p"}"""))
-        assertEquals(0, TalkArtifacts.batch("""{"id":"p","artifacts":[]}""")!!.artifacts.size)
+    fun `an app and a peers file`() {
+        val text = payload(
+            """{"id":"a2","kind":"app","title":"Board","url":"/apps/board/v2/files/dist/index.html","app":{"name":"board","version":"v2","hash":"h","builtAt":1}},
+            {"id":"a3","kind":"file","title":"Notes","url":"/jobs/j9/files/n.md","peer":"beta","job":"j9","path":"n.md"}""",
+        )
+        assertEquals(
+            listOf(AgentHandle.app("@acme/board@v2"), AgentHandle.file("/peers/acme/peers/beta/jobs/j9/files/n.md")),
+            TalkArtifacts.decode(text, "acme").map { it.handle },
+        )
     }
 
     @Test
-    fun `at most 20 entries are read from a stream`() {
-        val entries = (0 until 50).joinToString(",") { """{"title":"t$it"}""" }
-        assertEquals(20, TalkArtifacts.batch("""{"id":"p","artifacts":[$entries]}""")!!.artifacts.size)
+    fun `an https link without a handle`() {
+        val text = payload("""{"id":"a4","kind":"pull_request","title":"Fix it","url":"https://github.com/acme/repo/pull/7"}""")
+        val card = TalkArtifacts.decode(text, TalkHome.DEVELOPMENT).first()
+        assertNull(card.handle)
+        assertEquals("https://github.com/acme/repo/pull/7", card.url)
+    }
+
+    @Test
+    fun `malformed gives nothing`() {
+        for (text in listOf("", "not json", "[]", """{"id":"p"}""", """{"artifacts":[{"title":"x"}]}""", """{"id":"p","artifacts":"x"}""")) {
+            assertTrue(text, TalkArtifacts.decode(text, "acme").isEmpty())
+        }
+        assertNull(TalkArtifacts.batch("nope", "acme"))
+        assertNull(TalkArtifacts.batch("""{"id":"","artifacts":[]}""", "acme"))
+        assertTrue(TalkArtifacts.decode(payload("1, null, \"x\""), "acme").isEmpty())
+        assertEquals(0, TalkArtifacts.batch("""{"id":"p","artifacts":[]}""", "acme")!!.artifacts.size)
+    }
+
+    @Test
+    fun `an entry with no title is skipped and a stream is capped`() {
+        val text = payload("""{"id":"a5","kind":"plan","url":"/jobs/j1/files/p.md"},{"id":"a6","kind":"plan","title":"Kept","url":"/jobs/j1/files/p.md"}""")
+        assertEquals(listOf("Kept"), TalkArtifacts.decode(text, "acme").map { it.title })
+        val many = (0 until 30).joinToString(",") { """{"id":"e$it","title":"T$it","url":"/jobs/j/files/f"}""" }
+        assertEquals(AgentArtifact.MOST, TalkArtifacts.decode(payload(many), "acme").size)
+    }
+
+    @Test
+    fun `a card with no home that strut gives opens nothing`() {
+        val entry = """{"id":"x","title":"X","url":"/jobs/j/files/x"}"""
+        assertNull(TalkArtifacts.decode(payload(entry), TalkHome.DEVELOPMENT).first().handle)
+        assertNull(TalkArtifacts.decode(payload(entry), "../x").first().handle)
     }
 
     // MARK: - Cards under replies
