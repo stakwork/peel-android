@@ -96,6 +96,8 @@ sections for code that isn't written yet.
   - `engine/CreditPurchase.kt` (`CreditPurchase`, `CreditReply`, `HostCapability`), `WalletHost.kt` (`buy_credit*`, `WalletCreditSheet`, `creditKey`, sheet withdrawal) — buying a visitor's credit (`docs/phases/35-buy-credit.md`); sheet `WalletCreditPhoneSheet` in `ui/page/WalletSheets.kt`.
   - `engine/LucideNames.kt`, `TalkHistory.kt` (`TalkHistoryStore`, local saved Talk conversations), `ui/apps/AppIcons.kt`, `ui/talk/TalkHistoryScreen.kt` — Apps icons, pull-to-refresh and the Talk row menu
     (`docs/phases/36-apps-cosmetics.md`).
+  - `engine/ControlEnvelope.kt`, `AgentChat.kt` (`ControlEnvelope`, `ControlMessage`, `ControlMessages`, `AgentToolLine`, `AgentJob`, `AgentExtras`, `AgentRequest`, `AgentReads`, `AgentToolTitle`, `ControlPlan`) and `Storage` v15 (`message.isControl`) — the agent's control messages
+    (`docs/phases/39-control-messages.md`): a quiet line, a request's one row or nothing, tool rows above a reply, never unread or notified; UI `ui/dashboard/ControlRows.kt`. Proposals are Mac-only and not ported.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

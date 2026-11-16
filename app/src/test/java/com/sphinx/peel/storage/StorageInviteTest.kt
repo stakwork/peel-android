@@ -128,6 +128,9 @@ class StorageInviteTest {
         // A version-10 database has its invoice table (v9), which v14 adds wallet columns to.
         old.execSQL("CREATE TABLE invoice (paymentHash TEXT NOT NULL, incoming INTEGER NOT NULL, PRIMARY KEY (paymentHash, incoming))")
         old.insert("setting", null, ContentValues().apply { put("key", "alias"); put("value", "Old") })
+        // And the tables v15 (control messages) reads.
+        old.execSQL("CREATE TABLE contact (pubkey TEXT PRIMARY KEY NOT NULL, isTribe INTEGER NOT NULL DEFAULT 0)")
+        old.execSQL("CREATE TABLE message (id INTEGER PRIMARY KEY AUTOINCREMENT, type INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, chat TEXT NOT NULL, body TEXT)")
         old.version = 10
         old.close()
         val storage = Storage(context, account = name)

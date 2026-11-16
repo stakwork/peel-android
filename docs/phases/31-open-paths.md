@@ -3,7 +3,7 @@
 Status: **step 3 of the org-page port.** Built and wired: `OrgPage.hiveApp`, the `Opening`/`LinkTap` results over the Stadeum model, a Hive app link
 tapped anywhere in a message opening its page (one app-wide handler, iOS `\.openURL`), the page host at `MainTabs` level (any page closes when its workspace
 leaves `live`), the agent's DM and a tribe's deliverable lines, and Talk cards opened through the same host. Compiles; `:app:testDebugUnitTest` passes.
-**Never run on a device.** Open: `AgentJob`/tool lines/control messages of the agent's DM, `strut.proposals`, the Mac-only openings.
+**Never run on a device.** Open: the Mac-only openings. (Control messages, tool lines and `AgentJob`: phase 39; `strut.proposals`: Mac-only.)
 
 iOS read from `main` (1778b01, #551 merged): `OrgPage.swift`, `Stadeum.swift` (`Opening`, `opening`, `LinkTap`, `tap`, `opensFromTribe`), `ControlEnvelope.swift`
 (`AgentArtifact`, `Handle`, `agentArtifacts`, `strutArtifacts`), `CallChat.swift` (`strutEntry`), `TalkCall.swift` (`TalkArtifacts`), `Labels.swift`

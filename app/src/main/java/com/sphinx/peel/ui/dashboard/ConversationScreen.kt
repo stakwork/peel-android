@@ -2,6 +2,8 @@ package com.sphinx.peel.ui.dashboard
 
 import com.sphinx.peel.engine.AgentMessages
 import com.sphinx.peel.engine.TEXT_MESSAGE_TYPE
+import com.sphinx.peel.engine.AgentExtras
+import com.sphinx.peel.engine.ControlPlan
 import com.sphinx.peel.ui.apps.AgentArtifactLines
 import android.content.Intent
 import android.webkit.MimeTypeMap
@@ -565,15 +567,21 @@ fun ConversationScreen(
         // got a reply jumps to where that reply would sit, same as an
         // active chat bumping to the bottom.
         val threads = remember(messages, isTribe, myAlias, myPhotoUrl) { if (isTribe) threadSummaries(messages, myAlias, myPhotoUrl) else emptyMap() }
-        val displayedMessages = remember(messages, threads) {
+        val sortedMessages = remember(messages, threads) {
             messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type != DELETE_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
+        // Control messages in a direct message (docs/phases/39-control-messages.md; iOS `ChatRow.rows`): a quiet line, a request's one row or
+        // nothing at all, never a bubble.
+        val controlPlan = remember(sortedMessages, isTribe, isAgent, title) {
+            ControlPlan.of(sortedMessages, inTribe = isTribe, agentDM = isAgent) { if (it.fromMe) "You" else title }
+        }
+        val displayedMessages = remember(sortedMessages, controlPlan) { sortedMessages.filter { it.id !in controlPlan.hidden } }
 
         // Only our own first crossing into "new" gets the line - PeelCore's
         // own `rows(...)` clears `newAfter` the moment one row claims it.
-        val newMessageIndex = remember(displayedMessages, newAfterIndex) {
-            newMessagesIndex(displayedMessages, newAfterIndex, BOOST_MESSAGE_TYPE)
+        val newMessageIndex = remember(displayedMessages, newAfterIndex, controlPlan) {
+            newMessagesIndex(displayedMessages, newAfterIndex, BOOST_MESSAGE_TYPE, controlPlan::isControl)
         }
 
         // Re-keyed on MediaAspectCache.version too: a handful of
@@ -637,14 +645,27 @@ fun ConversationScreen(
                 // PeelCore's own rule (`ChatRow.swift`'s run-break check),
                 // not sender identity alone.
                 val startsDay = previous == null || !isSameDay(previous.timestamp, row.timestamp)
+                val controlRow = controlPlan.rows[row.id]
+                // A control line ends the run before it and starts the next (iOS: `row.kind != .message || previous.kind != .message`).
                 val startsRun = startsDay || runSenderKey(previous) != runSenderKey(row) ||
-                    ((row.timestamp ?: 0L) - (previous.timestamp ?: 0L) > 5 * 60 * 1000L)
+                    ((row.timestamp ?: 0L) - (previous.timestamp ?: 0L) > 5 * 60 * 1000L) || controlRow != null || (previous != null && controlPlan.isControl(previous))
                 if (startsDay && row.timestamp != null) DayDivider(row.timestamp)
                 if (index == newMessageIndex) NewMessagesDivider()
-                val replyUuid = row.replyUuid
-                val parent = replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
+                if (controlRow != null) {
+                    ControlRowView(controlRow)
+                    return@itemsIndexed
+                }
+                // The agent's replies answer the message just above: no quote (iOS), and never a quote of a control line.
+                val parentRow = row.replyUuid?.let { uuid -> messages.firstOrNull { it.uuid == uuid } }
+                val replyUuid = row.replyUuid.takeIf { !(isAgent && !row.fromMe) && !(parentRow != null && controlPlan.isControl(parentRow)) }
+                val parent = parentRow.takeIf { replyUuid != null }
+                if (isAgent && !row.fromMe) {
+                    // The tools an agent's reply ran, above it (iOS hides the bridge's own `sphinx…` tools, which its device requests show).
+                    val tools = remember(row.body) { AgentExtras.tools(row.type, row.deleted, row.body).filter { !it.name.startsWith("sphinx") } }
+                    if (tools.isNotEmpty()) AgentToolLines(tools)
+                }
                 val next = displayedMessages.getOrNull(index + 1)
-                val endsRun = next == null || !isSameDay(row.timestamp, next.timestamp) ||
+                val endsRun = next == null || !isSameDay(row.timestamp, next.timestamp) || controlPlan.isControl(next) ||
                     runSenderKey(row) != runSenderKey(next) ||
                     ((next.timestamp ?: 0L) - (row.timestamp ?: 0L) > 5 * 60 * 1000L)
                 val rowBoosts = row.uuid?.let { boosts[it] }
