@@ -766,7 +766,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// challenge's UTF-8 bytes, by the account's own key (child 0, [accountKey]) for [SignInKey.root], or by the
     /// key LUD-05 derives for the challenge's host for [SignInKey.domain]. Never changes the account's keys.
     /// With the account's key, its Sphinx address too ([signInAddress]); with a domain's, none, so a new identity
-    /// stays unlinkable (iOS PR #557, `docs/phases/37-worker-onboarding.md`).
+    /// stays unlinkable (iOS PR #557, `docs/phases/38-worker-onboarding.md`).
     suspend fun signVisitor(challenge: VisitorChallenge, key: SignInKey): VisitorSignature {
         val message = challenge.text.toByteArray(Charsets.UTF_8)
         return when (key) {

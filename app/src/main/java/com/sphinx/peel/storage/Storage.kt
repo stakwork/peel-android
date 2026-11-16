@@ -1765,7 +1765,7 @@ class Storage(context: Context, account: String = "default") {
         walletConnectionsVersionFlow.value += 1
     }
 
-    // MARK: - Public apps opened here (docs/phases/37-worker-onboarding.md)
+    // MARK: - Public apps opened here (docs/phases/38-worker-onboarding.md)
 
     private val publicAppsVersionFlow = MutableStateFlow(0)
 
@@ -2386,7 +2386,7 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("CREATE INDEX keysend_connection ON keysend(connection) WHERE connection IS NOT NULL")
         }
 
-        // `public_app` (Android only; docs/phases/37-worker-onboarding.md): the stranger's public apps opened here, kept for the Apps
+        // `public_app` (Android only; docs/phases/38-worker-onboarding.md): the stranger's public apps opened here, kept for the Apps
         // list. One row per app on a seller (`app` '' for none); the address it was last opened at, its origin (Disconnect forgets an
         // origin's apps with its connection) and when, unix seconds.
         private fun v15(db: SQLiteDatabase) {

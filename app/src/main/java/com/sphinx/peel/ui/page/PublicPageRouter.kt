@@ -10,7 +10,7 @@ import com.sphinx.peel.engine.PublicAppLink
 /// unlock); only a sign-out or wipe ([reset]) drops both (iOS `PhoneRouter.reset`).
 ///
 /// [opened] is told of each page as it comes on screen, whichever way it came (a link, a worker's invite link, the Apps list):
-/// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/37-worker-onboarding.md; Android only).
+/// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/38-worker-onboarding.md; Android only).
 class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
     /// The page on screen, if any.
     var page by mutableStateOf<PublicAppLink?>(null)

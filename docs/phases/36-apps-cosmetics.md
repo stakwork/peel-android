@@ -17,7 +17,7 @@ iOS read from `main`: `Sources/PeelUI/WorkspaceAppIcon.swift` (+ `WorkspaceAppIc
   preview ("No transcript"), tap opens the transcript ("You"/"Jamie", selectable), a mic button on a row/transcript and in the bar starts a new call; empty state copy as iOS.
 
 ## Differences from iOS
-- Only the lucide icons in `LucideNames.SUPPORTED` (~90, those with a Material counterpart, covering iOS's old table) draw; any other lucide icon is the grid (iOS draws all of lucide).
+- (Superseded by phase 37: every lucide icon now draws.)
 - History: a session of another home sharing a file-name prefix (`acme` vs `acme_two`) is left out (iOS matches the prefix only); writes go through a temp file + rename.
 - Resume is a mic button, not a swipe action; History is a screen inside `AppsScreen` (Back returns to the list), not a navigation push.
 - The transcript is saved on every hang-up, including Close after a failed or ended call, as long as it has lines (as iOS).

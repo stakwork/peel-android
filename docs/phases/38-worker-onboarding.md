@@ -1,4 +1,4 @@
-# Phase 37 — Worker onboarding (strut's human steps)
+# Phase 38 — Worker onboarding (strut's human steps)
 
 Status: **written without a build here: no Android SDK on this Mac (Homebrew's JDK 21 only), so `testDebugUnitTest`, lint and
 `assembleDebug` ran only in the PR's CI. Nothing was run on a device or against a real Stadeum, daemon or mixer.**

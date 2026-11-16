@@ -93,7 +93,7 @@ class MainActivity : FragmentActivity() {
         // Only an invite link, and only ever held in memory: never logged or stored.
         val link = InviteLink.fromDeepLink(data.scheme, data.getQueryParameter("action"), data.toString()) ?: return
         inviteLink = link
-        // A worker's invite link (`&a=`, docs/phases/37-worker-onboarding.md) also names a public app: it goes the way a
+        // A worker's invite link (`&a=`, docs/phases/38-worker-onboarding.md) also names a public app: it goes the way a
         // `peel://open` link does, so it opens once the account is unlocked: at once for an account already here (whose invite
         // part is ignored, as before), after signup for a new one. A link with no valid `a=` is only the invite, as before.
         InviteLink.appOf(link)?.let { publicLink = it }
@@ -169,7 +169,7 @@ private fun PeelApp(
 
     // A stranger's public app (`peel://open?url=…`, or a worker's invite link's `&a=`): opened when the account is unlocked,
     // kept until it is (also across a lock: only the open page closes then). Page and waiting link both go on sign-out or wipe.
-    // Each page opened is kept for the Apps list (docs/phases/37-worker-onboarding.md).
+    // Each page opened is kept for the Apps list (docs/phases/38-worker-onboarding.md).
     val router = remember { PublicPageRouter(opened = { storage.rememberPublicApp(it) }) }
     val unlocked = screen is Screen.Home
     androidx.compose.runtime.LaunchedEffect(publicLink, unlocked) {

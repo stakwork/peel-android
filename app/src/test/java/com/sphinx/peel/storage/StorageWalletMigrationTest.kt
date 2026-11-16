@@ -118,7 +118,7 @@ class StorageWalletMigrationTest {
         Storage(context, migrated).also { it.value(Setting.NETWORK) }.close()
         for (account in listOf(fresh, migrated)) {
             val db = SQLiteDatabase.openDatabase(context.getDatabasePath("peel-$account.db").path, null, SQLiteDatabase.OPEN_READWRITE)
-            // v15 (docs/phases/37-worker-onboarding.md) runs after v14 for both.
+            // v15 (docs/phases/38-worker-onboarding.md) runs after v14 for both.
             assertEquals(15, db.version)
             assertEquals(setOf("invoice_connection", "keysend_tag", "keysend_connection"), indexes(db))
             db.close()

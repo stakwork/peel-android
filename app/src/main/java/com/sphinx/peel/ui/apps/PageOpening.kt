@@ -20,7 +20,7 @@ val LocalLinkOpener = staticCompositionLocalOf<LinkOpener?> { null }
 /// it when its workspace is no longer in use. The default opens nothing.
 val LocalPageOpener = staticCompositionLocalOf<(OrgPageRequest) -> Unit> { {} }
 
-/// Opens a stranger's public app (the Apps list's opened apps, docs/phases/37-worker-onboarding.md) the way a `peel://open` link
+/// Opens a stranger's public app (the Apps list's opened apps, docs/phases/38-worker-onboarding.md) the way a `peel://open` link
 /// does: provided where the account is open, over `PublicPageRouter`. The default opens nothing.
 val LocalPublicAppOpener = staticCompositionLocalOf<(PublicAppLink) -> Unit> { {} }
 

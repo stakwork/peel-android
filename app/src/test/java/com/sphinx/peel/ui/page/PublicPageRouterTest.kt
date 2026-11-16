@@ -50,7 +50,7 @@ class PublicPageRouterTest {
     }
 
     /// Each page that comes on screen is told to [PublicPageRouter]'s `opened` (kept for the Apps list,
-    /// docs/phases/37-worker-onboarding.md); a link still waiting for the unlock is not, until it opens.
+    /// docs/phases/38-worker-onboarding.md); a link still waiting for the unlock is not, until it opens.
     @Test fun eachPageOpenedIsTold() {
         val seen = mutableListOf<PublicAppLink>()
         val router = PublicPageRouter(opened = { seen += it })

@@ -38,8 +38,8 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
 
 ## Not ported / open
 - **Deep-link scheme**: iOS has no handler, so `sphinx.chat://` (the official apps' scheme) is a guess for
-  Peel. Opening a link only fills the invite step; with an account already set up it is ignored. (Phase 37: a link with
-  `&a=<app>` also opens that public app, after signup or at once with an account; see `37-worker-onboarding.md`.)
+  Peel. Opening a link only fills the invite step; with an account already set up it is ignored. (Phase 38: a link with
+  `&a=<app>` also opens that public app, after signup or at once with an account; see `38-worker-onboarding.md`.)
 - **Profile photo at signup**: iOS onboarding has none, and Android has no profile-photo upload at all yet.
 - **Used/cancelled invite**: the mixer gives no reply, so it looks like a timeout: the account is kept
   unconfirmed ("Not confirmed yet…") and registers again on each connect; "Forget this account" in You

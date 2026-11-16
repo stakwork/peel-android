@@ -77,7 +77,7 @@ import kotlinx.coroutines.coroutineScope
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
 /// Android only: the strangers' public apps opened here ("Apps you opened", `Storage.openedApps`, last opened first), so a worker
-/// opens a Stadeum's worker app again with one tap (docs/phases/37-worker-onboarding.md); long-press removes one, and Disconnect in
+/// opens a Stadeum's worker app again with one tap (docs/phases/38-worker-onboarding.md); long-press removes one, and Disconnect in
 /// You › Connected apps removes an origin's.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
