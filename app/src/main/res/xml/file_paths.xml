@@ -8,4 +8,7 @@
     <!-- A photo just taken with the camera, on its way to being sent
          (ConversationScreen's camera launcher) - never read back after. -->
     <cache-path name="outgoing" path="outgoing/" />
+    <!-- A download an org page's own web view saved (OrgDownloads), one folder each, on its way to the share sheet
+         (OrgPageHost) and removed when the page closes. -->
+    <cache-path name="org_downloads" path="org-downloads/" />
 </paths>

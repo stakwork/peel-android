@@ -1,11 +1,8 @@
 package com.sphinx.peel.ui.apps
 
-import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -52,8 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import com.sphinx.peel.engine.AppPage
+import com.sphinx.peel.engine.OrgPageRequest
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
@@ -83,7 +79,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     var read by remember { mutableStateOf<List<WorkspaceApp>>(emptyList()) }
     var reading by remember { mutableStateOf(false) }
     var unread by remember { mutableStateOf<List<String>>(emptyList()) }
-    var page by remember { mutableStateOf<AppPage?>(null) }
+    var page by remember { mutableStateOf<OrgPageRequest?>(null) }
     var refresh by remember { mutableStateOf(0) }
 
     // Read again on opening, and when the workspaces (or Refresh) change.
@@ -103,9 +99,12 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
         }
     }
 
-    val shownPage = page
+    // The page closes, and its token goes, when its workspace is no longer live (iOS `MainTabs`: `.onChange(of: stadeum.live)`).
+    // Checked here as well as in the effect, so not one frame of it is shown past the disconnect.
+    val shownPage = page?.takeIf { it.isLive(live) }
+    LaunchedEffect(live.map { it.id }, page) { if (page != null && shownPage == null) page = null }
     if (shownPage != null) {
-        AppPageScreen(shownPage, onBack = { page = null }, modifier)
+        OrgPageScreen(shownPage, onClose = { page = null }, modifier)
         return
     }
     BackHandler(onBack = onBack)
@@ -158,7 +157,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                 }
                 items(shown, key = { it.id }) { app ->
                     AppRow(app, several, onOpen = {
-                        val opening = AppPage.opening(app, live)
+                        val opening = OrgPageRequest.opening(app, live)
                         if (opening != null) page = opening else toast.show("Connect ${app.source} to open this app.", ToastType.Warning)
                     }, onShare = { link ->
                         copy(context, link)
@@ -242,52 +241,6 @@ private fun Centered(title: String, body: String) = Box(Modifier.fillMaxSize().p
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
         Text(body, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
     }
-}
-
-/// An app's page in an in-app web view, as iOS's org page sheet does: the
-/// person's token goes in an `Authorization` header on the first request
-/// only (never in the URL, which would leak it to history and logs).
-/// Navigation is kept inside the strut's own origin; anything else is not
-/// loaded here.
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun AppPageScreen(page: AppPage, onBack: () -> Unit, modifier: Modifier) {
-    BackHandler(onBack = onBack)
-    var web by remember { mutableStateOf<WebView?>(null) }
-    val origin = remember(page) { android.net.Uri.parse(page.url).let { it.scheme to it.authority } }
-    Column(modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
-            }
-            Spacer(Modifier.width(12.dp))
-            Text(page.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
-        }
-        AndroidView(
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
-                    webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
-                            val u = request.url
-                            // Same origin loads here, with the token, since a redirect drops headers.
-                            if (u.scheme == origin.first && u.authority == origin.second) {
-                                view.loadUrl(u.toString(), mapOf("Authorization" to "Bearer ${page.token}"))
-                            }
-                            return true
-                        }
-                    }
-                    loadUrl(page.url, mapOf("Authorization" to "Bearer ${page.token}"))
-                    web = this
-                }
-            },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
-    }
-    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { web?.destroy() } }
 }
 
 private fun copy(context: Context, text: String) {
