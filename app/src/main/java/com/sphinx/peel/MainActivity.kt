@@ -59,6 +59,7 @@ import com.sphinx.peel.ui.toast.rememberToastState
 class MainActivity : FragmentActivity() {
     /// The invite a `sphinx.chat://?action=i&d=…` link opened the app with, until the
     /// onboarding's invite step takes it (open question: the scheme is the official apps').
+    /// A worker's link names an app too (`&a=`), which goes to [publicLink].
     private var inviteLink by mutableStateOf<String?>(null)
 
     /// What a tapped notification asked for, until `MainTabs` has opened it.
@@ -89,7 +90,12 @@ class MainActivity : FragmentActivity() {
     private fun takeInviteLink(intent: Intent?) {
         val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
         // Only an invite link, and only ever held in memory: never logged or stored.
-        InviteLink.fromDeepLink(data.scheme, data.getQueryParameter("action"), data.toString())?.let { inviteLink = it }
+        val link = InviteLink.fromDeepLink(data.scheme, data.getQueryParameter("action"), data.toString()) ?: return
+        inviteLink = link
+        // A worker's invite link (`&a=`, docs/phases/41-worker-onboarding.md) also names a public app: it goes the way a
+        // `peel://open` link does, so it opens once the account is unlocked: at once for an account already here (whose invite
+        // part is ignored, as before), after signup for a new one. A link with no valid `a=` is only the invite, as before.
+        InviteLink.appOf(link)?.let { publicLink = it }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -160,9 +166,10 @@ private fun PeelApp(
         coldLockNoted = true
     }
 
-    // A stranger's public app (`peel://open?url=…`): opened when the account is unlocked, kept until it is
-    // (also across a lock: only the open page closes then). Page and waiting link both go on sign-out or wipe.
-    val router = remember { PublicPageRouter() }
+    // A stranger's public app (`peel://open?url=…`, or a worker's invite link's `&a=`): opened when the account is unlocked,
+    // kept until it is (also across a lock: only the open page closes then). Page and waiting link both go on sign-out or wipe.
+    // Each page opened is kept for the Apps list (docs/phases/41-worker-onboarding.md).
+    val router = remember { PublicPageRouter(opened = { storage.rememberPublicApp(it) }) }
     val unlocked = screen is Screen.Home
     androidx.compose.runtime.LaunchedEffect(publicLink, unlocked) {
         publicLink?.let {

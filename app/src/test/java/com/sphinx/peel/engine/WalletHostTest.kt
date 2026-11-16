@@ -27,7 +27,12 @@ private class FakeSigner : VisitorSigner {
     val signed = mutableListOf<Pair<VisitorChallenge, SignInKey>>()
     override suspend fun sign(challenge: VisitorChallenge, key: SignInKey): VisitorSignature {
         signed += challenge to key
-        return VisitorSignature("pub-${key.wire}", "sig-${key.wire}")
+        // The account's key with its address, as the engine's (iOS PR #557).
+        return VisitorSignature("pub-${key.wire}", "sig-${key.wire}", if (key == SignInKey.root) ADDRESS else null)
+    }
+
+    companion object {
+        const val ADDRESS = "address-of-pub-root"
     }
 }
 
@@ -179,6 +184,23 @@ class WalletHostTest {
         assertEquals("RESTRICTED", r.code())
         assertEquals("Peel asks you to sign in only right after you click or tap in the app.", r.text())
         assertTrue(person.asks.isEmpty())
+    }
+
+    /// iOS PR #557: as you, the account's address goes with its key, from the sheet and from the connection that holds the grant;
+    /// a new identity carries none, so it stays unlinkable.
+    @Test fun theAddressGoesWithTheAccountKeyAlone() = runBlocking {
+        val first = host().handle(signIn(), caller()).getJSONObject("result")
+        assertEquals("pub-root", first.getString("key"))
+        assertEquals(FakeSigner.ADDRESS, first.getString("address"))
+        val again = host().handle(signIn(), caller(acted = false)).getJSONObject("result")
+        assertEquals(FakeSigner.ADDRESS, again.getString("address"))
+        assertEquals(1, person.asks.size)
+
+        connections.rows.remove(scope)
+        person.answer = { SignInKey.domain }
+        val picked = host().handle(signIn(), caller()).getJSONObject("result")
+        assertEquals("pub-domain", picked.getString("key"))
+        assertFalse(picked.has("address"))
     }
 
     @Test fun firstSignInSavesThenLaterOnesAreSilent() = runBlocking {

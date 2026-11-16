@@ -49,6 +49,20 @@ class PublicPageRouterTest {
         assertNull(router.waitingLink)
     }
 
+    /// Each page that comes on screen is told to [PublicPageRouter]'s `opened` (kept for the Apps list,
+    /// docs/phases/41-worker-onboarding.md); a link still waiting for the unlock is not, until it opens, nor is an org page.
+    @Test fun eachPageOpenedIsTold() {
+        val seen = mutableListOf<PublicAppLink>()
+        val router = PublicPageRouter(opened = { seen += it })
+        router.open(a, ready = false)
+        router.openOrg(board)
+        assertEquals(emptyList<PublicAppLink>(), seen)
+        router.openWaitingLink()
+        router.open(b, ready = true)
+        router.openWaitingLink()
+        assertEquals(listOf(a, b), seen)
+    }
+
     // iOS `PhoneRouter`: one holder of both pages.
     private val acme = com.sphinx.peel.engine.HivePeer("acme", "https://acme.sphinx.chat:3355/lab", "t", "Acme")
     private val board = com.sphinx.peel.engine.OrgPageRequest("https://acme.sphinx.chat:3355/lab/?app=board&solo=1", "tok", "acme", "Acme", "Board")

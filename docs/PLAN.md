@@ -202,6 +202,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 38 | Wallet parity: `UNSETTLED` for invoices and keysends with iOS's one forward-only rule, `pendingSends`/`oldestOpenSend` over keysends, the unrecorded-payment failing, `reconcileInBackground`, `paidState`/`isOurRequest`, publish none/unknown for app payments, dispose-path test | compiled and unit-tested; native-core paths untested; see the file | [phases/38-wallet-parity.md](phases/38-wallet-parity.md) |
 | 39 | Page behaviour: Apps tap opens nothing when not connected (`AppsOpenDecision`), one holder of org/public pages as `PhoneRouter` (`PublicPageRouter`), Talk cards in the call screen's own opener (`TalkOpener`), Back on wallet sheets pinned | compiled and unit-tested; UI compiled only | [phases/39-page-behaviour.md](phases/39-page-behaviour.md) |
 | 40 | Control messages of the agent's DM: envelope reader, quiet lines, request rows with their outcome, folded reads, tool rows, never unread/notified (`isControl`, Storage v15); proposals are Mac-only, skipped | compiled and unit-tested; UI compiled only | [phases/40-control-messages.md](phases/40-control-messages.md) |
+| 41 | Worker onboarding (strut's human steps): an invite link's `&a=` opens a Stadeum's worker app (after signup, or at once with an account), `sign_in` sends the account's Sphinx address with the root key (iOS #557), opened public apps kept in Apps | CI-built and unit-tested; nothing run on a device; see the file | [phases/41-worker-onboarding.md](phases/41-worker-onboarding.md) |
 
 ## Open questions
 

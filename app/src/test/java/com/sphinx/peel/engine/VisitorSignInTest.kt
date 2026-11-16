@@ -194,3 +194,87 @@ class VisitorSignatureVectorTest {
         )
     }
 }
+
+/// The address a sign-in answers with beside the account's key (iOS PR #557; strut's specs/WALLET.md §1.2 "The answer").
+@RunWith(RobolectricTestRunner::class)
+class SignInAddressTest {
+    private val all = JSONObject(javaClass.getResource("/wallet-vectors.json")!!.readText())
+    private fun list(key: String): List<JSONObject> = all.getJSONArray(key).let { a -> List(a.length()) { a.getJSONObject(it) } }
+    private val key = "02dfab7975d5ae97a90c0c92f961d74922186221d36f7f3d20271209f663558e5e"
+    private val lsp = "03" + "ab".repeat(32)
+
+    @Test fun theVectorsAreThere() {
+        assertEquals(13, list("sign_in_replies").size)
+        assertEquals(1, list("sign_in_addresses").size)
+    }
+
+    /// iOS `peelSendsTheAddressStrutKeeps`: for strut's signed `sign_in_replies`, the address Peel would put beside the key is the
+    /// one strut's `readSignInReply` keeps (one whose pubkey is another key's is dropped), and Peel's answer with it is the reply.
+    @Test fun peelSendsTheAddressStrutKeeps() {
+        val signed = list("sign_in_replies").filter { it.optString("outcome") == "signed" }
+        assertEquals(4, signed.size)
+        for (vector in signed) {
+            val name = vector.getString("name")
+            val sent = vector.getJSONObject("reply").getJSONObject("result")
+            val address = VisitorSignature.address(sent.opt("address") as? String, sent.getString("key"))
+            assertEquals(name, vector.opt("address") as? String, address)
+            if (address != null) {
+                val answer = VisitorSignature(vector.getString("key"), vector.getString("sig"), address).toJson()
+                assertEquals(name, sent.keys().asSequence().toSet(), answer.keys().asSequence().toSet())
+                for (field in listOf("key", "sig", "address")) assertEquals("$name: $field", sent.getString(field), answer.getString(field))
+            }
+        }
+    }
+
+    /// `sign_in_addresses`: the vector's address has the root sign-in key as its pubkey, so Peel sends it with that key.
+    @Test fun strutsAddressVectorIsKeptBesideItsKey() {
+        val vector = list("sign_in_addresses").single()
+        assertEquals(vector.getString("address"), VisitorSignature.address(vector.getString("address"), vector.getString("key")))
+    }
+
+    @Test fun onlyAnAddressOfTheKeyItself() {
+        val own = "${key}_${lsp}_1099511627776"
+        assertEquals(own, VisitorSignature.address(own, key))
+        // Case is folded, on either side.
+        assertEquals(own, VisitorSignature.address(own.uppercase(), key))
+        assertEquals(own, VisitorSignature.address(own, key.uppercase()))
+        // Another key's address: none rather than a wrong one.
+        assertNull(VisitorSignature.address("${"02" + "cd".repeat(32)}_${lsp}_1", key))
+        // Not registered yet, or not an address.
+        assertNull(VisitorSignature.address(null, key))
+        assertNull(VisitorSignature.address("", key))
+        assertNull(VisitorSignature.address("${key}_$lsp", key))
+        assertNull(VisitorSignature.address("${key}_${lsp}_x", key))
+    }
+
+    @Test fun theAnswerCarriesItOnlyWhenSet() {
+        assertFalse(VisitorSignature(key, "s").toJson().has("address"))
+        assertEquals("a", VisitorSignature(key, "s", "a").toJson().getString("address"))
+    }
+}
+
+/// iOS `peelsOwnAddressIsStrutsVector`: strut's `sign_in_addresses` seed through the core the way an account registers
+/// (`initialSetup`'s register topic, then `handle` of the server's register answer): the core's `myContactInfo` is the
+/// vector's address and its pubkey is the root sign-in key. Needs `libsphinxrs`: run on a device.
+class SignInAddressNativeTest {
+    @org.junit.Ignore("needs the native libsphinxrs, which the JVM unit-test classpath does not have: run on a device")
+    @Test fun peelsOwnAddressIsStrutsVector() {
+        val all = JSONObject(javaClass.getResource("/wallet-vectors.json")!!.readText())
+        val vector = all.getJSONArray("sign_in_addresses").getJSONObject(0)
+        val signer = vector.getJSONObject("signer")
+        val seed = signer.getString("seed")
+        val network = signer.getString("network")
+        val key = vector.getString("key")
+        val address = vector.getString("address")
+        assertEquals(key, uniffi.sphinxrs.pubkeyFromSeed(seed, 0u, "1", network))
+        val route = ContactCode.parts(address)!!
+        val state = uniffi.sphinxrs.setNetwork(network).stateMp!!
+        val setup = uniffi.sphinxrs.initialSetup(seed, "1", state, "dev", null)
+        val topic = setup.registerTopic!!.replace("/0/req/", "/0/res/")
+        val answer = """{"scid":"${route[2]}","server_pubkey":"${route[1]}","blockheight":800000,"child_idx":0}"""
+        val registered = uniffi.sphinxrs.handle(topic, answer.toByteArray(Charsets.UTF_8), seed, "2", state, "", "")
+        val own = registered.myContactInfo!!
+        assertEquals(address, own)
+        assertEquals(address, VisitorSignature.address(own, key))
+    }
+}

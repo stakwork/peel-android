@@ -111,9 +111,26 @@ data class SignInRequest(val app: SignInApp, val seller: String, val challenge: 
     }
 }
 
-/// What a sign-in answers with: the public key that signed, and its signature (hex). The `result` JSON is `{key, sig}`.
-data class VisitorSignature(val key: String, val sig: String) {
-    fun toJson(): JSONObject = JSONObject().put("key", key).put("sig", sig)
+/// What a sign-in answers with: the public key that signed, its signature (hex) and, with the account's own key only, the
+/// account's Sphinx address, which the seller keeps to pay the person (strut's specs/WALLET.md §1.2 "The answer",
+/// plans/human-steps.md §8.2; iOS PR #557). The `result` JSON is `{key, sig, address?}`.
+data class VisitorSignature(
+    val key: String,
+    val sig: String,
+    /// `<pubkey>_<lsp_pubkey>_<scid>` whose pubkey is [key]: only with the root key, never a domain's ([address]).
+    val address: String? = null,
+) {
+    fun toJson(): JSONObject = JSONObject().put("key", key).put("sig", sig).apply { address?.let { put("address", it) } }
+
+    companion object {
+        /// [contactInfo] as the `address` of a sign-in with [key]: a Sphinx address (`<pubkey>_<lsp_pubkey>_<scid>`, lower case)
+        /// whose pubkey IS [key], as strut's `readSignInReply` and the seller keep it. Null for anything else, so a payout
+        /// never goes to another key's address (iOS `VisitorSignature.address(_:for:)`).
+        fun address(contactInfo: String?, key: String): String? {
+            val info = contactInfo?.let { ContactCode.contactInfo(it) } ?: return null
+            return info.takeIf { it.substringBefore('_') == key.lowercase() }
+        }
+    }
 }
 
 /// Signs a challenge with the account (the engine's seed); a test's stand-in signs without the native library.
