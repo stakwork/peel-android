@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.sphinx.peel.engine.SignInKey
 import com.sphinx.peel.engine.WalletConnectAnswer
 import com.sphinx.peel.engine.WalletConnectSheet
+import com.sphinx.peel.engine.WalletCreditSheet
 import com.sphinx.peel.engine.WalletPaymentSheet
 import com.sphinx.peel.engine.WalletPerson
 import com.sphinx.peel.engine.WalletSheet
@@ -51,6 +52,8 @@ class PhoneWalletSheets(private val scope: CoroutineScope, private val announce:
     override suspend fun connect(sheet: WalletConnectSheet): WalletConnectAnswer? = ask(WalletSheet.Connect(sheet)).connect
 
     override suspend fun pay(sheet: WalletPaymentSheet): Boolean = ask(WalletSheet.Payment(sheet)).paid
+
+    override suspend fun buyCredit(sheet: WalletCreditSheet): Boolean = ask(WalletSheet.Credit(sheet)).paid
 
     override fun signedIn(host: String, key: SignInKey) = show(WalletWords.signedIn(host, key))
 

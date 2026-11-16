@@ -2,7 +2,7 @@
 
 Status: **step 6a (logic) and 6b (UI) of the org-page port.** Built: `WalletHost` complete for everything iOS has beyond `buy_credit`, over `EngineWallet` (step 5) for every scope; the connect, payment and
 sign-in sheets as data (`WalletConnectSheet`, `WalletConnectAnswer`, `WalletPaymentSheet`, `WalletPerson`); the notifications; `WalletWords`. All ten of strut's `scenarios` replay green. Compiles; tests pass.
-**6b built (below):** the connect sheet, the payment sheet, You › Connected apps and the You row, `PhoneWalletSheets` handling both sheets, all over pure tested state holders. **Nothing has run on a device or emulator.** **Not ported: `buy_credit` (step 7).**
+**6b built (below):** the connect sheet, the payment sheet, You › Connected apps and the You row, `PhoneWalletSheets` handling both sheets, all over pure tested state holders. **Nothing has run on a device or emulator.** **`buy_credit` is step 7: [phase 34](34-buy-credit.md).**
 
 iOS read from `main` (1778b01): `WalletHost.swift` (all but credit), `WalletHostTests.swift` (the scripted wallet/person, `strutsScenario`, the beyond-scenarios cases), `AppModel+Wallet.swift` (`WalletWords`, `setOverLimit`,
 `setSpendingLimit`, `revokeWalletConnection`, `walletUsage`), vectors `scenarios`.

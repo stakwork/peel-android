@@ -115,4 +115,38 @@ class PhoneWalletSheetsTest {
         sheets.dismiss()
         assertNull(asked.await())
     }
+
+    private val creditSheet = com.sphinx.peel.engine.WalletCreditSheet("shop.example.com", "Voxel", "acme/voxel", "v3", "acme/wf", 250_000_000, 250.0, "credit", 1_793_800_600)
+
+    @Test fun `a credit sheet answers paid or not`() = runBlocking {
+        val sheets = PhoneWalletSheets(this)
+        val yes = async(Dispatchers.Unconfined) { sheets.buyCredit(creditSheet) }
+        assertEquals(WalletSheet.Credit(creditSheet), sheets.shown)
+        sheets.answer(WalletSheetAnswer(paid = true))
+        assertTrue(yes.await())
+        val no = async(Dispatchers.Unconfined) { sheets.buyCredit(creditSheet) }
+        sheets.dismiss()
+        assertFalse(no.await())
+    }
+
+    @Test fun `a credit sheet the host withdraws comes down and frees the slot`() = runBlocking {
+        val sheets = PhoneWalletSheets(this)
+        val asked = async(Dispatchers.Unconfined) { sheets.buyCredit(creditSheet) }
+        assertEquals("credit shop.example.com 250000000", sheets.shown!!.id)
+        // The host's withdrawal (the page's cancel, or the invoice ending) cancels the person's coroutine.
+        asked.cancel()
+        assertNull(sheets.shown)
+        val next = async(Dispatchers.Unconfined) { sheets.pay(paySheet) }
+        assertEquals(WalletSheet.Payment(paySheet), sheets.shown)
+        sheets.dismiss()
+        assertFalse(next.await())
+    }
+
+    @Test fun `a credit sheet is a no once the page has closed`() = runBlocking {
+        val sheets = PhoneWalletSheets(this)
+        val asked = async(Dispatchers.Unconfined) { sheets.buyCredit(creditSheet) }
+        sheets.close()
+        assertFalse(asked.await())
+        assertFalse(sheets.buyCredit(creditSheet))
+    }
 }

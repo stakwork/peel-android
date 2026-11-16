@@ -2,10 +2,16 @@ package com.sphinx.peel.engine
 
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -15,9 +21,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
-// The wallet Peel offers a strut app's page (iOS `StrutWallet`), the sign-in slice only: `host_capability` and
-// `sign_in`. Android has no app-wallet host, so `buy_credit` and the spending-wallet `call`s are not here
-// (docs/phases/27-sign-in-with-sphinx.md). Pure: storage, signer, the person and the clock are injected; JVM-tested.
+// The wallet Peel offers a strut app's page (iOS `StrutWallet`, `WalletHost`): the app wallet's calls, the host's own ops (`host_capability`, `sign_in`,
+// `buy_credit` and its status and cancel; docs/phases/27, 33, 34). Pure: storage, signer, the person and the clock are injected; JVM-tested.
 
 /// Where connections are kept ([com.sphinx.peel.storage.Storage] implements it through [StorageWalletConnections]).
 interface WalletConnections {
@@ -85,13 +90,38 @@ data class WalletPaymentSheet(
     val maxAmountMsat: Long?,
 )
 
-/// The person's side (iOS `WalletPerson`; credit is step 7): the connect sheet, the payment sheet, and the notice of a sign-in that went through silently.
+/// What the CREDIT sheet shows (specs/WALLET.md §1.2; iOS `WalletCreditSheet`): credit bought on a strut server for a visitor's page, one tap. The price is the
+/// invoice as Peel decoded it; everything else is the seller's word, shown as its.
+data class WalletCreditSheet(
+    /// The server the credit is bought on, by the host Peel knows.
+    val host: String,
+    /// The app's title, name and version, as the seller serves it.
+    val title: String,
+    val app: String,
+    val version: String,
+    /// The workflow the launch is for.
+    val workflow: String,
+    /// msat, decoded by Peel: the price.
+    val amountMsat: Long,
+    /// The credit the seller says the payment buys, in dollars: its figure, never the price.
+    val usd: Double,
+    /// The seller's words for what it sells.
+    val description: String,
+    /// Unix seconds: when the invoice ends, as decoded.
+    val expiresAt: Long,
+)
+
+/// The person's side (iOS `WalletPerson`): the connect sheet, the payment sheet, the credit sheet, and the notice of a sign-in that went through silently.
 interface WalletPerson {
     /// Shows the connect sheet; the answer, or null for no. Cancelling the coroutine takes the sheet down (the host cancels it on timeout).
     suspend fun connect(sheet: WalletConnectSheet): WalletConnectAnswer?
 
     /// Shows the payment sheet; whether the person approved it.
     suspend fun pay(sheet: WalletPaymentSheet): Boolean
+
+    /// Shows the credit sheet; the person's yes to buying credit for a visitor's page. Cancelling the coroutine (the invoice ended, the page withdrew, or the
+    /// host gave up) takes the sheet down.
+    suspend fun buyCredit(sheet: WalletCreditSheet): Boolean
 
     /// A sign-in went through without asking (a toast).
     fun signedIn(host: String, key: SignInKey)
@@ -211,8 +241,7 @@ class WalletApp(val name: String, val version: String, val peer: String?, val ti
 
 /// The native wallet host (strut's specs/WALLET.md, Peel's side; docs/app-wallet.md; iOS `WalletHost`): answers strut's UI relaying an app's `strut/wallet/*` calls,
 /// and pushes its notifications. Everything is decided here, never in the page: the params checked again, the methods offered, the connection the person
-/// granted and its limits, a sheet only after the person acted (one at a time, given up after [sheetTimeoutMs]), the wallet asked only then. Not ported: `buy_credit`
-/// (step 7).
+/// granted and its limits, a sheet only after the person acted (one at a time, given up after [sheetTimeoutMs]), the wallet asked only then.
 class WalletHost(
     private val connections: WalletConnections,
     private val wallet: AppWallet,
@@ -231,6 +260,10 @@ class WalletHost(
     private val held = mutableListOf<WalletRecord>()
     /// The app a page's `capability` asked about, by connection: what a sign-in's sheet may ask for beside it.
     private val asked = mutableMapOf<String, WalletApp>()
+    /// Credit purchases being paid, by payment hash: a second `buy_credit` for one answers as that payment stands.
+    private val crediting = mutableMapOf<String, Deferred<WalletRecord>>()
+    /// The sheet up that its page may take down (`buy_credit_cancel`), by `<scope key>|<payment hash>`.
+    private var withdrawable: Pair<String, CompletableDeferred<Unit>>? = null
     private var watching: Job? = null
     private val hostScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -282,9 +315,9 @@ class WalletHost(
         when (op) {
             "host_capability" -> return hostCapability(caller)
             "sign_in" -> return answer { signIn(body, caller) }
-            // Credit is bought only for a public app Peel opened itself; Android buys none yet (not advertised).
-            "buy_credit", "buy_credit_status", "buy_credit_cancel" ->
-                if (caller.scope.visitorHost == null) return error(WalletError.RESTRICTED, "Peel buys credit only for a public app it opened itself.")
+            "buy_credit" -> return answer { buyCredit(body, caller) }
+            "buy_credit_status" -> return answer { creditStatus(body, caller) }
+            "buy_credit_cancel" -> return result(withdrawCredit(body, caller))
         }
         val app = WalletApp.read(body.opt("app")) ?: return unreadable()
         return when (op) {
@@ -458,9 +491,10 @@ class WalletHost(
 
     // MARK: Sign in
 
-    /// What `host_capability` answers: the host's own ops this page may send (only a stranger's public page signs in).
+    /// What `host_capability` answers: the host's own ops this page may send (only a stranger's public page buys credit and signs in).
     private fun hostCapability(caller: WalletCaller): JSONObject = result(
-        JSONObject().put("version", 1).put("wallet", "Peel").put("ops", JSONArray().apply { if (caller.scope.visitorHost != null) put("sign_in") }),
+        JSONObject().put("version", 1).put("wallet", "Peel")
+            .put("ops", JSONArray().apply { if (caller.scope.visitorHost != null) VISITOR_OPS.forEach { put(it) } }),
     )
 
     /// Signs the visitor in (`sign_in`, strut's plans/app-payments.md §4.4): only a strut visitor challenge, only for the host Peel's own record names (the
@@ -511,6 +545,74 @@ class WalletHost(
         connections.save(connection)
         if (challenge.expiresAtMs <= nowMs()) throw WalletRefusal(WalletError.RESTRICTED, "The sign-in ran out of time while you were asked. Sign in again.")
         return wallet.signVisitor(challenge, key).toJson()
+    }
+
+    // MARK: Credit
+
+    /// Buys credit on a strut server for a visitor's page (`buy_credit`, specs/WALLET.md §1.2): only where Peel opened a stranger's public app, only an invoice
+    /// Peel decoded to the purchase's own amount and hash, never one payment hash twice, and always on the person's yes to its own sheet, which comes down when
+    /// the invoice ends. Answers once the payment is sent, as a pay method does.
+    private suspend fun buyCredit(body: JSONObject, caller: WalletCaller): JSONObject {
+        val host = caller.scope.visitorHost ?: throw WalletRefusal(WalletError.RESTRICTED, CREDIT_ONLY_VISITORS)
+        val raw = body.opt("purchase")
+        val problems = CreditPurchase.problems(raw)
+        val purchase = CreditPurchase.of(raw)
+        if (problems.isNotEmpty() || purchase == null) {
+            throw WalletRefusal(WalletError.BAD_REQUEST, "Peel does not pay that: ${problems.firstOrNull() ?: "it is not a purchase"}.")
+        }
+        val key = creditKey(caller.scope)
+        val hash = purchase.paymentHash
+        // Never one payment hash twice: one paid, or being paid, answers as it stands, with no sheet.
+        creditPayment(hash, key)?.let { return it.payment }
+        val invoice = wallet.decode(purchase.invoice)
+        if (invoice.amountMsat != purchase.amountMsat || invoice.paymentHash != hash) {
+            throw WalletRefusal(WalletError.BAD_REQUEST, "The invoice is not the one the server describes.")
+        }
+        val ends = minOf(invoice.expiresAt ?: purchase.expiresAt, purchase.expiresAt)
+        if (ends <= now) throw WalletRefusal(WalletError.BAD_REQUEST, "The invoice has ended.")
+        wallet.problem(WalletPayment.OfInvoice(invoice))?.let { throw it }
+        if (!caller.personActed) throw WalletRefusal(WalletError.RESTRICTED, "Peel asks you to pay only right after you click or tap in the app.")
+        val sheet = WalletCreditSheet(
+            host = host, title = TextLine.clean(purchase.app.title, 80), app = TextLine.clean(purchase.app.name, 80),
+            version = TextLine.clean(purchase.app.version, 20), workflow = TextLine.clean(purchase.workflow, 120),
+            amountMsat = invoice.amountMsat, usd = purchase.usd, description = block(purchase.description, 500), expiresAt = ends,
+        )
+        val person = caller.person
+        val yes = askPerson(minOf((ends - now) * 1000, sheetTimeoutMs), "${caller.scope.key}|$hash") { person.buyCredit(sheet) }
+        if (!yes) throw WalletRefusal(WalletError.USER_REJECTED, "You declined to buy the credit.")
+        if (ends <= now) throw WalletRefusal(WalletError.RESTRICTED, "The invoice ended while you were asked.")
+        // Not tied to this call: a page that stops waiting does not cancel a payment on its way.
+        val paying = hostScope.async { wallet.pay(WalletPayment.OfInvoice(invoice), WalletTag(key, purchase.app.name)) }
+        synchronized(lock) { crediting[hash] = paying }
+        try {
+            return paying.await().payment
+        } finally {
+            synchronized(lock) { if (crediting[hash] === paying) crediting.remove(hash) }
+        }
+    }
+
+    /// Where a purchase this page made stands now (`buy_credit_status`): pending, settled with its preimage when Peel has it, or failed; `NOT_FOUND` for a
+    /// hash it never paid for this page.
+    private suspend fun creditStatus(body: JSONObject, caller: WalletCaller): JSONObject {
+        if (caller.scope.visitorHost == null) throw WalletRefusal(WalletError.RESTRICTED, CREDIT_ONLY_VISITORS)
+        val hash = (body.opt("payment_hash") as? String)?.takeIf { WalletProtocol.isHash(it) }
+            ?: throw WalletRefusal(WalletError.BAD_REQUEST, "payment_hash must be 64 hex")
+        val sent = creditPayment(hash, creditKey(caller.scope)) ?: throw WalletRefusal(WalletError.NOT_FOUND, "Peel paid no such invoice for this page.")
+        return sent.payment
+    }
+
+    /// The payment of [hash] under [key]: the one being paid, or the one kept.
+    private suspend fun creditPayment(hash: String, key: String): WalletRecord? {
+        synchronized(lock) { crediting[hash] }?.let { return it.await() }
+        return wallet.records(key).firstOrNull { it.paymentHash == hash && it.direction == WalletRecord.Direction.OUTGOING }
+    }
+
+    /// `buy_credit_cancel`: the page stopped waiting, so a credit sheet of its still up comes down and its purchase is declined; a payment already sent stands.
+    /// Another page's cancel, or one for another invoice, changes nothing. Always `{}`; no restriction, it can only take down this page's own sheet.
+    private fun withdrawCredit(body: JSONObject, caller: WalletCaller): JSONObject {
+        val hash = body.opt("payment_hash") as? String
+        if (hash != null) synchronized(lock) { withdrawable?.takeIf { it.first == "${caller.scope.key}|$hash" }?.second }?.complete(Unit)
+        return JSONObject()
     }
 
     // MARK: Pay
@@ -628,13 +730,30 @@ class WalletHost(
     // MARK: Sheets
 
     /// Shows [present] to the person: one sheet at a time across every page (`RATE_LIMITED`), given up after [timeoutMs] (`RESTRICTED`, the sheet taken
-    /// down because the coroutine is cancelled).
-    private suspend fun <T> askPerson(timeoutMs: Long = sheetTimeoutMs, present: suspend () -> T): T {
+    /// down because the coroutine is cancelled). With [withdrawnBy], its page may take it down ([withdrawable], `buy_credit_cancel`): a decline
+    /// (`USER_REJECTED`), the sheet likewise taken down.
+    private suspend fun <T> askPerson(timeoutMs: Long = sheetTimeoutMs, withdrawnBy: String? = null, present: suspend () -> T): T {
         if (!asking.compareAndSet(false, true)) throw WalletRefusal(WalletError.RATE_LIMITED, "Peel is already asking you something; answer that first.")
+        val withdrawal = CompletableDeferred<Unit>()
+        if (withdrawnBy != null) synchronized(lock) { withdrawable = withdrawnBy to withdrawal }
         try {
-            val answered = withTimeoutOrNull(maxOf(timeoutMs, 1)) { Answered(present()) } ?: throw WalletRefusal(WalletError.RESTRICTED, "You did not answer in time.")
-            return answered.value
+            val outcome: Any? = withTimeoutOrNull(maxOf(timeoutMs, 1)) {
+                coroutineScope {
+                    val shown = async { Answered(present()) }
+                    val first: Any = select<Any> {
+                        shown.onAwait { it }
+                        withdrawal.onAwait { WITHDRAWN }
+                    }
+                    coroutineContext.cancelChildren()
+                    first
+                }
+            }
+            if (outcome == null) throw WalletRefusal(WalletError.RESTRICTED, "You did not answer in time.")
+            if (outcome === WITHDRAWN) throw WalletRefusal(WalletError.USER_REJECTED, "The page stopped waiting, so Peel took its sheet down.")
+            @Suppress("UNCHECKED_CAST")
+            return (outcome as Answered<T>).value
         } finally {
+            synchronized(lock) { withdrawable = null }
             asking.set(false)
         }
     }
@@ -679,6 +798,16 @@ class WalletHost(
     private fun error(code: WalletError, message: String) = WalletErrors.body(code, message)
 
     companion object {
+        private val WITHDRAWN = Any()
+        private const val CREDIT_ONLY_VISITORS = "Peel buys credit only for a public app it opened itself."
+
+        /// The host's own ops a stranger's public page may send (iOS `visitorOps`).
+        val VISITOR_OPS = listOf("buy_credit", "buy_credit_status", "buy_credit_cancel", "sign_in")
+
+        /// The connection a scope's credit purchases are kept under: no app's (no budget counts them, no page is notified), but read back by payment hash
+        /// for `buy_credit_status` and a repeated `buy_credit`.
+        fun creditKey(scope: WalletScope) = "credit:${scope.key}"
+
         const val DEFAULT_SHEET_TIMEOUT_MS = 9 * 60 * 1000L
 
         /// The methods Peel's wallet does: not `pay_lightning_address` (iOS lists the same ten).

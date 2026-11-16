@@ -67,7 +67,9 @@ class PayAttempt {
 
 /// The touch-safe two-step the payment sheet's Pay button is (iOS `TouchPayButton` with the payment sheet's `send`): the first tap
 /// arms the amount the sheet shows ([ARMED_NOTE]); the second, only once the gate has settled again, pays exactly that amount.
-class WalletPayStep(val amountMsat: Long, clock: () -> Long, settleMs: Long = ArmingGate.SETTLE_MS) {
+class WalletPayStep(
+    val amountMsat: Long, clock: () -> Long, settleMs: Long = ArmingGate.SETTLE_MS, val armedNote: String = ARMED_NOTE,
+) {
     val attempt = PayAttempt()
     val gate = ArmingGate(clock, settleMs)
 
@@ -165,6 +167,10 @@ sealed class WalletSheet {
 
     data class Payment(val sheet: WalletPaymentSheet) : WalletSheet() {
         override val id get() = "pay ${sheet.payee} ${sheet.amountMsat}"
+    }
+
+    data class Credit(val sheet: WalletCreditSheet) : WalletSheet() {
+        override val id get() = "credit ${sheet.host} ${sheet.amountMsat}"
     }
 }
 
