@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.sphinx.peel.engine.HiveException
 import com.sphinx.peel.engine.TalkHome
+import com.sphinx.peel.engine.TalkHistoryStore
 import com.sphinx.peel.engine.TalkHttp
 import com.sphinx.peel.engine.OkHttpTalk
 import com.sphinx.peel.engine.TalkRefusal
@@ -37,6 +38,8 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
     private val prefs = TalkVoice.prefs(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var starting: Job? = null
+    /// Past conversations, kept on this device (iOS `TalkHistoryStore`).
+    val history = TalkHistoryStore(java.io.File(appContext.filesDir, "talk_history"))
 
     /// The home being talked to; null with no call and no screen.
     var home by mutableStateOf<TalkHome?>(null)
@@ -110,7 +113,14 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
     fun hangUp() {
         starting?.cancel()
         starting = null
-        (state as? State.On)?.session?.leave()
+        // Persist the transcript before the room is left, off the main thread.
+        val on = (state as? State.On)?.session
+        val was = home
+        if (on != null && was != null) {
+            val lines = on.transcript.lines
+            if (lines.isNotEmpty()) scope.launch(Dispatchers.IO) { history.save(lines, was.id, was.name) }
+        }
+        on?.leave()
         home = null
         state = State.Starting
     }
