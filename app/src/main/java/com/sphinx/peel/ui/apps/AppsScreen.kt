@@ -52,7 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.sphinx.peel.engine.Opening
+import com.sphinx.peel.engine.AppsOpenDecision
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
@@ -82,7 +82,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     var source by remember { mutableStateOf<String?>(null) }
     var read by remember { mutableStateOf<List<WorkspaceApp>>(emptyList()) }
     var reading by remember { mutableStateOf(false) }
-    var unread by remember { mutableStateOf<List<String>>(emptyList()) }
+    var unreadIds by remember { mutableStateOf<List<String>>(emptyList()) }
     val openPage = LocalPageOpener.current
     var refresh by remember { mutableStateOf(0) }
     var historyHome by remember { mutableStateOf<TalkHome?>(null) }
@@ -100,7 +100,7 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
             // A workspace that did not answer keeps the apps it last listed.
             val kept = read.filter { app -> results.any { (p, r) -> p.id == app.peer && r.isFailure } }
             read = kept + results.flatMap { it.second.getOrNull().orEmpty() }
-            unread = results.filter { it.second.isFailure }.map { it.first.name }
+            unreadIds = results.filter { it.second.isFailure }.map { it.first.id }
         } finally {
             reading = false
         }
@@ -114,7 +114,8 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     }
 
     val liveIds = live.map { it.id }.toSet()
-    val apps = read.filter { it.peer in liveIds }
+    val apps = AppsOpenDecision.visible(read, liveIds)
+    val unread = AppsOpenDecision.unreadNames(unreadIds, live)
     val several = apps.mapNotNull { it.peer }.toSet().size > 1
     val sources = WorkspaceApp.sources(apps)
     val shownSource = if (sources.size > 1 && source in sources) source else null
@@ -164,35 +165,29 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                 }
                 items(shown, key = { it.id }) { app ->
                     AppRow(app, several, onOpen = {
-                        val opening = Stadeum.openings.opening(app)
-                        if (opening is Opening.Page) openPage(opening.request) else toast.show("Connect ${app.source} to open this app.", ToastType.Warning)
+                        // iOS opens a page when there is one and otherwise nothing, with no word said.
+                        AppsOpenDecision.page(Stadeum.openings.opening(app))?.let(openPage)
                     }, onShare = { link ->
                         copy(context, link)
                         toast.show("Link copied", ToastType.Success)
                     })
                 }
                 if (unread.isNotEmpty() && apps.isNotEmpty() && !reading) {
-                    item { Note("Couldn't read ${unread.joinToString(", ")} just now. Pull to try again.") }
+                    item { Note(AppsOpenDecision.unreadNote(unread)) }
                 } else if (apps.isEmpty() && homes.isNotEmpty() && !reading) {
-                    item { Note(emptyText(live, unread)) }
+                    item { Note(AppsOpenDecision.emptyText(live.isEmpty(), unread)) }
                 }
             }
             when {
                 apps.isNotEmpty() && shown.isEmpty() -> Centered("No results", "Nothing matches \u201c${query.trim()}\u201d.")
                 apps.isEmpty() && homes.isNotEmpty() -> if (reading) Spinner()
-                apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", "Connect Stadeum under You to open the apps your workspaces pin.")
+                apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", AppsOpenDecision.CONNECT_STADEUM)
                 apps.isEmpty() && reading -> Spinner()
-                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", "${unread.joinToString(", ")} did not answer. Pull to try again.")
-                apps.isEmpty() -> Centered("No apps yet", "Apps your Stadeum workspaces pin show here.")
+                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", AppsOpenDecision.didNotAnswer(unread))
+                apps.isEmpty() -> Centered("No apps yet", AppsOpenDecision.NO_APPS)
             }
         }
     }
-}
-
-private fun emptyText(live: List<HivePeer>, unread: List<String>) = when {
-    live.isEmpty() -> "Connect Stadeum under You to open the apps your workspaces pin."
-    unread.isEmpty() -> "Apps your Stadeum workspaces pin show here."
-    else -> "${unread.joinToString(", ")} did not answer. Pull to try again."
 }
 
 @OptIn(ExperimentalFoundationApi::class)

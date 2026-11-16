@@ -193,7 +193,7 @@ private fun PeelApp(
                 onDispose { router.locked() }
             }
             Box(Modifier.fillMaxSize()) {
-                MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled) { router.reset(); screen = Screen.Onboarding }
+                MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router) { router.reset(); screen = Screen.Onboarding }
                 router.page?.let { link -> val page = remember(link) { PublicPage(link) }; OrgPageScreen(page, current.engine.walletHost, onClose = router::close) }
             }
         }

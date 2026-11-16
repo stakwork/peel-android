@@ -149,4 +149,29 @@ class PhoneWalletSheetsTest {
         assertFalse(asked.await())
         assertFalse(sheets.buyCredit(creditSheet))
     }
+
+    /// Back on a sheet is the explicit cancel button's answer (`WalletSheets` maps Back to `done(null)` / `done(false)`, which the slot
+    /// receives as the empty answer): never a yes.
+    @Test fun `back on a connect sheet is dont connect and on a payment sheet is decline`() = runBlocking {
+        val sheets = PhoneWalletSheets(this)
+        val connect = async(Dispatchers.Unconfined) { sheets.connect(connectSheet) }
+        sheets.answer(WalletSheetAnswer(connect = null))
+        assertNull(connect.await())
+        val pay = async(Dispatchers.Unconfined) { sheets.pay(paySheet) }
+        sheets.answer(WalletSheetAnswer(paid = false))
+        assertFalse(pay.await())
+        assertNull(sheets.shown)
+        // A second Back after the sheet is gone answers nothing.
+        sheets.answer(WalletSheetAnswer(paid = false))
+        assertNull(sheets.shown)
+    }
+
+    @Test fun `the host cancelling a waiting sheet takes it down`() = runBlocking {
+        val sheets = PhoneWalletSheets(this)
+        val waiting = async(Dispatchers.Unconfined) { sheets.connect(connectSheet) }
+        assertTrue(sheets.shown != null)
+        waiting.cancel()
+        yield()
+        assertNull(sheets.shown)
+    }
 }
