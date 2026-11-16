@@ -8,6 +8,7 @@ import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import uniffi.sphinxrs.pbkdf2HmacSha256 as corePbkdf2HmacSha256
 
 /// Where an account's twelve words live, locked with the account's PIN
 /// (and, on Android, a hardware-backed Keystore key under that; see
@@ -142,19 +143,46 @@ internal object PinBox {
         }
     }
 
-    /// RFC 8018 PBKDF2-HMAC-SHA256, by hand, rather than
-    /// `SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")`: Android's
-    /// own implementation of that algorithm name is measured several
-    /// times slower than iOS's CommonCrypto for the same iteration count
-    /// (a 6-second unlock here against a sub-second one there, for the
-    /// identical 2,500,000) — object overhead inside its per-iteration
-    /// loop, not anything about the algorithm itself. PBKDF2's output is
-    /// fixed by the spec, not the provider, so this produces the exact
-    /// same key, only without that overhead. PINs here are always six
-    /// ASCII digits, so the password-to-bytes step has no encoding
-    /// ambiguity to worry about (UTF-8, Latin-1 and a straight char cast
-    /// all agree on the digits '0'–'9').
+    /// RFC 8018 PBKDF2-HMAC-SHA256, native first (sphinx-ffi's own
+    /// `pbkdf2_hmac_sha256`, added for exactly this): one JNI call running
+    /// the whole 2.5M-iteration loop in Rust (via `ring`), instead of 2.5M
+    /// separate `Mac.doFinal` crossings — that per-call JNI cost, not object
+    /// overhead, is what kept the hand-rolled Kotlin loop below multi-second
+    /// on a real device even after removing `SecretKeyFactory`'s per-iteration
+    /// allocation. Verified to produce byte-for-byte the same key as both the
+    /// Kotlin loop below and Android's own `PBKDF2WithHmacSHA256` provider
+    /// (`PinBoxTest`), and as peel's iOS/Mac `PINBox` (same sealed-blob
+    /// format) for this project's real parameters, before this call existed.
+    ///
+    /// Falls back to the Kotlin loop if the native call is unreachable —
+    /// chiefly plain JVM unit tests, which have no Android build of
+    /// `libsphinxrs.so` to link against at all (`docs/phases/12-calls.md`'s
+    /// "no host build of sphinxrs to run against"), so `PinBoxTest`/
+    /// `FileSecretStoreTest` exercise the fallback path and keep passing
+    /// unchanged; same safety net on a real device if ever running against
+    /// an app build whose bundled native library predates this function.
     internal fun derive(pin: String, salt: ByteArray, iterations: Int = ITERATIONS): SecretKeySpec {
+        val native = runCatching { corePbkdf2HmacSha256(pin, salt, iterations.toUInt()) }.getOrNull()
+        if (native != null && native.size == 32) return SecretKeySpec(native, "AES")
+        return deriveJvm(pin, salt, iterations)
+    }
+
+    /// The pure-Kotlin PBKDF2-HMAC-SHA256, hand-rolled rather than
+    /// `SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")`: Android's own
+    /// implementation of that algorithm name is measured several times
+    /// slower than iOS's CommonCrypto for the same iteration count (a
+    /// 6-second unlock here against a sub-second one there, for the
+    /// identical 2,500,000) — object overhead inside its per-iteration loop,
+    /// not anything about the algorithm itself. PBKDF2's output is fixed by
+    /// the spec, not the provider, so this produces the exact same key, only
+    /// without that overhead. Still multi-second on a real device (the
+    /// remaining cost is per-call JNI/provider overhead inside `Mac.doFinal`
+    /// itself, 2.5M times, not Kotlin-side allocation) — kept as `derive`'s
+    /// fallback now that the native path above does the real speedup. PINs
+    /// here are always six ASCII digits, so the password-to-bytes step has
+    /// no encoding ambiguity to worry about (UTF-8, Latin-1 and a straight
+    /// char cast all agree on the digits '0'–'9').
+    private fun deriveJvm(pin: String, salt: ByteArray, iterations: Int): SecretKeySpec {
         val mac = Mac.getInstance("HmacSHA256")
         val pinBytes = pin.toByteArray(Charsets.UTF_8)
         mac.init(SecretKeySpec(pinBytes, "HmacSHA256"))
