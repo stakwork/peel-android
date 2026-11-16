@@ -98,6 +98,8 @@ sections for code that isn't written yet.
   - `engine/CreditPurchase.kt` (`CreditPurchase`, `CreditReply`, `HostCapability`), `WalletHost.kt` (`buy_credit*`, `WalletCreditSheet`, `creditKey`, sheet withdrawal) — buying a visitor's credit (`docs/phases/35-buy-credit.md`); sheet `WalletCreditPhoneSheet` in `ui/page/WalletSheets.kt`.
   - `engine/LucideNames.kt`, `TalkHistory.kt` (`TalkHistoryStore`, local saved Talk conversations), `ui/apps/AppIcons.kt`, `ui/talk/TalkHistoryScreen.kt` — Apps icons, pull-to-refresh and the Talk row menu
     (`docs/phases/36-apps-cosmetics.md`).
+  - `engine/SvgPath.kt`, `LucideSet.kt` (+ `LucideNames.kt`), `ui/apps/AppIcons.kt`, `assets/lucide/icons.json`, `tools/lucide-convert.py` — all of lucide as app icons (`docs/phases/37-lucide-icons.md`): pure path parser and
+    primitives→paths (JVM-tested), the bundled icon set (ISC, `assets/lucide/LICENSE`), `ImageVector`s in an LRU.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
