@@ -81,6 +81,12 @@ class HistoryPageTest {
             assertTrue(e === refusal)
         }
     }
+
+    @Test
+    fun `the raw max index of a page covers every onion, payments too`() {
+        val page = HistoryPage.onions(HistoryPage.batch(listOf(onion(5), onion(900, payment = true), onion(7))))!!
+        assertEquals(900L, page.maxOf { HistoryPage.index(it) })
+    }
 }
 
 class RestorePageTest {
@@ -107,5 +113,21 @@ class RestorePageTest {
         assertEquals(PageVerdict.ADVANCE, RestorePage.verdict(reached = 100, next = 100, end = 500))
         assertEquals(PageVerdict.ADVANCE, RestorePage.verdict(reached = 199, next = 100, end = null))
         assertEquals(PageVerdict.ADVANCE, RestorePage.verdict(reached = 500, next = 400, end = 500))
+    }
+
+    @Test
+    fun `an empty page with no end is not the end when the end is required`() {
+        assertEquals(PageVerdict.RETRY, RestorePage.verdict(reached = null, next = 100, end = null, endRequired = true))
+        assertEquals(PageVerdict.END, RestorePage.verdict(reached = null, next = 501, end = 500, endRequired = true))
+        assertEquals(PageVerdict.RETRY, RestorePage.verdict(reached = null, next = 500, end = 500, endRequired = true))
+    }
+
+    @Test
+    fun `a cursor advances past the raw max even when fewer were decoded`() {
+        val cursor = RestoreCursor(RestoreCursor.Phase.MESSAGES, 0, 1000)
+        val raw = 99L // highest onion on the page; the core decoded only up to 40
+        assertEquals(100L, cursor.advanced(raw).next)
+        assertTrue(cursor.advanced(1000).isPastEnd)
+        assertTrue(!cursor.advanced(raw).isPastEnd)
     }
 }

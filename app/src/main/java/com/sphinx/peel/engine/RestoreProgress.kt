@@ -28,4 +28,8 @@ data class RestoreProgress(
     /// `HistoryPage.readablePart` — so a restore can finish with this above
     /// zero; it is here so that is visible instead of silent.
     val messagesSkipped: Long = 0,
+    /// Messages the core decoded that could not be filed under a chat or a
+    /// type (`Engine.mapMessage`), summed over the restore. They are kept
+    /// (under `Engine.UNFILED_CHAT`), never dropped; this makes them visible.
+    val messagesUnfiled: Long = 0,
 )
