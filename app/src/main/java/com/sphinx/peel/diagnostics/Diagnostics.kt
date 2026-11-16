@@ -157,6 +157,13 @@ object Diagnostics {
         current?.record(E(E.Kind.lock, lockReason = reason, idleSeconds = idleSeconds, timeoutHours = timeoutHours))
     }
 
+    /// The remembered PIN could not be read (transient: `reason` "unreadable", kept) or was dropped
+    /// (badTag, badFormat, keyMissing, expired). `reason` goes in `messageKind`, the exception's simple
+    /// class name in `errorDetail`; never the PIN.
+    fun recordRememberedPinProblem(reason: String, exceptionClass: String?) {
+        current?.record(E(E.Kind.rememberedPinProblem, messageKind = reason, errorDetail = exceptionClass))
+    }
+
     /// A raw change of the system's network path.
     fun recordNetwork(status: E.NetworkStatus, networkInterface: E.NetworkInterface, isExpensive: Boolean, isConstrained: Boolean) {
         current?.record(E(E.Kind.network, networkStatus = status, networkInterface = networkInterface, isExpensive = isExpensive, isConstrained = isConstrained))

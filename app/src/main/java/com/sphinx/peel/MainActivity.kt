@@ -240,7 +240,7 @@ private fun RelockWhenIdle(engine: Engine, secretStore: SecretStore, relock: () 
                     stoppedAt = System.currentTimeMillis()
                     remembered?.touch(RememberedPIN.nowSeconds())
                     // A synced change of the setting reaches what is kept.
-                    remembered?.timeoutChanged(engine.pinTimeoutHours())
+                    engine.pinTimeoutHoursOrNull()?.let { remembered?.timeoutChanged(it) }
                 }
                 Lifecycle.Event.ON_START -> if (stopped) {
                     stopped = false
@@ -275,7 +275,7 @@ private fun BiometricHousekeeping(engine: Engine, secretStore: SecretStore) {
     androidx.compose.runtime.LaunchedEffect(engine) {
         engine.syncsBiometrics = com.sphinx.peel.ui.lock.BiometricUnlock.available(context)
         // The timeout may have been synced from another device since the PIN was kept.
-        secretStore.remembered?.timeoutChanged(engine.pinTimeoutHours())
+        engine.pinTimeoutHoursOrNull()?.let { secretStore.remembered?.timeoutChanged(it) }
         if (engine.biometricWish() == false && secretStore.biometricEnrolled) secretStore.disableBiometric()
     }
 }

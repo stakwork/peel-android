@@ -65,7 +65,16 @@ internal object Keystore {
     }
 }
 
+/// The wall's key is truly absent (never created, or deleted): a definitive loss,
+/// unlike a transient Keystore error. Unwrapping never generates a key.
+class KeyMissingException(alias: String) : java.security.GeneralSecurityException("no key for $alias")
+
 class AndroidKeyWall(private val alias: String, private val strongBox: Boolean = true) : KeyWall {
+    /// The existing key only (unwrap): absent is `KeyMissingException`, never generated.
+    private fun existingKey(): SecretKey =
+        (Keystore.store().getKey(alias, null) as? SecretKey) ?: throw KeyMissingException(alias)
+
+    /// The existing key, or a new one (wrap only).
     private fun key(): SecretKey {
         val ks = Keystore.store()
         (ks.getKey(alias, null) as? SecretKey)?.let { return it }
@@ -91,7 +100,7 @@ class AndroidKeyWall(private val alias: String, private val strongBox: Boolean =
 
     override fun unwrap(wrapped: ByteArray, aad: ByteArray): ByteArray {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, wrapped.copyOfRange(0, 12)))
+        cipher.init(Cipher.DECRYPT_MODE, existingKey(), GCMParameterSpec(128, wrapped.copyOfRange(0, 12)))
         cipher.updateAAD(aad)
         return cipher.doFinal(wrapped, 12, wrapped.size - 12)
     }

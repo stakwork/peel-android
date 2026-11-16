@@ -10,10 +10,15 @@ import javax.crypto.spec.GCMParameterSpec
 class FakeWall : KeyWall {
     private var key: SecretKey? = null
     var broken = false
+    /// Thrown by the next `failures` unwraps / wraps (default: always) when set.
+    var unwrapError: Exception? = null
+    var wrapError: Exception? = null
+    var failures = Int.MAX_VALUE
     private fun key() = key ?: KeyGenerator.getInstance("AES").apply { init(256) }.generateKey().also { key = it }
 
     override fun wrap(plain: ByteArray, aad: ByteArray): ByteArray {
         if (broken) throw IllegalStateException("keystore down")
+        wrapError?.let { if (failures-- > 0) throw it }
         val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, key(), GCMParameterSpec(128, iv))
@@ -23,6 +28,7 @@ class FakeWall : KeyWall {
 
     override fun unwrap(wrapped: ByteArray, aad: ByteArray): ByteArray {
         if (broken) throw IllegalStateException("keystore down")
+        unwrapError?.let { if (failures-- > 0) throw it }
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, wrapped.copyOfRange(0, 12)))
         c.updateAAD(aad)

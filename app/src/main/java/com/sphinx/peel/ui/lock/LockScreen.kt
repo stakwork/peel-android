@@ -176,7 +176,7 @@ fun LockScreen(
                             val typed = pin
                             val engine = openEngine(withContext(Dispatchers.Default) { secretStore.loadMnemonic(typed) })
                             withContext(Dispatchers.Default) {
-                                remembered?.keep(typed, RememberedPIN.nowSeconds(), engine.pinTimeoutHours())
+                                remembered?.keep(typed, RememberedPIN.nowSeconds(), engine.pinTimeoutHoursOrNull())
                             }
                             onUnlocked(engine)
                         } catch (e: SecretStoreFailure.LockedOut) {
