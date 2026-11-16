@@ -134,7 +134,9 @@ data class InvoiceRecord(
         /// Ours, refused or never sent: nothing moved, so it may be paid again.
         FAILED("FAILED"),
         /// Made here, settled for less than it asked. Never shown as paid.
-        UNDERPAID("UNDERPAID");
+        UNDERPAID("UNDERPAID"),
+        /// Ours: the server holds it and has not settled it, and may never (iOS `Message.Delivery.unsettled`). Never paid again; not asked about on connect.
+        UNSETTLED("UNSETTLED");
 
         companion object {
             fun of(raw: String?): Status = entries.firstOrNull { it.raw == raw } ?: OPEN

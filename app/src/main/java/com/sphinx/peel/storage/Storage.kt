@@ -1,5 +1,8 @@
 package com.sphinx.peel.storage
 
+import com.sphinx.peel.engine.ControlMessage
+import com.sphinx.peel.engine.ControlMessages
+import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
 import com.sphinx.peel.engine.MONEY_SEND_TYPES
 import com.sphinx.peel.engine.MuteLevel
 import com.sphinx.peel.engine.ReadToggle
@@ -812,6 +815,8 @@ class Storage(context: Context, account: String = "default") {
                     // only ever sets `body`).
                     put("replyUuid", extractReplyUuid(row.body))
                     put("threadUuid", extractThreadUuid(row.body))
+                    // A control message in a direct message is a line, never unread (iOS `isControl`; not in a tribe).
+                    put("isControl", if (ControlMessages.control(row.type, row.deleted, row.body) != null && !isTribe(db, row.chat)) 1 else 0)
                 }
                 // The echo of a message this device already stored optimistically, under
                 // no uuid or another one (a call, say): it takes that row over rather than
@@ -842,6 +847,9 @@ class Storage(context: Context, account: String = "default") {
             db.endTransaction()
         }
     }
+
+    private fun isTribe(db: SQLiteDatabase, chat: String): Boolean =
+        db.rawQuery("SELECT 1 FROM contact WHERE pubkey = ? AND isTribe = 1", arrayOf(chat)).use { it.moveToFirst() }
 
     /// Whether [row], an echo of our own message (it has a server index), was folded into the
     /// optimistic row this device stored when sending: a pending row with no server index
@@ -941,7 +949,7 @@ class Storage(context: Context, account: String = "default") {
     /// becomes `DELIVERED` (the server had it after all); `DELIVERED` never
     /// changes. A tag naming no stored row is a no-op. Returns whether a
     /// message row moved.
-    fun markSendStatus(tag: String, status: SendStatus): Boolean {
+    fun markSendStatus(tag: String, status: SendStatus, error: String? = null): Boolean {
         val from = status.movesFrom
         if (from.isEmpty()) return false
         val fromSql = from.joinToString(",") { "'$it'" }
@@ -954,6 +962,8 @@ class Storage(context: Context, account: String = "default") {
             arrayOf(status.raw, tag),
         )
         val moved = db.compileStatement("SELECT changes()").simpleQueryForLong() > 0
+        // The invoice we pay, and the keysend sent for an app, follow it by the same rule (iOS `applyStatus`).
+        applyTrackedStatus(db, tag, status, error)
         // The invite this payment funds follows it (PeelCore's `applyStatus`).
         InviteRules.forFunding(status)?.let { next ->
             val fromInvite = InviteRules.fundingMovesFrom(status).joinToString(",") { "'${it.raw}'" }
@@ -966,6 +976,26 @@ class Storage(context: Context, account: String = "default") {
         }
         return moved
     }
+
+    /// The invoice we pay and the keysend sent for an app, moved by the one forward-only rule (iOS `applyStatus`): a status only moves forward
+    /// (pending → unsettled → failed → complete; a complete one never changes). A COMPLETE stamps `paidAt` once and clears the reason; a FAILED
+    /// keeps the server's reason (an earlier one if it gives none).
+    private fun applyTrackedStatus(db: SQLiteDatabase, tag: String, status: SendStatus, error: String?) {
+        val from = status.movesFrom
+        if (from.isEmpty()) return
+        val fromSql = from.joinToString(",") { "'$it'" }
+        val raw = if (status == SendStatus.DELIVERED) InvoiceRecord.Status.PAID.raw else status.raw
+        val set = "status = ?1, paidAt = CASE WHEN ?1 = 'COMPLETE' THEN COALESCE(paidAt, ?2) ELSE paidAt END, " +
+            "error = CASE WHEN ?1 = 'FAILED' THEN COALESCE(?3, error) WHEN ?1 = 'COMPLETE' THEN NULL ELSE error END"
+        val args = arrayOf<Any?>(raw, System.currentTimeMillis(), error, tag)
+        db.execSQL("UPDATE invoice SET $set WHERE tag = ?4 AND incoming = 0 AND status IN ($fromSql)", args)
+        db.execSQL("UPDATE keysend SET $set WHERE tag = ?4 AND status IN ($fromSql)", args)
+        walletRecordsVersionFlow.value += 1
+    }
+
+    /// The mixer's word on a payment's tag, for the invoice we pay and the keysend sent for an app only (a message row moves through [markSendStatus]).
+    fun markInvoiceSendStatus(tag: String, delivered: Boolean, error: String? = null) =
+        applyTrackedStatus(helper.writableDatabase, tag, if (delivered) SendStatus.DELIVERED else SendStatus.FAILED, error)
 
     // MARK: - Invites
 
@@ -1120,30 +1150,52 @@ class Storage(context: Context, account: String = "default") {
         ) > 0
     }
 
-    /// Every send of ours the server has not confirmed or refused, for
-    /// `Engine.checkPendingSends` — PeelCore's `pendingSendTags(textBefore:)`
-    /// trimmed to this port's tables: our messages still `PENDING` that
-    /// either may have paid (sats, a payment or boost) or are older than
-    /// [textBefore] (ms), newest first, at most 200; our messages with no
-    /// status at all (restored history, another device's), at most 200; and
-    /// the invoices we pay still `PENDING`, at most 200; and the invites
-    /// still `sending` (their funding payment's tag), at most 200.
-    fun pendingSendTags(textBefore: Long): List<String> {
+    /// A send tracked by tag that the server has not confirmed or refused (iOS `PendingSend`).
+    data class PendingSend(
+        val tag: String,
+        /// When it was sent or written, in milliseconds since 1970.
+        val createdAt: Long,
+        /// It pays: a payment, boost or purchase, a message that paid a tribe's price, an invoice we pay, an invite's funding payment or a keysend
+        /// sent for an app, so one the server never recorded failed ([SendRetry.UNRECORDED_PAYMENT_TIMEOUT_MS]).
+        val movesMoney: Boolean,
+    )
+
+    /// Every send of ours the server has not confirmed or refused, for `Engine.checkPendingSends` — PeelCore's `pendingSendTags(textBefore:)`:
+    /// our messages still `PENDING` that either may have paid (sats, a payment or boost) or are older than [textBefore] (ms), newest first, at most
+    /// 200; our messages with no status at all (restored history, another device's), at most 200, never failed for want of a record; the invoices we
+    /// pay still `PENDING`, at most 200; the invites still `sending` (their funding payment's tag); and the keysends sent for apps still `PENDING`, at
+    /// most 200. An unsettled one is not asked about: the server handed it on and is done with it.
+    fun pendingSends(textBefore: Long): List<PendingSend> {
         val moneyTypes = MONEY_SEND_TYPES.joinToString(",")
+        val mayHavePaid = "(tag IS NOT NULL AND (type IN ($moneyTypes) OR COALESCE(msat, 0) > 0))"
         val sql = """
-            SELECT tag FROM (SELECT tag FROM message WHERE fromMe = 1 AND status = 'PENDING' AND tag IS NOT NULL
-                AND (COALESCE(msat, 0) > 0 OR type IN ($moneyTypes) OR COALESCE(timestamp, 0) < ?)
+            SELECT tag, createdAt, movesMoney FROM (SELECT tag, COALESCE(timestamp, 0) AS createdAt, $mayHavePaid AS movesMoney
+                FROM message WHERE fromMe = 1 AND status = 'PENDING' AND tag IS NOT NULL AND ($mayHavePaid OR COALESCE(timestamp, 0) < CAST(? AS INTEGER))
                 ORDER BY id DESC LIMIT 200)
-            UNION ALL SELECT tag FROM (SELECT tag FROM message WHERE fromMe = 1 AND status IS NULL AND tag IS NOT NULL
-                ORDER BY id DESC LIMIT 200)
-            UNION ALL SELECT tag FROM (SELECT tag FROM invoice WHERE incoming = 0 AND status = 'PENDING' AND tag IS NOT NULL
-                ORDER BY createdAt DESC LIMIT 200)
-            UNION ALL SELECT tag FROM (SELECT tag FROM invite WHERE status = 'sending' AND tag IS NOT NULL
-                ORDER BY createdAt DESC LIMIT 200)
+            UNION ALL SELECT tag, createdAt, movesMoney FROM (SELECT tag, COALESCE(timestamp, 0) AS createdAt, 0 AS movesMoney
+                FROM message WHERE fromMe = 1 AND status IS NULL AND tag IS NOT NULL ORDER BY id DESC LIMIT 200)
+            UNION ALL SELECT tag, createdAt, movesMoney FROM (SELECT tag, createdAt, 1 AS movesMoney FROM invoice
+                WHERE incoming = 0 AND status = 'PENDING' AND tag IS NOT NULL ORDER BY createdAt DESC LIMIT 200)
+            UNION ALL SELECT tag, createdAt, movesMoney FROM (SELECT tag, createdAt, 1 AS movesMoney FROM invite
+                WHERE status = 'sending' AND tag IS NOT NULL ORDER BY createdAt DESC LIMIT 200)
+            UNION ALL SELECT tag, createdAt, movesMoney FROM (SELECT tag, createdAt, 1 AS movesMoney FROM keysend
+                WHERE status = 'PENDING' ORDER BY createdAt DESC LIMIT 200)
         """.trimIndent()
         return helper.readableDatabase.rawQuery(sql, arrayOf(textBefore.toString()))
-            .use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }.distinct()
+            .use { c -> buildList { while (c.moveToNext()) add(PendingSend(c.getString(0), c.getLong(1), c.getInt(2) != 0)) } }
     }
+
+    /// The tags of [pendingSends], each once.
+    fun pendingSendTags(textBefore: Long): List<String> = pendingSends(textBefore).map { it.tag }.distinct()
+
+    /// When the oldest money send of ours still waiting on the server and tied to a payment hash was sent, if at or after [since] (ms): how far back
+    /// the history must reach to settle it ([reconcileKeysends]); an app's keysend counts as well (iOS `oldestOpenSend`).
+    fun oldestOpenSend(since: Long): Long? = scalarLong(
+        "SELECT MIN(t) FROM (SELECT MIN(timestamp) AS t FROM message WHERE type IN (${MONEY_SEND_TYPES.joinToString(",")}) AND timestamp >= ?1 " +
+            "AND fromMe = 1 AND status IN ('PENDING', 'UNSETTLED') AND paymentHash IS NOT NULL " +
+            "UNION ALL SELECT MIN(createdAt) FROM keysend WHERE createdAt >= ?1 AND status IN ('PENDING', 'UNSETTLED'))",
+        arrayOf(since.toString()),
+    )
 
     /// A contact's alias/photo, from the newest message naming them so
     /// far — a blank field here means "unknown so far", not "cleared", so
@@ -1283,7 +1335,7 @@ class Storage(context: Context, account: String = "default") {
                 l.timestamp,
                 l.fromMe,
                 (SELECT COUNT(*) FROM message m
-                    WHERE m.chat = c.pubkey AND m.fromMe = 0
+                    WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.isControl = 0
                         AND m.type IN (0, 5, 6, 2, 32, 29)
                         AND m.serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)
                         AND (m.type != 29 OR EXISTS (
@@ -1474,6 +1526,44 @@ class Storage(context: Context, account: String = "default") {
     fun invoice(paymentHash: String, incoming: Boolean): InvoiceRecord? =
         readInvoice(helper.readableDatabase, paymentHash, incoming)
 
+    /// What the books say of an invoice we are asked to pay (iOS `InvoicePaidState`).
+    enum class PaidState { OWN, PENDING, PAID }
+
+    /// iOS `paidState`: [PaidState.OWN] for an invoice this account made; [PaidState.PENDING] for one we are paying (pending, open, underpaid or
+    /// unsettled: never paid again until the server says how it went); [PaidState.PAID] for one we paid, or one that failed here but the server's
+    /// history shows paid from another device; null for anything else (never tried, or failed).
+    fun paidState(paymentHash: String): PaidState? {
+        if (invoice(paymentHash, incoming = true) != null) return PaidState.OWN
+        val sent = { sentInHistory(paymentHash) }
+        return when (invoice(paymentHash, incoming = false)?.status) {
+            null -> if (sent()) PaidState.PAID else null
+            InvoiceRecord.Status.PENDING, InvoiceRecord.Status.OPEN, InvoiceRecord.Status.UNDERPAID, InvoiceRecord.Status.UNSETTLED -> PaidState.PENDING
+            InvoiceRecord.Status.PAID -> PaidState.PAID
+            InvoiceRecord.Status.FAILED -> if (sent()) PaidState.PAID else null
+        }
+    }
+
+    /// A successful outgoing row of the server's history for this hash, from any device.
+    private fun sentInHistory(paymentHash: String): Boolean =
+        helper.readableDatabase.rawQuery(
+            "SELECT 1 FROM payment WHERE rhash = ? AND incoming = 0 AND IFNULL(error, '') = '' LIMIT 1", arrayOf(paymentHash),
+        ).use { it.moveToFirst() }
+
+    /// Whether a payment request of ours (type 2) carries this invoice (iOS `isOurRequest`): one made on another device comes back from history, its
+    /// invoice record does not. Only one signed by this account's key ([pubkey]): the core takes a message for ours by its date or a replayed tag,
+    /// which a contact can arrange, with any key they like. `invoiceProblem` asks this only of an invoice our own server made.
+    fun isOurRequest(paymentHash: String, pubkey: String): Boolean =
+        helper.readableDatabase.rawQuery(
+            "SELECT sender FROM message WHERE fromMe = 1 AND type = ? AND paymentHash = ? AND sender IS NOT NULL",
+            arrayOf(INVOICE_MESSAGE_TYPE.toString(), paymentHash),
+        ).use { c ->
+            var ours = false
+            while (!ours && c.moveToNext()) {
+                ours = runCatching { org.json.JSONObject(c.getString(0)).optString("pubkey") }.getOrNull() == pubkey
+            }
+            ours
+        }
+
     /// Newest first.
     fun invoices(): List<InvoiceRecord> {
         helper.readableDatabase.rawQuery("SELECT * FROM invoice ORDER BY createdAt DESC", null).use { c ->
@@ -1525,30 +1615,10 @@ class Storage(context: Context, account: String = "default") {
         walletRecordsVersionFlow.value += 1
     }
 
-    /// The mixer's word on a payment's tag: COMPLETE settles it, FAILED
-    /// frees it to be tried again. Only a pending record moves.
-    fun markInvoiceSendStatus(tag: String, delivered: Boolean, error: String? = null) {
-        val db = helper.writableDatabase
-        val status = if (delivered) InvoiceRecord.Status.PAID.raw else InvoiceRecord.Status.FAILED.raw
-        val paidAt = if (delivered) System.currentTimeMillis() else null
-        val why = if (delivered) null else (error ?: "failed")
-        db.execSQL(
-            "UPDATE invoice SET status = ?, paidAt = ?, error = ? WHERE tag = ? AND incoming = 0 AND status = 'PENDING'",
-            arrayOf<Any?>(status, paidAt, why, tag),
-        )
-        // A keysend sent for an app moves by the same rule (a failure keeps the server's reason, a COMPLETE clears it).
-        db.execSQL(
-            "UPDATE keysend SET status = ?, paidAt = CASE WHEN ? = 'COMPLETE' THEN COALESCE(paidAt, ?) ELSE paidAt END, " +
-                "error = CASE WHEN ? = 'FAILED' THEN COALESCE(?, error) ELSE NULL END WHERE tag = ? AND status = 'PENDING'",
-            arrayOf<Any?>(status, status, System.currentTimeMillis(), status, why, tag),
-        )
-        walletRecordsVersionFlow.value += 1
-    }
-
     /// A send of ours the server's history shows failed: free to be paid again.
     fun failPendingInvoice(paymentHash: String, error: String?) {
         helper.writableDatabase.execSQL(
-            "UPDATE invoice SET status = 'FAILED', error = ? WHERE paymentHash = ? AND incoming = 0 AND status = 'PENDING'",
+            "UPDATE invoice SET status = 'FAILED', error = ? WHERE paymentHash = ? AND incoming = 0 AND status IN ('PENDING', 'UNSETTLED')",
             arrayOf<Any?>(error ?: "failed", paymentHash),
         )
         walletRecordsVersionFlow.value += 1
@@ -1586,22 +1656,34 @@ class Storage(context: Context, account: String = "default") {
         reconcileKeysends(db, rows)
     }
 
-    /// A keysend sent for an app, by the same rule as every send of ours (iOS `Storage.reconcile`): one still open whose outgoing row has no error went
-    /// through; one still open whose only rows failed, failed (the server put the sats back); one that failed but has a good row settled after all. Settled
-    /// from the history it carries no preimage (the server's rows have none).
+    /// What a page of the server's history settles of our own sends (iOS `Storage.reconcile`, its outgoing half): a money send of ours (a payment,
+    /// boost or purchase) still pending or unsettled whose outgoing row has no error went through; one still pending or unsettled whose only rows
+    /// failed, failed (the server put the sats back); one that failed but has a good row settled after all. A keysend sent for an app follows by the same
+    /// rule; settled from the history it carries no preimage (the server's rows have none).
     private fun reconcileKeysends(db: SQLiteDatabase, page: List<PaymentRecord>) {
+        val sends = MONEY_SEND_TYPES.joinToString(",")
         for (row in page) {
             if (row.incoming) continue
             if (row.failed) {
                 db.execSQL(
-                    "UPDATE keysend SET status = 'FAILED', error = COALESCE(error, ?2) WHERE paymentHash = ?1 AND status = 'PENDING' " +
+                    "UPDATE message SET status = 'FAILED' WHERE paymentHash = ?1 AND fromMe = 1 AND type IN ($sends) AND status IN ('PENDING', 'UNSETTLED') " +
+                        "AND NOT EXISTS (SELECT 1 FROM payment WHERE rhash = ?1 AND incoming = 0 AND IFNULL(error, '') = '')",
+                    arrayOf<Any?>(row.rhash),
+                )
+                db.execSQL(
+                    "UPDATE keysend SET status = 'FAILED', error = COALESCE(error, ?2) WHERE paymentHash = ?1 AND status IN ('PENDING', 'UNSETTLED') " +
                         "AND NOT EXISTS (SELECT 1 FROM payment WHERE rhash = ?1 AND incoming = 0 AND IFNULL(error, '') = '')",
                     arrayOf<Any?>(row.rhash, row.error),
                 )
             } else {
                 db.execSQL(
+                    "UPDATE message SET status = 'DELIVERED' WHERE paymentHash = ? AND fromMe = 1 AND type IN ($sends) " +
+                        "AND status IN ('PENDING', 'UNSETTLED', 'FAILED')",
+                    arrayOf<Any?>(row.rhash),
+                )
+                db.execSQL(
                     "UPDATE keysend SET status = 'COMPLETE', paidAt = COALESCE(paidAt, ?), error = NULL " +
-                        "WHERE paymentHash = ? AND status IN ('PENDING', 'FAILED')",
+                        "WHERE paymentHash = ? AND status IN ('PENDING', 'UNSETTLED', 'FAILED')",
                     arrayOf<Any?>(row.ts, row.rhash),
                 )
             }
@@ -1632,8 +1714,8 @@ class Storage(context: Context, account: String = "default") {
 
     fun newestPaymentTimestamp(): Long? = scalarLong("SELECT MAX(ts) FROM payment")
 
-    private fun scalarLong(sql: String): Long? =
-        helper.readableDatabase.rawQuery(sql, null).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+    private fun scalarLong(sql: String, args: Array<String>? = null): Long? =
+        helper.readableDatabase.rawQuery(sql, args).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
 
     /// The message with this payment hash, if stored: how a history row finds
     /// its chat, note and counterpart.
@@ -1871,9 +1953,9 @@ class Storage(context: Context, account: String = "default") {
         return records.sortedWith(compareByDescending<WalletRecord> { it.createdAt }.thenByDescending { it.transactionId })
     }
 
-    /// (iOS `walletState`: an unsettled send is not a status here, so only these five.)
+    /// (iOS `walletState`: an unsettled send is still pending to an app.)
     private fun walletState(status: InvoiceRecord.Status): WalletRecord.State = when (status) {
-        InvoiceRecord.Status.OPEN, InvoiceRecord.Status.PENDING -> WalletRecord.State.PENDING
+        InvoiceRecord.Status.OPEN, InvoiceRecord.Status.PENDING, InvoiceRecord.Status.UNSETTLED -> WalletRecord.State.PENDING
         InvoiceRecord.Status.PAID -> WalletRecord.State.SETTLED
         InvoiceRecord.Status.FAILED, InvoiceRecord.Status.UNDERPAID -> WalletRecord.State.FAILED
     }
@@ -2015,6 +2097,7 @@ class Storage(context: Context, account: String = "default") {
             v12(db)
             v13(db)
             v14(db)
+            v15(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -2034,6 +2117,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 12) v12(db)
             if (oldVersion < 13) v13(db)
             if (oldVersion < 14) v14(db)
+            if (oldVersion < 15) v15(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -2328,8 +2412,26 @@ class Storage(context: Context, account: String = "default") {
             db.execSQL("CREATE INDEX keysend_connection ON keysend(connection) WHERE connection IS NOT NULL")
         }
 
+        // A control message in a direct message (iOS v27, `Message.isControl`; docs/phases/40-control-messages.md): drawn as a line or not at all, so never
+        // unread. Set when stored; here for the rows stored before, read as `ControlMessage.read` reads them (a cheap filter first: the key, or an escape
+        // that could spell it). Not in a tribe: there the same metadata leaves a member's message a message.
+        private fun v15(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE message ADD COLUMN isControl INTEGER NOT NULL DEFAULT 0")
+            val ids = mutableListOf<Long>()
+            db.rawQuery(
+                """
+                SELECT id, body FROM message
+                WHERE type = 0 AND deleted = 0
+                    AND (instr(body, '\"peel\"') AND instr(body, '\"op\"') OR instr(body, '\u'))
+                    AND chat NOT IN (SELECT pubkey FROM contact WHERE isTribe = 1)
+                """.trimIndent(),
+                null,
+            ).use { c -> while (c.moveToNext()) if (ControlMessage.read(c.getString(1)) != null) ids += c.getLong(0) }
+            for (id in ids) db.execSQL("UPDATE message SET isControl = 1 WHERE id = ?", arrayOf<Any>(id))
+        }
+
         companion object {
-            const val VERSION = 14
+            const val VERSION = 15
         }
     }
 }

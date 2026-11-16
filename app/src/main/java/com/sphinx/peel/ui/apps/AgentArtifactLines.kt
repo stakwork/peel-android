@@ -85,6 +85,7 @@ private fun AgentArtifactLine(artifact: AgentArtifact, inTribe: Boolean, key: In
     val current = openings()
     val openPage = LocalPageOpener.current
     val linkOpener = LocalLinkOpener.current
+    val talkOpener = LocalTalkOpener.current
     val context = LocalContext.current
     var asking by remember(artifact, key) { mutableStateOf(false) }
     val place = ArtifactOpening.whereTo(artifact) { current.opening(it) }
@@ -92,9 +93,12 @@ private fun AgentArtifactLine(artifact: AgentArtifact, inTribe: Boolean, key: In
     // Made again on the tap: the tokens may have been renewed since.
     val run: (() -> Unit)? = when (action) {
         is ArtifactOpening.Action.Page -> ({
-            (openings().opening(action.handle, action.title) as? Opening.Page)?.let { openPage(it.request) }
+            (openings().opening(action.handle, action.title) as? Opening.Page)?.let { if (talkOpener != null) talkOpener.showPage(it.request) else openPage(it.request) }
         })
-        is ArtifactOpening.Action.Link -> ({ linkOpener?.open(action.url) ?: openInBrowser(context, action.url) })
+        is ArtifactOpening.Action.Link -> ({
+            // On the call screen a link goes straight to the browser (iOS: `TalkSafariView`, no Hive handling); elsewhere to the app's handler.
+            if (talkOpener != null) openInBrowser(context, talkOpener.link(action.url)) else linkOpener?.open(action.url) ?: openInBrowser(context, action.url)
+        })
         null -> null
     }
     val asksFirst = artifact.asksBeforeOpening(inTribe) && action is ArtifactOpening.Action.Page

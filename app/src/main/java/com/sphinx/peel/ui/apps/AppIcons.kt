@@ -1,62 +1,84 @@
 package com.sphinx.peel.ui.apps
 
+import android.content.Context
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathBuilder
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.sphinx.peel.engine.Lru
 import com.sphinx.peel.engine.LucideNames
+import com.sphinx.peel.engine.LucideSet
+import com.sphinx.peel.engine.LucideShape
+import com.sphinx.peel.engine.Seg
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-/// An app's icon (iOS `WorkspaceAppIcon`): the manifest's lucide name drawn as its Material counterpart, the grid
-/// for none or one with no counterpart. Name resolution is `LucideNames` (pure, tested); this is the table of
-/// vectors. Drawn in the surrounding tint, in a fixed square, like iOS's 20 pt glyph in a 30 pt frame.
+/// An app's icon (iOS `WorkspaceAppIcon`): the manifest's lucide name drawn as that lucide icon, any of them, the grid
+/// for none or one lucide has not. The icons are `assets/lucide/icons.json`, parsed once off the main thread
+/// (`LucideSet`, name rules in `LucideNames`) and each drawn as an `ImageVector` (24×24, stroke 2, round caps and joins,
+/// tinted by the surrounding tint) kept in a small LRU.
 object AppIcons {
-    val table: Map<String, ImageVector> by lazy {
-        mapOf(
-            "activity" to Icons.Filled.ShowChart, "alarm-clock" to Icons.Filled.Alarm, "bell" to Icons.Filled.Notifications,
-            "book" to Icons.Filled.Book, "book-open" to Icons.Filled.MenuBook, "brain" to Icons.Filled.Psychology,
-            "briefcase" to Icons.Filled.Work, "building" to Icons.Filled.Business, "building-complex" to Icons.Filled.LocationCity,
-            "calendar" to Icons.Filled.CalendarMonth, "camera" to Icons.Filled.CameraAlt, "chart-column" to Icons.Filled.BarChart,
-            "chart-line" to Icons.Filled.ShowChart, "chart-pie" to Icons.Filled.PieChart, "square-check" to Icons.Filled.CheckBox,
-            "square-check-big" to Icons.Filled.CheckBox, "circle-dollar-sign" to Icons.Filled.MonetizationOn,
-            "clock" to Icons.Filled.Schedule, "code" to Icons.Filled.Code, "cpu" to Icons.Filled.Memory,
-            "credit-card" to Icons.Filled.CreditCard, "database" to Icons.Filled.Storage, "dollar-sign" to Icons.Filled.AttachMoney,
-            "download" to Icons.Filled.Download, "eye" to Icons.Filled.Visibility, "file" to Icons.Filled.InsertDriveFile,
-            "file-text" to Icons.Filled.Description, "flag" to Icons.Filled.Flag, "flask-conical" to Icons.Filled.Science,
-            "flask-round" to Icons.Filled.Science, "folder" to Icons.Filled.Folder, "funnel" to Icons.Filled.FilterList,
-            "gauge" to Icons.Filled.Speed, "git-branch" to Icons.Filled.AccountTree, "globe" to Icons.Filled.Public,
-            "graduation-cap" to Icons.Filled.School, "heart" to Icons.Filled.Favorite, "house" to Icons.Filled.Home,
-            "image" to Icons.Filled.Image, "inbox" to Icons.Filled.Inbox, "kanban" to Icons.Filled.ViewKanban,
-            "layers" to Icons.Filled.Layers, "layout-grid" to Icons.Filled.Apps, "lightbulb" to Icons.Filled.Lightbulb,
-            "link" to Icons.Filled.Link, "list" to Icons.AutoMirrored.Filled.List, "list-checks" to Icons.Filled.Checklist,
-            "list-todo" to Icons.Filled.Checklist, "lock" to Icons.Filled.Lock, "mail" to Icons.Filled.Mail,
-            "map" to Icons.Filled.Map, "map-pin" to Icons.Filled.Place, "message-circle" to Icons.Filled.ChatBubble,
-            "message-square" to Icons.Filled.Chat, "music" to Icons.Filled.MusicNote, "network" to Icons.Filled.Hub,
-            "newspaper" to Icons.Filled.Newspaper, "package" to Icons.Filled.Inventory2, "palette" to Icons.Filled.Palette,
-            "pen" to Icons.Filled.Edit, "pencil" to Icons.Filled.Edit, "phone" to Icons.Filled.Phone, "plus" to Icons.Filled.Add,
-            "puzzle" to Icons.Filled.Extension, "receipt" to Icons.Filled.Receipt, "scale" to Icons.Filled.Balance,
-            "search" to Icons.Filled.Search, "server" to Icons.Filled.Dns, "settings" to Icons.Filled.Settings,
-            "share" to Icons.Filled.Share, "shield" to Icons.Filled.Shield, "shield-check" to Icons.Filled.VerifiedUser,
-            "shopping-cart" to Icons.Filled.ShoppingCart, "sparkles" to Icons.Filled.AutoAwesome, "star" to Icons.Filled.Star,
-            "table" to Icons.Filled.TableChart, "tag" to Icons.Filled.Sell, "target" to Icons.Filled.GpsFixed,
-            "terminal" to Icons.Filled.Terminal, "test-tube" to Icons.Filled.Science, "trash" to Icons.Filled.Delete,
-            "trending-up" to Icons.Filled.TrendingUp, "trophy" to Icons.Filled.EmojiEvents, "truck" to Icons.Filled.LocalShipping,
-            "upload" to Icons.Filled.Upload, "user" to Icons.Filled.Person, "users" to Icons.Filled.Group,
-            "utensils" to Icons.Filled.Restaurant, "wallet" to Icons.Filled.AccountBalanceWallet, "workflow" to Icons.Filled.AccountTree,
-            "zap" to Icons.Filled.Bolt,
-        )
+    private const val ASSET = "lucide/icons.json"
+    private val cache = Lru<String, ImageVector>(256)
+
+    @Volatile private var set: LucideSet? = null
+
+    /// The parsed set, read from the assets on first use (call off the main thread).
+    fun load(context: Context): LucideSet = set ?: synchronized(this) {
+        set ?: context.applicationContext.assets.open(ASSET).use { LucideSet.parse(it) }.also { set = it }
     }
 
-    fun vector(name: String?): ImageVector = table[LucideNames.shape(name)] ?: Icons.Filled.Apps
+    /// The vector for a manifest's name, once the set is loaded; null before (draw nothing yet).
+    fun vector(name: String?): ImageVector? {
+        val s = set ?: return null
+        val key = LucideNames.shape(name, s.index)
+        cache[key]?.let { return it }
+        return build(key, s.shape(name)).also { cache[key] = it }
+    }
+
+    internal fun build(name: String, shape: LucideShape): ImageVector {
+        val b = ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)
+        for (p in shape.paths) {
+            b.path(
+                fill = if (p.filled) SolidColor(Color.Black) else null,
+                stroke = SolidColor(Color.Black), strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+            ) { for (s in p.segs) add(s) }
+        }
+        return b.build()
+    }
+
+    private fun PathBuilder.add(s: Seg) {
+        when (s) {
+            is Seg.Move -> moveTo(s.x, s.y)
+            is Seg.Line -> lineTo(s.x, s.y)
+            is Seg.Cubic -> curveTo(s.x1, s.y1, s.x2, s.y2, s.x, s.y)
+            is Seg.Quad -> quadTo(s.x1, s.y1, s.x, s.y)
+            Seg.Close -> close()
+        }
+    }
 }
 
 @Composable
 fun WorkspaceAppIcon(name: String?, tint: Color, modifier: Modifier = Modifier, size: Dp = 22.dp) {
-    Icon(AppIcons.vector(name), null, modifier.size(size), tint = tint)
+    val context = LocalContext.current
+    var ready by remember { mutableStateOf(AppIcons.vector(name) != null) }
+    LaunchedEffect(Unit) { if (!ready) { withContext(Dispatchers.IO) { AppIcons.load(context) }; ready = true } }
+    val v = if (ready) AppIcons.vector(name) else null
+    if (v != null) Icon(v, null, modifier.size(size), tint = tint) else androidx.compose.foundation.layout.Spacer(modifier.size(size))
 }

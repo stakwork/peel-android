@@ -28,7 +28,7 @@ iOS read from `main` (1778b01): `Engine+Wallet.swift`, `WalletProtocol.swift` (a
   invoice made; the mixer's COMPLETE keeps its preimage (only if it hashes to the payment hash) **before** it marks the payment paid, so whoever sees it paid sees its proof.
 
 ## Differences from iOS
-- **Balance unknown refuses** an app's payment (`BALANCE_UNKNOWN`); Android's `checkPayment` lets a one-tap boost through, an app's never.
+- **(Phase 38 re-read iOS: the wallet path matches; only the boost differs; `isOurRequest`, `UNSETTLED`, the events and keysend `pendingSendTags` are now ported.)** **Balance unknown refuses** an app's payment (`BALANCE_UNKNOWN`); Android's `checkPayment` lets a one-tap boost through, an app's never.
 - **`PaymentRunner` is the seam** where iOS has the engine itself, so the logic is JVM-tested; the real one is `Engine.paymentRunner()`.
 - **An invoice for an app is paid through the same two core calls as `Engine.pay`** (`pay_invoice`, then `pay` when there is no route and no hop hints; the server's own node's invoices through `pay`); there is no contact path.
 - **`isOurRequest`** (our own request made through our server on another device) is not checked, as in `Engine.invoiceProblem`; nor `paidState`'s message-borne cases beyond the invoice rows and the history.
