@@ -72,7 +72,7 @@ class WalletHostTest {
     private fun message(op: String, app: JSONObject? = JSONObject().put("name", "n").put("version", "1")) =
         JSONObject().put("v", 1).put("op", op).apply { if (app != null) put("app", app) }
     private fun app(request: Boolean = true) = JSONObject().put("name", "n").put("version", "1").apply {
-        if (request) put("request", JSONObject())
+        if (request) put("request", JSONObject().put("request_methods", org.json.JSONArray().put("pay_keysend")))
     }
     private fun JSONObject.text() = getJSONObject("error").getString("message")
 

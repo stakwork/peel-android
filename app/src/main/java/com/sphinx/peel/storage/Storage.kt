@@ -1847,6 +1847,45 @@ class Storage(context: Context, account: String = "default") {
         InvoiceRecord.Status.FAILED, InvoiceRecord.Status.UNDERPAID -> WalletRecord.State.FAILED
     }
 
+    /// How long a send the server holds for an offline payee still holds sats back (iOS `Message.waitingLimit`): a week.
+    private val waitingLimitMs = 7L * 24 * 60 * 60 * 1000
+
+    /// What is promised to people and still in the balance, in msat (iOS `waitingMsat`): our payments, boosts and purchases to people, and an app's keysends sent
+    /// the asynchronous way, that are still pending. The server holds them until the person's app comes online and takes their sats from the balance only then.
+    /// Unsettled ones are left out (the server handed them on), and so are ones sent more than a week ago: they stay pending (never sent again) but no longer
+    /// hold sats back, so a row the server never settles cannot shrink what can be spent for ever.
+    fun waitingMsat(nowMs: Long = System.currentTimeMillis()): Long {
+        val since = (nowMs - waitingLimitMs).toString()
+        val db = helper.readableDatabase
+        val messages = db.rawQuery(
+            "SELECT IFNULL(SUM(msat), 0) FROM message WHERE fromMe = 1 AND status = 'PENDING' AND tag IS NOT NULL AND deleted = 0 AND timestamp >= ? " +
+                "AND type IN (${MONEY_SEND_TYPES.joinToString(",")}) AND chat NOT IN (SELECT pubkey FROM contact WHERE isTribe = 1)",
+            arrayOf(since),
+        ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        // An app's keysend sent the asynchronous way waits the same way.
+        val keysends = db.rawQuery(
+            "SELECT IFNULL(SUM(amountMsat), 0) FROM keysend WHERE status = 'PENDING' AND async = 1 AND createdAt >= ?", arrayOf(since),
+        ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        return maxOf(messages, 0) + maxOf(keysends, 0)
+    }
+
+    /// The balance the server last reported less what waits ([waitingMsat]); null until it has reported one (iOS `spendableMsat`).
+    fun spendableMsat(nowMs: Long = System.currentTimeMillis()): Long? {
+        val balance = value(Setting.BALANCE_MSAT)?.toLongOrNull() ?: return null
+        val waiting = waitingMsat(nowMs)
+        return if (balance > waiting) balance - waiting else 0
+    }
+
+    /// The name a ready contact goes by; null for anyone else (iOS `contactAlias`).
+    fun contactAlias(pubkey: String): String? =
+        helper.readableDatabase.rawQuery("SELECT alias FROM contact WHERE pubkey = ? AND ready = 1", arrayOf(pubkey)).use {
+            if (it.moveToFirst() && !it.isNull(0)) it.getString(0) else null
+        }
+
+    /// An invoice we pay, by its send's tag (iOS `invoice(tag:)`).
+    fun invoiceByTag(tag: String): InvoiceRecord? =
+        helper.readableDatabase.rawQuery("SELECT * FROM invoice WHERE tag = ? AND incoming = 0", arrayOf(tag)).use { if (it.moveToFirst()) invoiceFrom(it) else null }
+
     /// One keysend by its send's tag.
     fun keysend(tag: String): KeysendRecord? = readKeysend("tag = ?", tag)
 

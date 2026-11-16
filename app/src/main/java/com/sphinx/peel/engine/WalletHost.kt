@@ -95,8 +95,41 @@ object WalletErrors {
     )
 }
 
+/// What an app asks for with its `app.yaml` `wallet:` block (iOS `WalletRequest`): the methods it cannot work without and those it can, the notifications,
+/// a limit with its renewal, an expiry.
+data class WalletRequest(
+    val required: List<WalletMethod>,
+    val optional: List<WalletMethod> = emptyList(),
+    val notifications: List<WalletNotificationType> = emptyList(),
+    val maxAmountMsat: Long? = null,
+    val renewal: WalletRenewal? = null,
+    val expiresAt: Long? = null,
+) {
+    companion object {
+        /// Null for none (null, absent) and for anything the contract refuses ([WalletProtocol.connectionRequestProblems]).
+        fun read(json: Any?): WalletRequest? {
+            if (json == null || json == JSONObject.NULL || WalletProtocol.connectionRequestProblems(json).isNotEmpty()) return null
+            val r = json as? JSONObject ?: return null
+            fun names(key: String): List<String> = (r.opt(key) as? JSONArray)?.let { a -> (0 until a.length()).mapNotNull { a.opt(it) as? String } } ?: emptyList()
+            return WalletRequest(
+                required = names("request_methods").mapNotNull { WalletMethod.of(it) }.distinct(),
+                optional = names("optional_request_methods").mapNotNull { WalletMethod.of(it) }.distinct(),
+                notifications = names("notification_types").mapNotNull { WalletNotificationType.of(it) }.distinct(),
+                maxAmountMsat = WalletProtocol.integer(r.opt("max_amount")),
+                renewal = WalletRenewal.of(r.opt("renewal_period") as? String),
+                expiresAt = WalletProtocol.integer(r.opt("expires_at")),
+            )
+        }
+    }
+}
+
 /// The app a wallet message names (iOS `WalletApp`), as the page says it: never trusted.
-private class WalletApp(val name: String, val version: String, val title: String, val asksForWallet: Boolean) {
+class WalletApp(val name: String, val version: String, val peer: String?, val title: String, val request: WalletRequest?) {
+    /// strut's `nativeAppKey`: `<peer>/<name>`.
+    val key: String get() = "${peer ?: ""}/$name"
+
+    val asksForWallet: Boolean get() = request != null
+
     companion object {
         fun read(raw: Any?): WalletApp? {
             val json = raw as? JSONObject ?: return null
@@ -107,7 +140,7 @@ private class WalletApp(val name: String, val version: String, val title: String
                 if (peer !is String || peer.isEmpty() || peer.contains('/')) return null
             }
             val title = json.opt("title") as? String ?: name
-            return WalletApp(name, version, title, json.opt("request") is JSONObject)
+            return WalletApp(name, version, peer as? String, title, WalletRequest.read(json.opt("request")))
         }
     }
 }

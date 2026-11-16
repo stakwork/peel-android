@@ -223,16 +223,21 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// async pay's after the server took it) instead of everything at once:
     /// what a key exchange and an invite's payment need. Off for every
     /// caller from before those existed, whose behaviour is unchanged.
+    ///
+    /// `commitWith` makes rows (an app's payment, its budget check) that are written **in the same transaction as the core's state** (iOS `commitAndPublish`
+    /// with its invoices/keysends/walletBudget): when it or the write refuses (over budget), nothing is written, the in-memory state is not moved, and nothing
+    /// is published.
     suspend fun run(
         beforePublish: (RunReturn) -> Unit = {},
         ordered: Boolean = false,
+        commitWith: ((RunReturn) -> Storage.Commit)? = null,
         call: (time: String, state: ByteArray) -> RunReturn,
     ): RunReturn {
         var afterPay: AfterPay? = null
         val result = mutex.withLock {
             val time = clock.next()
             val result = call(time, StateCodec.encode(state))
-            commitLocked(result, time)
+            commitLocked(result, time, commitWith?.invoke(result))
             beforePublish(result)
             if (ordered) afterPay = publishOrderedLocked(result, waitForAsyncPay = true) else publishLocked(result)
             result
@@ -298,13 +303,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// them) under one hold of `mutex`, the way Swift's actor isolation
     /// covers the whole of `establish()`. `mutex` is not reentrant, so
     /// this must not call `run` itself; callers already hold the lock.
-    private fun commitLocked(result: RunReturn, time: String) {
+    private fun commitLocked(result: RunReturn, time: String, extra: Storage.Commit? = null) {
         val updates = result.stateMp?.let { StateCodec.decode(it) } ?: emptyMap()
         val newState = state.toMutableMap()
         newState.putAll(updates)
         for (key in result.stateToDelete) newState.remove(key)
-        state = newState
-        result.asyncpayTag?.let { tag -> if (asyncPays.containsKey(tag)) asyncPays[tag] = true }
 
         // Any call's `RunReturn` can report a new balance, not just a
         // send's — PeelCore's own `Engine.swift` commits `newBalance` the
@@ -315,18 +318,23 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // nothing from that to be worth doing — it's what lets Profile
         // show a real balance instead of nothing at all.
         val settings = mutableMapOf(Setting.CLOCK to time)
-        result.newBalance?.let {
-            settings[Setting.BALANCE_MSAT] = it.toString()
-            balanceFlow.value = it.toLong()
-        }
+        result.newBalance?.let { settings[Setting.BALANCE_MSAT] = it.toString() }
 
+        // One write: the state, and an app's payment rows with its budget check. When it refuses nothing below runs, so the state is not moved.
         storage.apply(
             Storage.Commit(
                 state = updates,
                 deleteState = result.stateToDelete,
                 settings = settings,
+                invoices = extra?.invoices ?: emptyList(),
+                keysends = extra?.keysends ?: emptyList(),
+                walletBudget = extra?.walletBudget,
+                preimages = extra?.preimages ?: emptyList(),
             ),
         )
+        state = newState
+        result.asyncpayTag?.let { tag -> if (asyncPays.containsKey(tag)) asyncPays[tag] = true }
+        result.newBalance?.let { balanceFlow.value = it.toLong() }
     }
 
     /// The account's own balance, as last reported by any core call —
@@ -579,6 +587,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (tag != null) {
             SendStatus.live(sentStatus.optString("status"))?.let { live ->
                 storage.markSendStatus(tag, live)
+                // The preimage the mixer sends with a COMPLETE is kept on the payment its tag names, only when it hashes to the payment hash. First, so that
+                // whoever sees the payment settled sees its proof (an app's answer waits for the one and reads the other).
+                if (live == SendStatus.DELIVERED) sentStatus.optString("preimage").takeIf { it.isNotEmpty() }?.let { storage.keepPreimage(it, tag) }
                 // Paying an invoice is tracked by its tag the same way.
                 if (live != SendStatus.UNSETTLED) {
                     storage.markInvoiceSendStatus(tag, live == SendStatus.DELIVERED, SendStatus.reason(sentStatus))
