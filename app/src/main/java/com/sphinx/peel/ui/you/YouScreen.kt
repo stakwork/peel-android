@@ -591,6 +591,8 @@ private fun YouMain(
                         engine.cancel()
                         // The Stadeum pairing goes with the account.
                         Stadeum.model.disconnect()
+                        // The public sites' kept sign-ins too (docs/phases/42-page-host-logs.md), on the main thread.
+                        com.sphinx.peel.ui.apps.forgetKeptWebData()
                         // Both stores, not just the mnemonic: otherwise the
                         // next account made on this device would start from
                         // this one's coreState (Storage.kt, `deleteAccount`).
@@ -1081,7 +1083,8 @@ private fun ConnectedAppCard(storage: Storage, connection: WalletConnection) {
             }
             row.spentLine?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
         }
-        TextButton(onClick = { storage.deleteWalletConnection(connection.key) }, Modifier.padding(horizontal = 8.dp)) {
+        // A stranger's app leaves the Apps list with its connection (docs/phases/41-worker-onboarding.md).
+        TextButton(onClick = { storage.deleteWalletConnection(connection.key); storage.forgetPublicAppsOf(connection.key) }, Modifier.padding(horizontal = 8.dp)) {
             Text(ConnectedAppRow.DISCONNECT, color = Theme.colors.destructive)
         }
     }

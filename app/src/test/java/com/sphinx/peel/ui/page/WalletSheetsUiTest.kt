@@ -32,7 +32,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.shadows.ShadowDialog
 
-/// The three wallet sheets and the sign-in-only connect sheet, drawn under Robolectric (docs/phases/41-test-coverage.md): the arming delay
+/// The three wallet sheets and the sign-in-only connect sheet, drawn under Robolectric (docs/phases/43-test-coverage.md): the arming delay
 /// (Compose's clock for the 700 ms `delay`, an injected one for the gate), the second-tap pay flow, Back = decline, a tap outside
 /// ignored, and the words (all from [WalletWords]). The real device feel (layout, keyboard, TalkBack) is still not covered.
 @RunWith(RobolectricTestRunner::class)

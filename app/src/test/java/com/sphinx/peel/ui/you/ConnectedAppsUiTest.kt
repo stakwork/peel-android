@@ -25,7 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/// You › Connected apps drawn over a real (Robolectric SQLite) `Storage` (docs/phases/41-test-coverage.md): the empty text, a connection's
+/// You › Connected apps drawn over a real (Robolectric SQLite) `Storage` (docs/phases/43-test-coverage.md): the empty text, a connection's
 /// words, the limit edit with Save, the over-limit choice and Disconnect, each checked in storage.
 @RunWith(RobolectricTestRunner::class)
 class ConnectedAppsUiTest {

@@ -13,8 +13,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /// A database as PR #74 left it (version 13) upgraded by the app's own `Storage` on the device's real SQLite (docs/phases/32-wallet-storage.md
-/// "UNTESTED": the JVM test runs on Robolectric's SQLite). main is at version 14: there is no v15 here, so the test checks the version is
-/// at least 14 rather than naming one. NOT RUN where this was written (no emulator): compiled only.
+/// "UNTESTED": the JVM test runs on Robolectric's SQLite). the test asserts the app's own `Storage.VERSION`, so it follows
+/// each later migration. NOT RUN where this was written (no emulator): compiled only.
 @RunWith(AndroidJUnit4::class)
 class StorageUpgradeInstrumentedTest {
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
@@ -58,7 +58,7 @@ class StorageUpgradeInstrumentedTest {
         assertTrue(storage.walletRecords(null).isEmpty())
         val db = SQLiteDatabase.openDatabase(context.getDatabasePath("peel-$account.db").path, null, SQLiteDatabase.OPEN_READONLY)
         try {
-            assertTrue("the upgrade left the version at ${db.version}", db.version >= 14)
+            assertEquals("the upgrade left the version at ${db.version}", Storage.VERSION, db.version)
         } finally {
             db.close()
         }

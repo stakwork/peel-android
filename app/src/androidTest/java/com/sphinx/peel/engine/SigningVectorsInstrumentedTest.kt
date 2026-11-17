@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/// The sign-in signing vectors, run against the real `libsphinxrs` (docs/phases/41-test-coverage.md): the cases the JVM suite has to `@Ignore`
+/// The sign-in signing vectors, run against the real `libsphinxrs` (docs/phases/43-test-coverage.md): the cases the JVM suite has to `@Ignore`
 /// (`EngineSignVisitorTest`, `VisitorSignatureVectorTest`). NOT RUN where this was written (no emulator): compiled only.
 @RunWith(AndroidJUnit4::class)
 class SigningVectorsInstrumentedTest {

@@ -3,15 +3,22 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Push needs the Firebase project's own google-services.json (app/, never
-// committed). Without it the plugin is not applied and the build still
-// works; the app then has no FCM and runs on its MQTT connection alone.
-val hasGoogleServices = file("google-services.json").exists()
-if (hasGoogleServices) apply(plugin = "com.google.gms.google-services")
-
 // Read a value from a Gradle property (-PNAME=...) or the environment; blank = unset.
 fun propOrEnv(name: String): String? =
     (providers.gradleProperty(name).orNull ?: System.getenv(name))?.takeIf { it.isNotBlank() }
+
+// "Peel Dev", opt in: with PEEL_DEV_APP=true (-PPEEL_DEV_APP=true, ~/.gradle/gradle.properties, or the environment) a debug
+// build is com.sphinx.peel.dev, named "Peel Dev", so it installs beside a release Peel instead of replacing it (as iOS's dev Peel
+// does). Unset, nothing changes. README, "Peel Dev beside the release app".
+val devApp = propOrEnv("PEEL_DEV_APP")?.let { it == "1" || it.equals("true", ignoreCase = true) } == true
+
+// Push needs the Firebase project's own google-services.json (app/, never
+// committed). Without it the plugin is not applied and the build still
+// works; the app then has no FCM and runs on its MQTT connection alone.
+// Peel Dev never applies it (the file names com.sphinx.peel, and the plugin
+// fails a build whose app id it has no client for).
+val hasGoogleServices = file("google-services.json").exists() && !devApp
+if (hasGoogleServices) apply(plugin = "com.google.gms.google-services")
 
 val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
 val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
@@ -31,6 +38,8 @@ android {
         targetSdk = 36
         versionCode = propOrEnv("VERSION_CODE")?.toInt() ?: 1
         versionName = propOrEnv("VERSION_NAME") ?: "1.0.0"
+        // The launcher's name (the manifest's android:label): Peel, or "Peel Dev" for an opted-in debug build.
+        manifestPlaceholders["appLabel"] = "@string/app_name"
         // PUSH_REGISTER_WITH_HUB: whether the app registers its FCM token with
         // the hub (the server keeps one token per app id). Release builds: off
         // unless -Ppeel.push.registerWithHub=true. Debug builds: on when
@@ -58,6 +67,10 @@ android {
         val registerOverride = (project.findProperty("peel.push.registerWithHub") as String?)?.toBoolean()
         debug {
             buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", (registerOverride ?: hasGoogleServices).toString())
+            if (devApp) {
+                applicationIdSuffix = ".dev"
+                manifestPlaceholders["appLabel"] = "Peel Dev"
+            }
         }
         release {
             buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", (registerOverride ?: false).toString())

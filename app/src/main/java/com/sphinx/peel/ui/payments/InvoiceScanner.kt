@@ -1,7 +1,10 @@
 package com.sphinx.peel.ui.payments
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -108,6 +111,11 @@ fun CodeScanner(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.55f)).padding(12.dp),
             )
+            if (denied) TextButton(onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                )
+            }) { Text("Open Settings", color = Theme.colors.accent) }
             TextButton(onClick = onCancel) { Text("Cancel", color = Theme.colors.accent) }
         }
     }

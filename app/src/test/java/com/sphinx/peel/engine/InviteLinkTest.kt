@@ -93,4 +93,44 @@ class InviteLinkTest {
         assertNull(Invite.fromJson(null))
         assertNull(Invite.fromJson("{not json"))
     }
+
+    // A worker's invite link (docs/phases/41-worker-onboarding.md): `&a=` names the public app to open.
+    private val worker = "https%3A%2F%2Facme.example.com%2Fpublic%2F%3Fapp%3Dworker"
+
+    @Test
+    fun `a worker's link names the app to open, by a peel-open link's rules`() {
+        val app = InviteLink.appOf("sphinx.chat://?action=i&d=abc&c=def&a=$worker")!!
+        assertEquals("https://acme.example.com/public/?app=worker", app.url)
+        assertEquals("worker", app.app)
+        assertEquals("https://acme.example.com", app.origin)
+        assertEquals("https://acme.example.com", app.seller)
+        assertEquals(PublicAppLink.of("https://acme.example.com/public/?app=worker"), app)
+        // Anywhere in the link, and a plus stays a plus.
+        assertEquals("https://acme.example.com/a+b", InviteLink.appOf("sphinx.chat://?a=https%3A%2F%2Facme.example.com%2Fa+b&action=i&d=abc")!!.url)
+    }
+
+    @Test
+    fun `no a=, or one that fails the rules, opens nothing and leaves the invite as it is`() {
+        assertNull(InviteLink.appOf(link))
+        assertNull(InviteLink.appOf("$link&a="))
+        // Not https (http only on this device's loopback).
+        assertNull(InviteLink.appOf("$link&a=http%3A%2F%2Facme.example.com"))
+        assertNull(InviteLink.appOf("$link&a=javascript%3Aalert(1)"))
+        // A fragment, credentials, two apps.
+        assertNull(InviteLink.appOf("$link&a=https%3A%2F%2Facme.example.com%2F%23x"))
+        assertNull(InviteLink.appOf("$link&a=https%3A%2F%2Fu%3Ap%40acme.example.com"))
+        assertNull(InviteLink.appOf("$link&a=https%3A%2F%2Facme.example.com%2F%3Fapp%3Da%26app%3Db"))
+        // Two a= sections: neither.
+        assertNull(InviteLink.appOf("$link&a=$worker&a=$worker"))
+        // A broken escape.
+        assertNull(InviteLink.appOf("$link&a=https%3A%2F%2Facme.example.com%2"))
+        // Only a section named exactly `a`.
+        assertNull(InviteLink.appOf("$link&aa=$worker"))
+        assertNull(InviteLink.appOf("$link&app=$worker"))
+        // The invite is read from the whole link, `a=` and all, as the core reads it (it passes over `a=`).
+        var seen = ""
+        val withApp = "$link&a=$worker"
+        InviteLink.parse(withApp, InviteReader { seen = it; InviteFields("c0de", "lsp.example:8883", info, null) })
+        assertEquals(withApp, seen)
+    }
 }

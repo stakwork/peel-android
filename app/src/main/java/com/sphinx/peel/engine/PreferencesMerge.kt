@@ -61,7 +61,15 @@ object PreferencesMerge {
         format = { if (it != 0L) "true" else "false" },
     )
 
-    val SPECS = listOf(TIP, CONFIRMATION, PIN_TIMEOUT, BIOMETRIC, AUTO_DOWNLOAD_MEDIA)
+    /// Peel's `peel.chats_recent_view`: "true"/"false" in any case; 1 (Recent) / 0 (Separated)
+    /// here. Default apply policy: always the newest.
+    val CHATS_RECENT_VIEW = Spec(
+        PreferencesFile.CHATS_RECENT_VIEW_KEY,
+        parse = { text -> when (text.lowercase()) { "true" -> 1L; "false" -> 0L; else -> null } },
+        format = { if (it != 0L) "true" else "false" },
+    )
+
+    val SPECS = listOf(TIP, CONFIRMATION, PIN_TIMEOUT, BIOMETRIC, AUTO_DOWNLOAD_MEDIA, CHATS_RECENT_VIEW)
 
     /// This device's value (in the spec's unit) and its date in seconds;
     /// 0 for one never chosen on a device.

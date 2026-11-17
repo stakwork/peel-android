@@ -20,7 +20,8 @@ A stranger's public strut app opens in a WebView from `peel://open?url=<address>
 - **`engine/VisitorSignIn.kt`** (pure, JVM-tested): `SignInKey` (`root`/`domain`), `VisitorChallenge.parse`
   (`strut-visitor.<claims>.<hmac>`, ≤ 2048 units, two base64url parts, claims `host`/`nonce`/`exp` ms/`visitorKey`; the HMAC is
   the seller's to verify, never checked here), `SignInRequest.problems` (the iOS rules and wording, in order; the challenge host
-  is judged against the **loaded origin's host** when given, never the page's claimed seller), `VisitorSignature{key,sig}`,
+  is judged against the **loaded origin's host** when given, never the page's claimed seller), `VisitorSignature{key,sig}`
+  (`{key,sig,address?}` since phase 38: the account's Sphinx address with the root key, iOS #557),
   `VisitorSigner`.
 - **`engine/PublicApp.kt`** (pure, JVM-tested): `Seller` (`isSellerURL`, `host`, `base`, `origin`: https, or http on loopback only),
   `PublicAppLink.parse` (strict `peel://open?url=…`; one `url` item; the address has no fragment, one `app` at most, a seller

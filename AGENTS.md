@@ -85,6 +85,7 @@ sections for code that isn't written yet.
   - `engine/PhonePage.kt` (`PhonePage`, `PublicPage`), `StrutWallet.kt`, `WalletHost.kt` (`WalletScope`, `WalletCaller`, `WalletPush`) — one page host
     (`docs/phases/30-one-page-host.md`): `ui/apps/OrgPageHost.kt` (`OrgPageScreen`) shows an org's page and a stranger's public page alike,
     `ui/apps/OrgWalletBridge.kt` is the app wallet's bridge on both, `ui/page/PhoneWalletSheets.kt` its sheet slot and notice; `Engine.walletHost`.
+  - `engine/PageLog.kt` + `pageLog` in `ui/apps/OrgPageHost.kt`, `engine/PageMedia.kt` (a page's camera/microphone for its own origin) — the page host's logcat lines (tag `PeelPage`, release builds too; an address's origin only, never a path, query, header or token) and the blank-page fixes (`docs/phases/42-page-host-logs.md`).
   - `engine/AgentArtifact.kt` (`AgentHandle`, `AgentArtifact`, `AgentMessages`), `Openings.kt` (`Opening`, `LinkTap`, `AppLinkHandler`) — the ways things open in the page host
     (`docs/phases/31-open-paths.md`): a Hive link tapped in any message (`ui/apps/PageOpening.kt` `LocalLinkOpener`, provided at `MainTabs`, which also holds the one org page), the agent's
     DM and a tribe's deliverable lines (`ui/apps/AgentArtifactLines.kt`), Talk cards.
@@ -103,7 +104,10 @@ sections for code that isn't written yet.
   - `engine/AppsOpenDecision.kt` (Apps list rules), `ui/page/PublicPageRouter.kt` (iOS `PhoneRouter`'s `orgPage`/`publicPage`/`waitingLink`, held by `MainActivity` and passed to `MainTabs`), `ui/talk/TalkOpener.kt` (+ `LocalTalkOpener`: a Talk card's page/link) — page behaviour (`docs/phases/39-page-behaviour.md`).
   - `engine/ControlEnvelope.kt`, `AgentChat.kt` (`ControlEnvelope`, `ControlMessage`, `ControlMessages`, `AgentToolLine`, `AgentJob`, `AgentExtras`, `AgentRequest`, `AgentReads`, `AgentToolTitle`, `ControlPlan`) and `Storage` v15 (`message.isControl`) — the agent's control messages
     (`docs/phases/40-control-messages.md`): a quiet line, a request's one row or nothing, tool rows above a reply, never unread or notified; UI `ui/dashboard/ControlRows.kt`. Proposals are Mac-only and not ported.
-  - Test coverage (`docs/phases/41-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
+  - `InviteLink.appOf` (`engine/Invite.kt`), `OpenedApp` (`engine/PublicApp.kt`), `Storage` v16 `public_app`, `PublicPageRouter(opened)`, `AppsScreen(onOpenPublic)`, `Stadeum.showsApps(openedApps)` (the Chats row),
+    `VisitorSignature.address`/`Engine.signInAddress` — worker onboarding (`docs/phases/41-worker-onboarding.md`): an invite link's `&a=`
+    opens a public app, `sign_in` sends the account's Sphinx address with the root key, opened public apps stay in Apps.
+  - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

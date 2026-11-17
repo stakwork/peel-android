@@ -14,7 +14,10 @@ import com.sphinx.peel.engine.PublicAppLink
 ///  - a link that arrives locked only waits (no page is touched), and opens at the unlock;
 ///  - a lock (or a failed open) closes both pages but keeps a waiting link; a sign-out or wipe ([reset]) drops all three;
 ///  - an org page whose workspace is no longer in use closes ([workspacesChanged], iOS `MainTabs` `.onChange(of: live)`).
-class PublicPageRouter {
+///
+/// [opened] is told of each public page as it comes on screen, whichever way it came (a link, a worker's invite link, the Apps list):
+/// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/41-worker-onboarding.md; Android only).
+class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
     /// The stranger's page on screen, if any (iOS `publicPage`).
     var page by mutableStateOf<PublicAppLink?>(null)
         private set
@@ -32,6 +35,7 @@ class PublicPageRouter {
         if (ready) {
             orgPage = null
             page = link
+            opened(link)
         } else {
             waitingLink = link
         }
@@ -43,6 +47,7 @@ class PublicPageRouter {
         waitingLink = null
         orgPage = null
         page = link
+        opened(link)
     }
 
     /// iOS `router.orgPage = request`.

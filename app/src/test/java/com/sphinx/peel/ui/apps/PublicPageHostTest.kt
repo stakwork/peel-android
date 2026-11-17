@@ -78,6 +78,42 @@ class PublicPageHostTest {
         assertTrue(shadowOf(web).lastAdditionalHttpHeaders.isEmpty())
     }
 
+    /// Reload and Try again with no web view (its process ended and none was made since) make a new one, which loads where the
+    /// page was; they used to do nothing at all (docs/phases/42-page-host-logs.md).
+    @Test fun `reload and try again with no web view make a new one`() {
+        controller.web = null
+        val before = controller.generation
+        controller.reload()
+        assertEquals(before + 1, controller.generation)
+        controller.failed("The page did not load.", page.url)
+        controller.retry()
+        assertEquals(before + 2, controller.generation)
+        assertNull(controller.problem)
+        assertEquals(page.url, controller.initialRequest().url)
+    }
+
+    /// A page whose web view could not be put in its profile goes on with none: its data is wiped as without profiles.
+    @Test fun `a profile that cannot be used is dropped`() {
+        val profiled = OrgPageController(page, OrgDownloads(java.io.File(app.cacheDir, "profile-downloads-test")), CoroutineScope(Dispatchers.Unconfined), "peel_org_test")
+        assertEquals("on", useProfile(profiled) {})
+        assertEquals("peel_org_test", profiled.profile)
+        assertEquals("threw:IllegalStateException", useProfile(profiled) { throw IllegalStateException("in use") })
+        assertNull(profiled.profile)
+        assertEquals("none", useProfile(profiled) { error("not called") })
+        profiled.close()
+    }
+
+    /// A public site's kept profile outlives the page (its visitor stays signed in); a profile made for one open does not.
+    @Test fun `closing a public page keeps its site's profile`() {
+        val kept = OrgPageController(page, OrgDownloads(java.io.File(app.cacheDir, "kept-downloads-test")), CoroutineScope(Dispatchers.Unconfined), page.keptProfile)
+        val before = org.robolectric.shadows.ShadowLog.getLogsForTag(com.sphinx.peel.engine.PageLog.TAG).size
+        kept.close()
+        val once = OrgPageController(page, OrgDownloads(java.io.File(app.cacheDir, "once-downloads-test")), CoroutineScope(Dispatchers.Unconfined), "peel_org_once")
+        once.close()
+        val lines = org.robolectric.shadows.ShadowLog.getLogsForTag(com.sphinx.peel.engine.PageLog.TAG).drop(before).map { it.msg }
+        assertEquals(listOf("close profile=kept gen=0", "close profileDeleted=false gen=0"), lines)
+    }
+
     @Test fun `a failing load shows the failure screen`() {
         client.onPageStarted(web, page.url, null)
         client.onReceivedHttpError(web, Req(page.url), WebResourceResponse("text/html", "utf-8", 404, "Not Found", emptyMap(), null))

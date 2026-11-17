@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,9 +56,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.AppsOpenDecision
 import com.sphinx.peel.engine.HivePeer
+import com.sphinx.peel.engine.OpenedApp
+import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
 import com.sphinx.peel.engine.WorkspaceApp
+import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.toast.LocalToast
 import com.sphinx.peel.ui.toast.ToastType
@@ -72,9 +77,12 @@ import kotlinx.coroutines.coroutineScope
 /// (New conversation, History). Not ported: the Mac-only own-strut apps.
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
+/// Android only: the strangers' public apps opened here ("Apps you opened", `Storage.openedApps`, last opened first), so a worker
+/// opens a Stadeum's worker app again with one tap (docs/phases/41-worker-onboarding.md); long-press removes one, and Disconnect in
+/// You › Connected apps removes an origin's.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifier = Modifier) {
+fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit, onOpenPublic: (PublicAppLink) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -84,6 +92,10 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     var reading by remember { mutableStateOf(false) }
     var unreadIds by remember { mutableStateOf<List<String>>(emptyList()) }
     val openPage = LocalPageOpener.current
+    val publicVersion by storage.publicAppsVersion.collectAsState()
+    // The connection titles move too (a first sign-in names the app).
+    val connectionsVersion by storage.walletConnectionsVersion.collectAsState()
+    val opened = remember(publicVersion, connectionsVersion) { storage.openedApps() }
     var refresh by remember { mutableStateOf(0) }
     var historyHome by remember { mutableStateOf<TalkHome?>(null) }
     val context2 = LocalContext.current
@@ -122,6 +134,8 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
     val shown = WorkspaceApp.byTitle(WorkspaceApp.filter(apps, query, shownSource))
     // Not while searching: the search is of the apps.
     val homes = if (query.isEmpty()) Stadeum.talkHomes else emptyList()
+    // Not with a workspace's source chosen: they are no workspace's.
+    val openedShown = if (shownSource == null) opened.filter { it.matches(query) } else emptyList()
 
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -140,9 +154,12 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                     }
                 }
             }
-            // Off while a read is under way: another would cut it short.
-            IconButton(onClick = { refresh++ }, enabled = live.isNotEmpty() && !reading) {
-                Icon(Icons.Filled.Refresh, "Refresh", tint = Theme.colors.secondaryText)
+            // Off while a read is under way: another would cut it short. None with no workspace to read (a worker's Apps holds
+            // only the public apps opened here, which nothing reads).
+            if (live.isNotEmpty()) {
+                IconButton(onClick = { refresh++ }, enabled = !reading) {
+                    Icon(Icons.Filled.Refresh, "Refresh", tint = Theme.colors.secondaryText)
+                }
             }
         }
         OutlinedTextField(
@@ -163,6 +180,13 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                     }
                     item { Spacer(Modifier.size(12.dp)) }
                 }
+                if (openedShown.isNotEmpty()) {
+                    item { Text("Apps you opened", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
+                    items(openedShown, key = { "opened-${it.link.seller} ${it.link.app ?: ""}" }) { app ->
+                        OpenedAppRow(app, onOpen = { onOpenPublic(app.link) }, onRemove = { storage.forgetPublicApp(app.link) })
+                    }
+                    item { Spacer(Modifier.size(12.dp)) }
+                }
                 items(shown, key = { it.id }) { app ->
                     AppRow(app, several, onOpen = {
                         // iOS opens a page when there is one and otherwise nothing, with no word said.
@@ -179,7 +203,9 @@ fun AppsScreen(onBack: () -> Unit, onTalk: (TalkHome) -> Unit, modifier: Modifie
                 }
             }
             when {
+                openedShown.isNotEmpty() -> {}
                 apps.isNotEmpty() && shown.isEmpty() -> Centered("No results", "Nothing matches \u201c${query.trim()}\u201d.")
+                opened.isNotEmpty() && shown.isEmpty() && query.isNotBlank() -> Centered("No results", "Nothing matches \u201c${query.trim()}\u201d.")
                 apps.isEmpty() && homes.isNotEmpty() -> if (reading) Spinner()
                 apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", AppsOpenDecision.CONNECT_STADEUM)
                 apps.isEmpty() && reading -> Spinner()
@@ -211,6 +237,30 @@ internal fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit,
             // Copies a link to the app: nothing is sent, and it opens only for
             // someone with that workspace connected.
             DropdownMenuItem(text = { Text("Share link") }, onClick = { menu = false; link?.let(onShare) })
+        }
+    }
+}
+
+/// A stranger's public app opened here: a tap opens it again (`PublicPageRouter`), long-press offers to take it off the list.
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun OpenedAppRow(app: OpenedApp, onOpen: () -> Unit, onRemove: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = { menu = true }).padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.Filled.Public, null, Modifier.size(26.dp), tint = Theme.colors.secondaryText)
+            Column(Modifier.weight(1f)) {
+                Text(app.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                Text(app.caption, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+            }
+        }
+        DropdownMenu(menu, { menu = false }) {
+            // Only off this list: a sign-in it holds stays in You › Connected apps.
+            DropdownMenuItem(text = { Text("Remove from Apps") }, onClick = { menu = false; onRemove() })
         }
     }
 }

@@ -54,7 +54,19 @@ class AppsRowsUiTest {
         rule.onNodeWithText("Share link").assertDoesNotExist()
     }
 
-    @Test fun `icons draw for a lucide name, a renamed one and an unknown one`() {
+    @Test fun `icons draw as the real lucide icon, an old name as its new one, an unknown or no name as the grid`() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        // The bundled set is the library's (the old hand-drawn table is gone): a name only the real set has resolves to itself.
+        val set = AppIcons.load(context)
+        assertTrue("the whole lucide set is bundled, not a table of a few", set.names.size > 1000)
+        assertEquals("shield-check", AppIcons.vector("shield-check")!!.name)
+        // "bar-chart-3" is lucide's old name for chart-column.
+        assertEquals("chart-column", AppIcons.vector("bar-chart-3")!!.name)
+        // None or unknown: Apps' grid.
+        assertEquals("layout-grid", AppIcons.vector("no-such-icon")!!.name)
+        assertEquals("layout-grid", AppIcons.vector(null)!!.name)
+        // Each name's vector draws real paths, and the rows around them still show.
+        assertTrue(AppIcons.vector("shield-check")!!.root.size > 0)
         rule.setContent {
             PeelTheme {
                 androidx.compose.foundation.layout.Column {

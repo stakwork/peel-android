@@ -770,12 +770,14 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// Signs a seller's visitor challenge for Sign in with Sphinx (`docs/phases/27-sign-in-with-sphinx.md`): the
     /// challenge's UTF-8 bytes, by the account's own key (child 0, [accountKey]) for [SignInKey.root], or by the
     /// key LUD-05 derives for the challenge's host for [SignInKey.domain]. Never changes the account's keys.
+    /// With the account's key, its Sphinx address too ([signInAddress]); with a domain's, none, so a new identity
+    /// stays unlinkable (iOS PR #557, `docs/phases/41-worker-onboarding.md`).
     suspend fun signVisitor(challenge: VisitorChallenge, key: SignInKey): VisitorSignature {
         val message = challenge.text.toByteArray(Charsets.UTF_8)
         return when (key) {
             SignInKey.root -> {
                 val time = mutex.withLock { clock.next() }
-                VisitorSignature(accountKey, uniffi.sphinxrs.signBytes(seed, 0u, time, network, message))
+                VisitorSignature(accountKey, uniffi.sphinxrs.signBytes(seed, 0u, time, network, message), signInAddress())
             }
             SignInKey.domain -> {
                 val signed = uniffi.sphinxrs.signBytesLud05(bip39Seed, challenge.host, message)
@@ -785,6 +787,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     }
 
     val visitorSigner: VisitorSigner = VisitorSigner { challenge, key -> signVisitor(challenge, key) }
+
+    /// The account's own Sphinx address for a sign-in with its key (iOS `Engine.signInAddress`): the contact info the core
+    /// reported at registering ([Setting.CONTACT_INFO], `<pubkey>_<lsp_pubkey>_<scid>`, the one Peel shows as yours), whose
+    /// pubkey is the key at child 0 ([accountKey]). Null before registering, and null rather than an address of another key.
+    fun signInAddress(): String? = VisitorSignature.address(storage.value(Setting.CONTACT_INFO), accountKey)
 
     /// The app wallet's host (iOS `AppModel.walletReply`/`listenToWallet`): one for the account, so one sheet at a time across
     /// every page, and the notifications its pages listen to come from one place.
@@ -1177,6 +1184,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         PreferencesFile.PIN_TIMEOUT_KEY -> PrefSlot(Setting.PIN_TIMEOUT, Setting.PIN_TIMEOUT_UPDATED_AT)
         PreferencesFile.BIOMETRIC_KEY -> PrefSlot(Setting.BIOMETRIC_ENABLED, Setting.BIOMETRIC_ENABLED_UPDATED_AT)
         PreferencesFile.AUTO_DOWNLOAD_MEDIA_KEY -> PrefSlot(Setting.AUTO_DOWNLOAD_MEDIA, Setting.AUTO_DOWNLOAD_MEDIA_UPDATED_AT)
+        PreferencesFile.CHATS_RECENT_VIEW_KEY -> PrefSlot(Setting.CHATS_RECENT_VIEW, Setting.CHATS_RECENT_VIEW_UPDATED_AT)
         else -> PrefSlot(Setting.PAYMENT_CONFIRMATION_MSAT, Setting.PAYMENT_CONFIRMATION_UPDATED_AT)
     }
 
@@ -1222,6 +1230,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     fun autoDownloadsMedia(): Boolean = storage.value(Setting.AUTO_DOWNLOAD_MEDIA) != "0"
 
     fun setAutoDownloadsMedia(on: Boolean) = setPreference(PreferencesMerge.AUTO_DOWNLOAD_MEDIA, if (on) 1 else 0)
+
+    /// The chat list's Recent view as the account's devices have it (`peel.chats_recent_view`); null until ever chosen or synced.
+    fun chatsRecentView(): Boolean? = storage.value(Setting.CHATS_RECENT_VIEW)?.let { it == "1" }
+
+    fun setChatsRecentView(recent: Boolean) = setPreference(PreferencesMerge.CHATS_RECENT_VIEW, if (recent) 1 else 0)
 
     /// Writes a choice made here: dated strictly after what it replaces, synced right away.
     private fun setPreference(spec: PreferencesMerge.Spec, value: Long) {

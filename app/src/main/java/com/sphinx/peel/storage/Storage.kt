@@ -9,6 +9,8 @@ import com.sphinx.peel.engine.ReadToggle
 import com.sphinx.peel.engine.SendRetry
 import com.sphinx.peel.engine.SendStatus
 import com.sphinx.peel.engine.SignInKey
+import com.sphinx.peel.engine.OpenedApp
+import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.KeysendRecord
 import com.sphinx.peel.engine.OverBudget
 import com.sphinx.peel.engine.OverBudgetException
@@ -80,6 +82,9 @@ data class ContactRow(
 /// just below): the list in [Storage.conversations]'s unread subquery,
 /// minus boosts, which count only on our own message.
 private const val COUNTED_TYPES = "(0, 5, 6, 2, 32)"
+
+/// A stranger's page's connection key starts so (`WalletScope.Origin.key`).
+private const val ORIGIN_KEY_PREFIX = "origin:"
 
 /// One row the dashboard shows: a chat (a ready contact or a discovered
 /// tribe) and its newest message, if it has one yet. The Android shape of
@@ -1842,6 +1847,57 @@ class Storage(context: Context, account: String = "default") {
         walletConnectionsVersionFlow.value += 1
     }
 
+    // MARK: - Public apps opened here (docs/phases/41-worker-onboarding.md)
+
+    private val publicAppsVersionFlow = MutableStateFlow(0)
+
+    /// Moves when a public app is remembered or forgotten, so the Apps list follows.
+    val publicAppsVersion: StateFlow<Int> = publicAppsVersionFlow
+
+    /// Remembers a stranger's public app as opened [at] (unix seconds), so Apps can open it again: one row per app on a seller
+    /// (its `?app=`, none for the seller's own), with the address it was last opened at. Android only: iOS keeps none.
+    fun rememberPublicApp(link: PublicAppLink, at: Long = System.currentTimeMillis() / 1000) {
+        val values = ContentValues().apply {
+            put("seller", link.seller)
+            put("app", link.app ?: "")
+            put("url", link.url)
+            put("origin", link.origin)
+            put("openedAt", at)
+        }
+        helper.writableDatabase.insertWithOnConflict("public_app", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        publicAppsVersionFlow.value += 1
+    }
+
+    /// The public apps opened here, last opened first, each with the title its origin's connection holds, if it has one (the app's
+    /// own claim, cleaned when it was saved). An address today's rules refuse is left out.
+    fun openedApps(): List<OpenedApp> =
+        helper.readableDatabase.rawQuery(
+            "SELECT p.url, p.openedAt, w.title FROM public_app p LEFT JOIN wallet_connection w ON w.key = 'origin:' || p.origin " +
+                "ORDER BY p.openedAt DESC, p.url ASC",
+            null,
+        ).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    val link = PublicAppLink.of(c.getString(0)) ?: continue
+                    add(OpenedApp(link, c.getLong(1), if (c.isNull(2)) null else c.getString(2)))
+                }
+            }
+        }
+
+    /// Takes one app off the Apps list. Its connection, if any, stays (You › Connected apps).
+    fun forgetPublicApp(link: PublicAppLink) {
+        helper.writableDatabase.delete("public_app", "seller = ? AND app = ?", arrayOf(link.seller, link.app ?: ""))
+        publicAppsVersionFlow.value += 1
+    }
+
+    /// Disconnect: every app at a stranger's origin (an `origin:<origin>` connection key) leaves the Apps list with its connection.
+    /// Nothing for any other key.
+    fun forgetPublicAppsOf(connectionKey: String) {
+        if (!connectionKey.startsWith(ORIGIN_KEY_PREFIX)) return
+        helper.writableDatabase.delete("public_app", "origin = ?", arrayOf(connectionKey.removePrefix(ORIGIN_KEY_PREFIX)))
+        publicAppsVersionFlow.value += 1
+    }
+
     /// The spending limit per period, lowered or raised; null (or nothing above 0) asks for every payment (iOS `setSpendingLimit`). False when there is no such connection.
     fun setSpendingLimit(key: String, msat: Long?): Boolean = updateWalletConnection(key) { it.copy(maxAmountMsat = msat?.takeIf { m -> m > 0 }) }
 
@@ -2069,6 +2125,11 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
+    companion object {
+        /// The schema version the app's database is at (a seam: tests assert it rather than a number of their own).
+        const val VERSION = 16
+    }
+
     fun deleteAccount() {
         helper.close()
         appContext.deleteDatabase(dbName)
@@ -2098,6 +2159,7 @@ class Storage(context: Context, account: String = "default") {
             v13(db)
             v14(db)
             v15(db)
+            v16(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -2118,6 +2180,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 13) v13(db)
             if (oldVersion < 14) v14(db)
             if (oldVersion < 15) v15(db)
+            if (oldVersion < 16) v16(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -2430,8 +2493,26 @@ class Storage(context: Context, account: String = "default") {
             for (id in ids) db.execSQL("UPDATE message SET isControl = 1 WHERE id = ?", arrayOf<Any>(id))
         }
 
+        // `public_app` (Android only; docs/phases/41-worker-onboarding.md): the stranger's public apps opened here, kept for the Apps
+        // list. One row per app on a seller (`app` '' for none); the address it was last opened at, its origin (Disconnect forgets an
+        // origin's apps with its connection) and when, unix seconds.
+        private fun v16(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE public_app (
+                    seller TEXT NOT NULL,
+                    app TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    openedAt INTEGER NOT NULL,
+                    PRIMARY KEY (seller, app)
+                )
+                """.trimIndent(),
+            )
+        }
+
         companion object {
-            const val VERSION = 15
+            const val VERSION = Storage.VERSION
         }
     }
 }

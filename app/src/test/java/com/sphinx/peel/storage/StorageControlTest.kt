@@ -72,7 +72,7 @@ class StorageControlTest {
         val check = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY)
         val control = check.rawQuery("SELECT id FROM message WHERE isControl = 1 ORDER BY id", null).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
         assertEquals(listOf(2L, 3L, 4L), control)
-        assertEquals(15, check.version)
+        assertEquals(16, check.version) // and v16 (docs/phases/41-worker-onboarding.md) after it
         check.close()
     }
 }

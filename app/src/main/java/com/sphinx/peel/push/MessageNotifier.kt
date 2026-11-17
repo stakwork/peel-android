@@ -35,29 +35,32 @@ class MessageNotifier(private val context: Context, private val storage: Storage
         for (row in rows) notify(row)
     }
 
-    private fun notify(row: MessageRow) {
-        if (row.fromMe || !fresh(row.timestamp)) return
-        // A control message in a direct message is a line, never news (iOS `NotificationPolicy`: `isControl != true`).
-        if (ControlMessages.control(row.type, row.deleted, row.body) != null && storage.contact(row.chat)?.isTribe != true) return
-        val index = row.serverIndex
-        if (index != null && index <= (storage.lastRead(row.chat) ?: -1L)) return
-        if (storage.muteLevel(row.chat) != 0) return
-        val name = storage.contact(row.chat)?.alias?.takeIf { it.isNotBlank() } ?: "Peel"
-        val content = row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
-        when (row.type) {
-            0 -> if (content.isNotBlank()) Notifications.showMessage(context, row.chat, name, content)
-            ATTACHMENT_MESSAGE_TYPE ->
-                Notifications.showMessage(context, row.chat, name, content.ifBlank { "Sent an attachment" })
-            2 -> Notifications.showPayment(context, name, "Requested sats", row.chat)
-            5 -> Notifications.showPayment(context, name, "Sent you sats", row.chat)
-            CALL_MESSAGE_TYPE -> Notifications.showIncomingCall(context, row.chat, name)
-        }
-    }
+    private fun notify(row: MessageRow) = deliver(context, storage, row)
+}
 
-    /// A timestamp in milliseconds or seconds, within the last two minutes.
-    private fun fresh(timestamp: Long?): Boolean {
-        val ts = timestamp ?: return false
-        val ms = if (ts < 100_000_000_000L) ts * 1000 else ts
-        return System.currentTimeMillis() - ms in -60_000L..120_000L
+/// What one incoming row notifies (a seam for tests: the decision needs no engine).
+internal fun deliver(context: Context, storage: Storage, row: MessageRow, nowMs: Long = System.currentTimeMillis()) {
+    if (row.fromMe || !fresh(row.timestamp, nowMs)) return
+    // A control message in a direct message is a line, never news (iOS `NotificationPolicy`: `isControl != true`).
+    if (ControlMessages.control(row.type, row.deleted, row.body) != null && storage.contact(row.chat)?.isTribe != true) return
+    val index = row.serverIndex
+    if (index != null && index <= (storage.lastRead(row.chat) ?: -1L)) return
+    if (storage.muteLevel(row.chat) != 0) return
+    val name = storage.contact(row.chat)?.alias?.takeIf { it.isNotBlank() } ?: "Peel"
+    val content = row.body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
+    when (row.type) {
+        0 -> if (content.isNotBlank()) Notifications.showMessage(context, row.chat, name, content)
+        ATTACHMENT_MESSAGE_TYPE ->
+            Notifications.showMessage(context, row.chat, name, content.ifBlank { "Sent an attachment" })
+        2 -> Notifications.showPayment(context, name, "Requested sats", row.chat)
+        5 -> Notifications.showPayment(context, name, "Sent you sats", row.chat)
+        CALL_MESSAGE_TYPE -> Notifications.showIncomingCall(context, row.chat, name)
     }
+}
+
+/// A timestamp in milliseconds or seconds, within the last two minutes.
+private fun fresh(timestamp: Long?, nowMs: Long): Boolean {
+    val ts = timestamp ?: return false
+    val ms = if (ts < 100_000_000_000L) ts * 1000 else ts
+    return nowMs - ms in -60_000L..120_000L
 }

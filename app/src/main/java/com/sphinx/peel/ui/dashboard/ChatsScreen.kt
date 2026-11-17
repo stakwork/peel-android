@@ -126,8 +126,21 @@ private fun ChatListBody(
     var directOpen by remember { mutableStateOf(true) }
     var allTribes by remember { mutableStateOf(false) }
     var allDirect by remember { mutableStateOf(false) }
+    // Separated / Recent and "Show all" in Recent: PeelCore's `sidebarLayout` (`combinedView`, `allRecent`), kept on the device.
+    var layout by remember { mutableStateOf(SidebarLayout.decode(storage.value(Setting.SIDEBAR_LAYOUT))) }
+    fun changeLayout(next: SidebarLayout) {
+        layout = next
+        storage.apply(Storage.Commit(settings = mapOf(Setting.SIDEBAR_LAYOUT to SidebarLayout.encode(next, storage.value(Setting.SIDEBAR_LAYOUT)))))
+    }
+    // Separated / Recent is the synced `peel.chats_recent_view`; until it was ever chosen, the layout's own `combinedView` stands.
+    var recentView by remember { mutableStateOf(engine.chatsRecentView() ?: layout.combinedView) }
     val restoreProgress by engine.restoreProgress.collectAsState()
     val liveCalls = rememberLiveCallCounts(engine, storage)
+    // A stranger's public app opened here (a worker's, from a Stadeum's invite link) shows Apps too: read again as one is kept or forgotten.
+    val publicApps by storage.publicAppsVersion.collectAsState()
+    var openedApps by remember { mutableStateOf(false) }
+    LaunchedEffect(publicApps) { openedApps = withContext(Dispatchers.Default) { storage.openedApps().isNotEmpty() } }
+    val showsApps = Stadeum.showsApps(openedApps)
 
     // No reactive query layer yet (no Room, no Flow-backed DB) to push a
     // row the moment a live message lands — re-reads on every restore
@@ -139,6 +152,7 @@ private fun ChatListBody(
             storage.unreadMentions(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You")
         }
         unreadThreads = withContext(Dispatchers.Default) { storage.unreadThreadCount().toLong() }
+        recentView = withContext(Dispatchers.Default) { engine.chatsRecentView() ?: layout.combinedView }
     }
     // `refresh`: a row action (read, unread, mute) just changed something.
     LaunchedEffect(restoreProgress, refresh) { reload() }
@@ -161,16 +175,18 @@ private fun ChatListBody(
     } else {
         conversations.filter { it.chat != engine.agentPubkey }
     }
-    val sections = remember(sectionable, tribesOpen, directOpen, allTribes, allDirect, query) {
-        ChatSections.of(sectionable, tribesOpen, directOpen, allTribes, allDirect, query)
+    val sections = remember(sectionable, tribesOpen, directOpen, allTribes, allDirect, query, layout.allRecent) {
+        ChatSections.of(sectionable, tribesOpen, directOpen, allTribes, allDirect, query, layout.allRecent)
     }
     val searching = sections.searching
+    val recent = recentView && !searching
     val noMatches = searching && sections.unread.isEmpty() && sections.tribes.isEmpty() &&
         sections.direct.isEmpty() && agentConversation == null
 
     Box(modifier) {
         if (conversations.isEmpty() && !searching) {
-            EmptyChats(restoring = restoreProgress.restoring, onOpenRoute = onOpenRoute)
+            // Only for a kept public app here: a workspace's Apps row stays where iOS has it, in the list.
+            EmptyChats(restoring = restoreProgress.restoring, showsApps = openedApps, onOpenRoute = onOpenRoute)
         } else if (noMatches) {
             NoSearchResults(query)
         } else {
@@ -179,9 +195,10 @@ private fun ChatListBody(
                 // replies, Mentions the unread mentions; Apps stays 0 and
                 // shows only with a live Stadeum workspace or a development
                 // talk home, as on iOS (`Stadeum` is observable: the row
-                // appears as soon as You › Stadeum pairs).
+                // appears as soon as You › Stadeum pairs), or (Android) with
+                // a public app opened here.
                 if (!searching) {
-                    if (Stadeum.showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
+                    if (showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
                     item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }
@@ -202,9 +219,42 @@ private fun ChatListBody(
                     item { Spacer(Modifier.height(16.dp)) }
                 }
 
+                if (!searching) {
+                    item(key = "layout-switch") {
+                        LayoutSwitch(recent = recentView) {
+                            recentView = it
+                            engine.setChatsRecentView(it)
+                        }
+                    }
+                }
+
+                if (recent) {
+                    // One list, newest first, with every action after it (iOS's Recent view).
+                    item { SectionHeader("Recent", expanded = true, onToggle = null) }
+                    agentConversation?.let { agent ->
+                        item(key = "agent") {
+                            ChatRowActions(agent, engine, onChanged = { refresh++ }) { onLongClick ->
+                                ChatRow(agent, onLongClick = onLongClick, isAgent = true) { onOpenChat(engine.agentPubkey) }
+                            }
+                        }
+                    }
+                    items(sections.combined, key = { "recent-${it.chat}" }) { conversation ->
+                        ChatRowActions(conversation, engine, onChanged = { refresh++ }) { onLongClick ->
+                            ChatRow(conversation, onCall = (liveCalls[conversation.chat] ?: 0) > 0, onLongClick = onLongClick) { onOpenChat(conversation.chat) }
+                        }
+                    }
+                    sections.allCombinedCount?.let { count ->
+                        item { ShowAllRow(count = count, noun = "chats", expanded = layout.allRecent) { changeLayout(layout.copy(allRecent = !layout.allRecent)) } }
+                    }
+                    item { ActionRow("Join a tribe") { onOpenRoute(DashboardRoute.JOIN_TRIBE) } }
+                    item { ActionRow("Create a tribe") { onOpenRoute(DashboardRoute.CREATE_TRIBE) } }
+                    item { ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
+                    item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) } }
+                }
+
                 // Searching shows every matching section, no chevron, no
                 // actions — a section with no matches doesn't show at all.
-                if (!searching || sections.tribes.isNotEmpty()) {
+                if (!recent && (!searching || sections.tribes.isNotEmpty())) {
                     val toggleTribes: (() -> Unit)? = if (searching) null else ({ tribesOpen = !tribesOpen })
                     item { SectionHeader("Tribes", expanded = tribesOpen || searching, onToggle = toggleTribes) }
                     if (tribesOpen || searching) {
@@ -224,7 +274,7 @@ private fun ChatListBody(
                     item { Spacer(Modifier.height(16.dp)) }
                 }
 
-                if (!searching || sections.direct.isNotEmpty() || agentConversation != null) {
+                if (!recent && (!searching || sections.direct.isNotEmpty() || agentConversation != null)) {
                     val toggleDirect: (() -> Unit)? = if (searching) null else ({ directOpen = !directOpen })
                     item { SectionHeader("Direct messages", expanded = directOpen || searching, onToggle = toggleDirect) }
                     if (directOpen || searching) {
@@ -251,6 +301,22 @@ private fun ChatListBody(
                 }
 
                 item { Spacer(Modifier.height(24.dp)) }
+            }
+        }
+    }
+}
+
+/// The Separated / Recent switch (iPhone `ChatsTab`'s segmented picker).
+@Composable
+private fun LayoutSwitch(recent: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("Separated" to false, "Recent" to true).forEach { (label, value) ->
+            val selected = recent == value
+            val modifier = Modifier.weight(1f)
+            if (selected) {
+                androidx.compose.material3.Button(onClick = { onChange(value) }, modifier = modifier) { Text(label) }
+            } else {
+                androidx.compose.material3.OutlinedButton(onClick = { onChange(value) }, modifier = modifier) { Text(label) }
             }
         }
     }
@@ -355,7 +421,7 @@ private fun EmptySearch() {
 }
 
 @Composable
-private fun EmptyChats(restoring: Boolean, onOpenRoute: (DashboardRoute) -> Unit) {
+private fun EmptyChats(restoring: Boolean, showsApps: Boolean, onOpenRoute: (DashboardRoute) -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -381,6 +447,11 @@ private fun EmptyChats(restoring: Boolean, onOpenRoute: (DashboardRoute) -> Unit
             Spacer(Modifier.height(16.dp))
             ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) }
             ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) }
+        }
+        // A new worker has no chats yet but has the Stadeum's worker app: Apps must not hide behind a chat either.
+        if (showsApps) {
+            Spacer(Modifier.height(16.dp))
+            NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) }
         }
     }
 }
