@@ -5,7 +5,9 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.app.Activity
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.graphics.Bitmap
 import android.os.Message
 import android.os.SystemClock
@@ -17,6 +19,7 @@ import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -133,6 +136,10 @@ class OrgPageController(
     /// Asks the system for the permissions the app does not hold yet (the page screen's launcher: the system's own prompt), then
     /// tells `done` which the app holds. Until the screen sets it, nothing is held, so nothing is granted.
     var askSystem: (permissions: List<String>, done: (holds: (String) -> Boolean) -> Unit) -> Unit = { _, done -> done { false } }
+    /// Shows the system's file picker for a page's `<input type=file>` (the page screen's launcher) and tells `done` what the person
+    /// picked, null when they picked nothing; false when it cannot be shown, and then `done` is never called. None until the screen
+    /// sets it.
+    var chooseFiles: (params: WebChromeClient.FileChooserParams, done: (Array<Uri>?) -> Unit) -> Boolean = { _, _ -> false }
 
     class SharedFile(val file: File, val mimeType: String?)
 
@@ -387,6 +394,17 @@ internal class OrgPageChromeClient(
         }
     }
 
+    /// A page's `<input type=file>` ("or choose one from this device"): the system's file picker, as WebKit shows its own on iOS. The
+    /// page gets only what the person picks there; WebView is told exactly once, null when they picked nothing.
+    override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+        val shown = controller.chooseFiles(params) { picked ->
+            pageLog("files picked=${picked?.size ?: 0} gen=${controller.generation}")
+            callback.onReceiveValue(picked)
+        }
+        pageLog("fileChooser accept=${params.acceptTypes?.filter { it.isNotBlank() }?.joinToString(",")?.ifEmpty { null } ?: "-"} multiple=${params.mode == FileChooserParams.MODE_OPEN_MULTIPLE} shown=$shown")
+        return shown
+    }
+
     /// The page's console, redacted ([PageLog.console]); true, so the WebView does not also log it as it was written.
     override fun onConsoleMessage(message: ConsoleMessage): Boolean {
         pageLog(PageLog.console(message.messageLevel().name, message.message(), message.sourceId(), message.lineNumber()))
@@ -425,6 +443,14 @@ internal class OrgPageChromeClient(
             is OrgNavigation.Window.Outside -> openOutside(action.url)
         }
     }
+}
+
+/// What the system's file picker returned: every file picked (several come as clip data), or null for none or a cancel.
+internal fun pickedFiles(resultCode: Int, data: Intent?): Array<Uri>? {
+    if (resultCode != Activity.RESULT_OK || data == null) return null
+    val clip = data.clipData
+    val picked = if (clip != null && clip.itemCount > 0) List(clip.itemCount) { clip.getItemAt(it).uri } else listOfNotNull(data.data)
+    return picked.filterNotNull().toTypedArray().takeIf { it.isNotEmpty() }
 }
 
 /// Where downloads wait: each in a folder of its own (iOS `Peel Org Downloads`); shared through `res/xml/file_paths.xml`.
@@ -553,6 +579,26 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
         val answered = waiting.toList()
         waiting.clear()
         answered.forEach { it(holds) }
+    }
+    // The system's file picker for a page's `<input type=file>` ([OrgPageChromeClient.onShowFileChooser]); one at a time.
+    val choosing = remember(controller) { arrayOfNulls<(Array<Uri>?) -> Unit>(1) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val done = choosing[0]
+        choosing[0] = null
+        done?.invoke(pickedFiles(result.resultCode, result.data))
+    }
+    DisposableEffect(controller, filePicker) {
+        controller.chooseFiles = { params, done ->
+            choosing[0]?.invoke(null)
+            choosing[0] = null
+            val intent = runCatching { params.createIntent() }.getOrNull()
+            intent != null && runCatching { choosing[0] = done; filePicker.launch(intent) }.onFailure { choosing[0] = null }.isSuccess
+        }
+        onDispose {
+            choosing[0]?.invoke(null)
+            choosing[0] = null
+            controller.chooseFiles = { _, _ -> false }
+        }
     }
     DisposableEffect(controller, systemPrompt) {
         controller.askSystem = { permissions, done ->

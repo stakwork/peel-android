@@ -3,7 +3,12 @@ package com.sphinx.peel.ui.apps
 import android.app.Application
 import android.net.Uri
 import android.os.Message
+import android.app.Activity
+import android.content.ClipData
+import android.content.Intent
 import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -263,6 +268,46 @@ class OrgPageHostTest {
         assertEquals(1, poster.width)
         assertEquals(1, poster.height)
         assertEquals(0, android.graphics.Color.alpha(poster.getPixel(0, 0)))
+    }
+
+    private class Params(private val accept: Array<String>, private val multiple: Boolean = false) : WebChromeClient.FileChooserParams() {
+        override fun getMode() = if (multiple) MODE_OPEN_MULTIPLE else MODE_OPEN
+        override fun getAcceptTypes() = accept
+        override fun isCaptureEnabled() = false
+        override fun getTitle(): CharSequence? = null
+        override fun getFilenameHint(): String? = null
+        override fun createIntent() = Intent(Intent.ACTION_GET_CONTENT).setType(accept.firstOrNull() ?: "*/*")
+    }
+
+    /// A page's `<input type=file>` ("or choose one from this device"): the system's picker, and the page gets what was picked,
+    /// told once; nothing shown and nothing told until the screen can show it (docs/phases/42-page-host-logs.md).
+    @Test fun `a file input shows the system's picker and the page gets what was picked`() {
+        val told = mutableListOf<List<Uri>?>()
+        val callback = ValueCallback<Array<Uri>> { told += it?.toList() }
+        assertFalse(chrome.onShowFileChooser(web, callback, Params(arrayOf("image/*"))))
+        assertEquals(emptyList<List<Uri>?>(), told)
+
+        val photo = Uri.parse("content://media/external/images/1")
+        var shownFor: WebChromeClient.FileChooserParams? = null
+        controller.chooseFiles = { params, done -> shownFor = params; done(arrayOf(photo)); true }
+        assertTrue(chrome.onShowFileChooser(web, callback, Params(arrayOf("image/*"))))
+        assertEquals(listOf("image/*"), shownFor!!.acceptTypes.toList())
+        assertEquals(listOf(listOf(photo)), told)
+
+        controller.chooseFiles = { _, done -> done(null); true }
+        chrome.onShowFileChooser(web, callback, Params(arrayOf("image/*")))
+        assertEquals(listOf(listOf(photo), null), told)
+    }
+
+    @Test fun `what the picker returned is every file picked, or none`() {
+        val a = Uri.parse("content://docs/a")
+        val b = Uri.parse("content://docs/b")
+        assertEquals(listOf(a), pickedFiles(Activity.RESULT_OK, Intent().setData(a))!!.toList())
+        val two = Intent().apply { clipData = ClipData.newRawUri(null, a).apply { addItem(ClipData.Item(b)) } }
+        assertEquals(listOf(a, b), pickedFiles(Activity.RESULT_OK, two)!!.toList())
+        assertNull(pickedFiles(Activity.RESULT_CANCELED, Intent().setData(a)))
+        assertNull(pickedFiles(Activity.RESULT_OK, null))
+        assertNull(pickedFiles(Activity.RESULT_OK, Intent()))
     }
 
     @Test fun `a new window goes here, out, or nowhere`() {

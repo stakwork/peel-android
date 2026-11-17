@@ -48,6 +48,14 @@ is the only one, as on iOS. Each request is logged (`permission <origin> asked= 
 `granted=VIDEO_CAPTURE`, and the task's camera opened. Before the camera's first frame the sheet showed WebView's default video poster,
 a big grey play button stretched across the screen; `OrgPageChromeClient.getDefaultVideoPoster` is now a transparent pixel.
 
+## A page's file input
+The same task offers "or choose one from this device", an `<input type=file>`. WebKit shows its own picker on iOS; Android's
+WebView shows nothing unless the app does. `OrgPageChromeClient.onShowFileChooser` hands it to the page screen
+(`OrgPageController.chooseFiles`), which launches the system's picker from `FileChooserParams.createIntent()`, so the accept types
+and multiple selection are the page's. The page gets what the person picked (`pickedFiles`: one URI or several as clip data), or
+null on a cancel, exactly once; one picker at a time; a page that closes tells a waiting input null. Logged as
+`fileChooser accept= multiple= shown=` and `files picked=<n>` (counts, never names).
+
 ## Which paths give "a web view, nothing painted, no failure screen, Reload does nothing" (read from the code, before the phone)
 From `ui/apps/OrgPageHost.kt` as it was:
 1. **The page left with no web view** (`controller.web == null`). `processGone()` destroys the web view and removes it from its
@@ -97,8 +105,6 @@ From `ui/apps/OrgPageHost.kt` as it was:
   - The wallet bridge's install is caught. A throw is a page without the wallet (its existing notice), not a crash.
 
 ## Open
-- A page's `<input type=file>` ("or choose one from this device" in the worker app's photo task) needs `onShowFileChooser`, which
-  the page host does not have yet: it does nothing on Android (WebKit handles it on iOS).
 - Release 0.1.6 has both bugs. A release with this phase is what fixes Peel for workers; that release is not cut here.
 - The paths fixed from the code alone (a stale web view's gone renderer, Reload with no web view, a throwing profile) were not
   seen on the phone.
@@ -117,7 +123,8 @@ Robolectric:
   http, another port, an opaque `null`, and any other resource get nothing; each is granted only with its system permission.
 - `OrgPageHostTest`: the page's own origin is granted the camera after the system's permission and denied when the person says no;
   another origin, a sandboxed frame or another resource is denied without asking the system; a video with no poster gets a
-  transparent pixel.
+  transparent pixel; a file input shows nothing until the screen can, then gets what was picked, or null; `pickedFiles` reads one
+  file, several, a cancel and no data.
 - `OrgPageScreenTest`: the real `OrgPageScreen` gives its WebView MATCH_PARENT, and a page opened over another gets a web view of
   its own. Each test fails without its fix (checked).
   - The page-switch test runs its own `Recomposer` and `BroadcastFrameClock`. After an earlier test has destroyed its activity,
