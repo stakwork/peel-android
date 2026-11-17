@@ -103,7 +103,7 @@ sections for code that isn't written yet.
   - `engine/AppsOpenDecision.kt` (Apps list rules), `ui/page/PublicPageRouter.kt` (iOS `PhoneRouter`'s `orgPage`/`publicPage`/`waitingLink`, held by `MainActivity` and passed to `MainTabs`), `ui/talk/TalkOpener.kt` (+ `LocalTalkOpener`: a Talk card's page/link) — page behaviour (`docs/phases/39-page-behaviour.md`).
   - `engine/ControlEnvelope.kt`, `AgentChat.kt` (`ControlEnvelope`, `ControlMessage`, `ControlMessages`, `AgentToolLine`, `AgentJob`, `AgentExtras`, `AgentRequest`, `AgentReads`, `AgentToolTitle`, `ControlPlan`) and `Storage` v15 (`message.isControl`) — the agent's control messages
     (`docs/phases/40-control-messages.md`): a quiet line, a request's one row or nothing, tool rows above a reply, never unread or notified; UI `ui/dashboard/ControlRows.kt`. Proposals are Mac-only and not ported.
-  - `InviteLink.appOf` (`engine/Invite.kt`), `OpenedApp` (`engine/PublicApp.kt`), `Storage` v16 `public_app`, `PublicPageRouter(opened)`, `AppsScreen(onOpenPublic)`,
+  - `InviteLink.appOf` (`engine/Invite.kt`), `OpenedApp` (`engine/PublicApp.kt`), `Storage` v16 `public_app`, `PublicPageRouter(opened)`, `AppsScreen(onOpenPublic)`, `Stadeum.showsApps(openedApps)` (the Chats row),
     `VisitorSignature.address`/`Engine.signInAddress` — worker onboarding (`docs/phases/41-worker-onboarding.md`): an invite link's `&a=`
     opens a public app, `sign_in` sends the account's Sphinx address with the root key, opened public apps stay in Apps.
   - `ui/` — Compose screens and the pieces they share.

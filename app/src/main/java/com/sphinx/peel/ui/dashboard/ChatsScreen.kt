@@ -128,6 +128,11 @@ private fun ChatListBody(
     var allDirect by remember { mutableStateOf(false) }
     val restoreProgress by engine.restoreProgress.collectAsState()
     val liveCalls = rememberLiveCallCounts(engine, storage)
+    // A stranger's public app opened here (a worker's, from a Stadeum's invite link) shows Apps too: read again as one is kept or forgotten.
+    val publicApps by storage.publicAppsVersion.collectAsState()
+    var openedApps by remember { mutableStateOf(false) }
+    LaunchedEffect(publicApps) { openedApps = withContext(Dispatchers.Default) { storage.openedApps().isNotEmpty() } }
+    val showsApps = Stadeum.showsApps(openedApps)
 
     // No reactive query layer yet (no Room, no Flow-backed DB) to push a
     // row the moment a live message lands — re-reads on every restore
@@ -170,7 +175,8 @@ private fun ChatListBody(
 
     Box(modifier) {
         if (conversations.isEmpty() && !searching) {
-            EmptyChats(restoring = restoreProgress.restoring, onOpenRoute = onOpenRoute)
+            // Only for a kept public app here: a workspace's Apps row stays where iOS has it, in the list.
+            EmptyChats(restoring = restoreProgress.restoring, showsApps = openedApps, onOpenRoute = onOpenRoute)
         } else if (noMatches) {
             NoSearchResults(query)
         } else {
@@ -179,9 +185,10 @@ private fun ChatListBody(
                 // replies, Mentions the unread mentions; Apps stays 0 and
                 // shows only with a live Stadeum workspace or a development
                 // talk home, as on iOS (`Stadeum` is observable: the row
-                // appears as soon as You › Stadeum pairs).
+                // appears as soon as You › Stadeum pairs), or (Android) with
+                // a public app opened here.
                 if (!searching) {
-                    if (Stadeum.showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
+                    if (showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
                     item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }
@@ -355,7 +362,7 @@ private fun EmptySearch() {
 }
 
 @Composable
-private fun EmptyChats(restoring: Boolean, onOpenRoute: (DashboardRoute) -> Unit) {
+private fun EmptyChats(restoring: Boolean, showsApps: Boolean, onOpenRoute: (DashboardRoute) -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -381,6 +388,11 @@ private fun EmptyChats(restoring: Boolean, onOpenRoute: (DashboardRoute) -> Unit
             Spacer(Modifier.height(16.dp))
             ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) }
             ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) }
+        }
+        // A new worker has no chats yet but has the Stadeum's worker app: Apps must not hide behind a chat either.
+        if (showsApps) {
+            Spacer(Modifier.height(16.dp))
+            NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) }
         }
     }
 }

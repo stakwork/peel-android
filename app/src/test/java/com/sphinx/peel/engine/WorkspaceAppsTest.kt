@@ -1,6 +1,7 @@
 package com.sphinx.peel.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -65,5 +66,14 @@ class WorkspaceAppsTest {
         assertTrue(!Stadeum.showsApps(emptyList(), null))
         assertTrue(Stadeum.showsApps(listOf(HivePeer("w1", "https://w1.example.com", "t", null)), null))
         assertTrue(Stadeum.showsApps(emptyList(), TalkHome(TalkHome.DEVELOPMENT, "Dev", "https://dev.example.com", "t")))
+    }
+
+    // Android: a public app opened here (a worker's, docs/phases/41-worker-onboarding.md) shows Apps with no workspace; the workspace
+    // gate is unchanged.
+    @Test
+    fun `gate follows a public app opened here with no workspace`() {
+        assertTrue(Stadeum.showsApps(emptyList(), null, openedApps = true))
+        assertFalse(Stadeum.showsApps(emptyList(), null, openedApps = false))
+        assertTrue(Stadeum.showsApps(listOf(HivePeer("w1", "https://w1.example.com", "t", null)), null, openedApps = false))
     }
 }
