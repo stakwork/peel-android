@@ -36,6 +36,17 @@ With Peel Dev (debuggable, so its WebView could be inspected over adb with the D
    the controller too. The same applied to an org page opened over another one in `MainTabs`.
 The per-page profile was not a cause: `MULTI_PROFILE` works on this WebView (`profile=on`, and the page loads).
 
+## The camera (strut's camera sheet), found next
+Once the worker app drew and the worker signed in, its first task ("Photograph a legal filing") said "Camera: Permission denied".
+The page host had no `onPermissionRequest`, so WebView denied every request, and Peel did not hold `CAMERA` yet. Ported from iOS
+(`OrgPageSheet`'s `requestMediaCapturePermissionFor`): `engine/PageMedia.kt` (pure) grants the camera and the microphone to the
+origin Peel loaded and nothing else. An app's frame is sandboxed with an opaque origin, so it never matches. Android's request
+names no frame (iOS also checks it is the main frame), so a same-origin frame of strut's own would match. Strut's kit draws the
+camera in its own page. `OrgPageChromeClient.onPermissionRequest` asks the system for `CAMERA`/`RECORD_AUDIO` only when the app
+lacks it, through the page screen's `RequestMultiplePermissions` launcher (`OrgPageController.askSystem`). The system's own prompt
+is the only one, as on iOS. Each request is logged (`permission <origin> asked= granted=`). On the phone: allowed at the prompt,
+`granted=VIDEO_CAPTURE`, and the task's camera opened.
+
 ## Which paths give "a web view, nothing painted, no failure screen, Reload does nothing" (read from the code, before the phone)
 From `ui/apps/OrgPageHost.kt` as it was:
 1. **The page left with no web view** (`controller.web == null`). `processGone()` destroys the web view and removes it from its
@@ -85,6 +96,8 @@ From `ui/apps/OrgPageHost.kt` as it was:
   - The wallet bridge's install is caught. A throw is a page without the wallet (its existing notice), not a crash.
 
 ## Open
+- A page's `<input type=file>` ("or choose one from this device" in the worker app's photo task) needs `onShowFileChooser`, which
+  the page host does not have yet: it does nothing on Android (WebKit handles it on iOS).
 - Release 0.1.6 has both bugs. A release with this phase is what fixes Peel for workers; that release is not cut here.
 - The paths fixed from the code alone (a stale web view's gone renderer, Reload with no web view, a throwing profile) were not
   seen on the phone.
@@ -99,6 +112,10 @@ Robolectric:
 - `PublicPageHostTest`: Reload and Try again with no web view make a new one; a profile that throws is dropped.
 - `PageHostLogTest`: the real `OrgPageScreen` logs `webView`, the first `loadUrl` and `close` for an org page and a public page,
   with no bearer, app or path in any line.
+- `PageMediaTest` (JVM): the page's own origin (a trailing slash or `:443` alike) gets the camera and microphone; another origin,
+  http, another port, an opaque `null`, and any other resource get nothing; each is granted only with its system permission.
+- `OrgPageHostTest`: the page's own origin is granted the camera after the system's permission and denied when the person says no;
+  another origin, a sandboxed frame or another resource is denied without asking the system.
 - `OrgPageScreenTest`: the real `OrgPageScreen` gives its WebView MATCH_PARENT, and a page opened over another gets a web view of
   its own. Each test fails without its fix (checked).
   - The page-switch test runs its own `Recomposer` and `BroadcastFrameClock`. After an earlier test has destroyed its activity,
