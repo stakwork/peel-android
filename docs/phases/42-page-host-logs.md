@@ -48,6 +48,16 @@ is the only one, as on iOS. Each request is logged (`permission <origin> asked= 
 `granted=VIDEO_CAPTURE`, and the task's camera opened. Before the camera's first frame the sheet showed WebView's default video poster,
 a big grey play button stretched across the screen; `OrgPageChromeClient.getDefaultVideoPoster` is now a transparent pixel.
 
+## A public site keeps its visitor signed in
+Every open used to start from a profile made for it and deleted at close, so strut's 30-day visitor session (a cookie and
+`strut.visitorSession:<base>` in localStorage) went with the page, and the worker signed in again at every open. Ported from iOS
+(stakwork/peel f8875ad, `PublicPage.storeIdentifier`): a `PublicPage` keeps its cookies and storage in a profile of its origin's,
+`PhonePage.keptProfile` = `peel_public_<RFC 9562 v5 UUID over the origin, the one iOS names its store by>`. It is the same on every
+open, and no site's is another's; closing the page keeps it (`close profile=kept`). An org's page still keeps nothing (a profile
+per open, deleted at close): Peel hands it the token each time. Forget this account empties and deletes every kept profile
+(`forgetKeptWebData`, iOS `forgetWebsiteData`). Signing out in the page clears the session, as strut does it. Without
+`MULTI_PROFILE` nothing is kept (the shared data is wiped at every open, as before).
+
 ## A page's file input
 The same task offers "or choose one from this device", an `<input type=file>`. WebKit shows its own picker on iOS; Android's
 WebView shows nothing unless the app does. `OrgPageChromeClient.onShowFileChooser` hands it to the page screen
@@ -125,6 +135,9 @@ Robolectric:
   another origin, a sandboxed frame or another resource is denied without asking the system; a video with no poster gets a
   transparent pixel; a file input shows nothing until the screen can, then gets what was picked, or null; `pickedFiles` reads one
   file, several, a cancel and no data.
+- `PublicPageStoreTest` (JVM): a public site's kept profile is the same across opens and case/default-port spellings, another host's
+  or port's differs, and its UUID is iOS's (`a49ab031-29db-5436-b8e7-0779241b28fe` for the worker app's origin, version 5); an
+  org's page keeps nothing. `PublicPageHostTest`: closing a public page keeps its site's profile; a per-open one is deleted.
 - `OrgPageScreenTest`: the real `OrgPageScreen` gives its WebView MATCH_PARENT, and a page opened over another gets a web view of
   its own. Each test fails without its fix (checked).
   - The page-switch test runs its own `Recomposer` and `BroadcastFrameClock`. After an earlier test has destroyed its activity,

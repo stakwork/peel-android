@@ -591,6 +591,8 @@ private fun YouMain(
                         engine.cancel()
                         // The Stadeum pairing goes with the account.
                         Stadeum.model.disconnect()
+                        // The public sites' kept sign-ins too (docs/phases/42-page-host-logs.md), on the main thread.
+                        com.sphinx.peel.ui.apps.forgetKeptWebData()
                         // Both stores, not just the mnemonic: otherwise the
                         // next account made on this device would start from
                         // this one's coreState (Storage.kt, `deleteAccount`).

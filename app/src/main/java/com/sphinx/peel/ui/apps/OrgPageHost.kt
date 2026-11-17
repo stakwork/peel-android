@@ -244,7 +244,10 @@ class OrgPageController(
         web = null
         downloads.cleanUp()
         val name = profile
-        if (name != null) {
+        if (name != null && name == page.keptProfile) {
+            // A public site's profile is kept for its next open: its visitor stays signed in (Forget this account deletes it).
+            pageLog("close profile=kept gen=$generation")
+        } else if (name != null) {
             val deleted = runCatching { ProfileStore.getInstance().deleteProfile(name) }.getOrDefault(false)
             pageLog("close profileDeleted=$deleted gen=$generation")
             if (!deleted) wipeSharedWebData(null)
@@ -252,6 +255,23 @@ class OrgPageController(
             pageLog("close profile=none gen=$generation")
             wipeSharedWebData(null)
         }
+    }
+}
+
+/// Forget this account: every public site's kept profile is emptied, then deleted (iOS `PhoneWeb.forgetWebsiteData`). A profile
+/// still in use refuses the delete; it is left emptied, with nothing in it to sign anyone in. On the main thread, as WebView asks.
+@SuppressLint("RequiresFeature")
+fun forgetKeptWebData() {
+    if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return
+    val store = runCatching { ProfileStore.getInstance() }.getOrNull() ?: return
+    for (name in store.allProfileNames.filter { it.startsWith(com.sphinx.peel.engine.PublicPage.KEPT_PROFILE_PREFIX) }) {
+        runCatching {
+            store.getProfile(name)?.let { kept ->
+                kept.cookieManager.removeAllCookies(null)
+                kept.webStorage.deleteAllData()
+            }
+        }
+        runCatching { store.deleteProfile(name) }
     }
 }
 
@@ -566,7 +586,12 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
     @Suppress("DEPRECATION")
     val sheets = remember(page) { sheets ?: PhoneWalletSheets(scope) { words -> view.announceForAccessibility(words) } }
     val controller = remember(page) {
-        val profile = if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) "peel_org_" + UUID.randomUUID().toString().replace("-", "") else null
+        // A public site's own kept profile, else one for this open alone; none without profiles (the shared data is wiped instead).
+        val profile = if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+            page.keptProfile ?: ("peel_org_" + UUID.randomUUID().toString().replace("-", ""))
+        } else {
+            null
+        }
         OrgPageController(page, OrgDownloads(orgDownloadsRoot(context)), scope, profile).also { c ->
             c.wallet = OrgWalletBridge(page, wallet, sheets, scope) { StrutWallet.personActed(c.lastTouchAt, SystemClock.elapsedRealtime()) }
         }

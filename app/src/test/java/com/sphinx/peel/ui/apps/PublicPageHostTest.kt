@@ -103,6 +103,17 @@ class PublicPageHostTest {
         profiled.close()
     }
 
+    /// A public site's kept profile outlives the page (its visitor stays signed in); a profile made for one open does not.
+    @Test fun `closing a public page keeps its site's profile`() {
+        val kept = OrgPageController(page, OrgDownloads(java.io.File(app.cacheDir, "kept-downloads-test")), CoroutineScope(Dispatchers.Unconfined), page.keptProfile)
+        val before = org.robolectric.shadows.ShadowLog.getLogsForTag(com.sphinx.peel.engine.PageLog.TAG).size
+        kept.close()
+        val once = OrgPageController(page, OrgDownloads(java.io.File(app.cacheDir, "once-downloads-test")), CoroutineScope(Dispatchers.Unconfined), "peel_org_once")
+        once.close()
+        val lines = org.robolectric.shadows.ShadowLog.getLogsForTag(com.sphinx.peel.engine.PageLog.TAG).drop(before).map { it.msg }
+        assertEquals(listOf("close profile=kept gen=0", "close profileDeleted=false gen=0"), lines)
+    }
+
     @Test fun `a failing load shows the failure screen`() {
         client.onPageStarted(web, page.url, null)
         client.onReceivedHttpError(web, Req(page.url), WebResourceResponse("text/html", "utf-8", 404, "Not Found", emptyMap(), null))
