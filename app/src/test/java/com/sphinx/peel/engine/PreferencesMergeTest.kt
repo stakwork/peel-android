@@ -136,6 +136,26 @@ class PreferencesMergeTest {
     }
 
     @Test
+    fun `chats recent view uses the peel key and the auto download merge semantics`() {
+        val spec = PreferencesMerge.CHATS_RECENT_VIEW
+        assertEquals("peel.chats_recent_view", spec.key)
+        assertEquals(1L, spec.parse("TRUE"))
+        assertEquals(0L, spec.parse("false"))
+        assertEquals(null, spec.parse("1"))
+        assertEquals("true", spec.format(1))
+        assertEquals("false", spec.format(0))
+        assertTrue(PreferencesMerge.SPECS.contains(spec))
+        val recent = file(item("peel.chats_recent_view", "200", "true"))
+        assertEquals(Outcome.Take(Local(1, 200)), PreferencesMerge.decide(spec, recent, Local(0, 100), now))
+        assertEquals(Outcome.Upload(Local(0, 300)), PreferencesMerge.decide(spec, recent, Local(0, 300), now))
+        assertEquals(Outcome.Nothing, PreferencesMerge.decide(spec, file(), null, now))
+        assertEquals(Outcome.Upload(Local(1, 50)), PreferencesMerge.decide(spec, file(), Local(1, 50), now))
+        val f = PreferencesFile.empty()
+        f.setEntry("peel.chats_recent_view", "true", 7)
+        assertEquals("true" to 7L, PreferencesFile.parse(f.text()).entry("peel.chats_recent_view"))
+    }
+
+    @Test
     fun `a date chosen here is always after the one it replaces`() {
         assertEquals(101L, PreferencesMerge.nextDate(100, 100))
         assertEquals(500L, PreferencesMerge.nextDate(500, 100))

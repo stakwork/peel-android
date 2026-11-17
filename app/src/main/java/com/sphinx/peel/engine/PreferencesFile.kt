@@ -42,6 +42,11 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         /// as a JSON string; absent means on.
         const val AUTO_DOWNLOAD_MEDIA_KEY = "peel.auto_download_media"
 
+        /// Peel-only key (iOS `Preference<Bool>.chatsRecentView`): the chat list's
+        /// Recent (true) vs Separated (false) view, "true"/"false" as a JSON string;
+        /// absent means this device's own choice stands.
+        const val CHATS_RECENT_VIEW_KEY = "peel.chats_recent_view"
+
         fun parse(text: String): PreferencesFile {
             val root = JSONObject(text)
             // PeelCore's `PreferencesFile.init(text:)`: a file the official

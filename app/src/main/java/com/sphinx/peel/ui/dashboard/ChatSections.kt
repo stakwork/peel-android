@@ -26,10 +26,18 @@ data class ChatSections(
     val direct: List<ConversationRow>,
     val allDirectCount: Int?,
     val searching: Boolean = false,
+    /// The Recent view's one list: every tribe and direct message not in `unread`, newest first,
+    /// trimmed to `RECENT_COMBINED` until shown in full (PeelCore's `combined`).
+    val combined: List<ConversationRow> = emptyList(),
+    /// How many chats there are in all, unread included, for "Show all 32 chats"; null when there is no more to show.
+    val allCombinedCount: Int? = null,
 ) {
     companion object {
         /// How many show before "Show all" — PeelCore's own `recent`.
         const val RECENT = 5
+
+        /// How many chats the Recent view shows before "Show all" — PeelCore's `recentCombined`.
+        const val RECENT_COMBINED = 10
 
         fun of(
             conversations: List<ConversationRow>,
@@ -38,6 +46,7 @@ data class ChatSections(
             allTribes: Boolean,
             allDirect: Boolean,
             query: String = "",
+            allRecent: Boolean = false,
         ): ChatSections {
             val searching = query.isNotBlank()
             val matching = if (searching) conversations.filter { matches(it.name, query) } else conversations
@@ -47,7 +56,11 @@ data class ChatSections(
             val direct = matching.filter { !it.isTribe && it.shownUnread == 0L }
             val (shownTribes, tribesCount) = shown(tribes, tribesOpen || searching, allTribes, searching)
             val (shownDirect, directCount) = shown(direct, directOpen || searching, allDirect, searching)
-            return ChatSections(unreadDirect + unreadTribes, shownTribes, tribesCount, shownDirect, directCount, searching)
+            val merged = (tribes + direct).sortedByDescending { it.lastTimestamp ?: 0L }
+            val (combined, combinedCount) = shown(merged, true, allRecent, searching, RECENT_COMBINED, total = matching.size)
+            return ChatSections(
+                unreadDirect + unreadTribes, shownTribes, tribesCount, shownDirect, directCount, searching, combined, combinedCount,
+            )
         }
 
         /// Whether a chat named `name` shows for a search — a blank query
@@ -61,12 +74,15 @@ data class ChatSections(
         /// `ChatSections.shown`, minus the "keep the open chat visible"
         /// case — a chat open in `ConversationScreen` can still vanish
         /// from a collapsed or trimmed section underneath it.
-        private fun shown(rows: List<ConversationRow>, open: Boolean, all: Boolean, searching: Boolean): Pair<List<ConversationRow>, Int?> {
+        private fun shown(
+            rows: List<ConversationRow>, open: Boolean, all: Boolean, searching: Boolean,
+            limit: Int = RECENT, total: Int = rows.size,
+        ): Pair<List<ConversationRow>, Int?> {
             if (!open) return emptyList<ConversationRow>() to null
             if (searching) return rows to null
-            if (rows.size <= RECENT) return rows to null
-            if (all) return rows to rows.size
-            return rows.take(RECENT) to rows.size
+            if (rows.size <= limit) return rows to null
+            if (all) return rows to total
+            return rows.take(limit) to total
         }
     }
 }

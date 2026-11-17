@@ -1184,6 +1184,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         PreferencesFile.PIN_TIMEOUT_KEY -> PrefSlot(Setting.PIN_TIMEOUT, Setting.PIN_TIMEOUT_UPDATED_AT)
         PreferencesFile.BIOMETRIC_KEY -> PrefSlot(Setting.BIOMETRIC_ENABLED, Setting.BIOMETRIC_ENABLED_UPDATED_AT)
         PreferencesFile.AUTO_DOWNLOAD_MEDIA_KEY -> PrefSlot(Setting.AUTO_DOWNLOAD_MEDIA, Setting.AUTO_DOWNLOAD_MEDIA_UPDATED_AT)
+        PreferencesFile.CHATS_RECENT_VIEW_KEY -> PrefSlot(Setting.CHATS_RECENT_VIEW, Setting.CHATS_RECENT_VIEW_UPDATED_AT)
         else -> PrefSlot(Setting.PAYMENT_CONFIRMATION_MSAT, Setting.PAYMENT_CONFIRMATION_UPDATED_AT)
     }
 
@@ -1229,6 +1230,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     fun autoDownloadsMedia(): Boolean = storage.value(Setting.AUTO_DOWNLOAD_MEDIA) != "0"
 
     fun setAutoDownloadsMedia(on: Boolean) = setPreference(PreferencesMerge.AUTO_DOWNLOAD_MEDIA, if (on) 1 else 0)
+
+    /// The chat list's Recent view as the account's devices have it (`peel.chats_recent_view`); null until ever chosen or synced.
+    fun chatsRecentView(): Boolean? = storage.value(Setting.CHATS_RECENT_VIEW)?.let { it == "1" }
+
+    fun setChatsRecentView(recent: Boolean) = setPreference(PreferencesMerge.CHATS_RECENT_VIEW, if (recent) 1 else 0)
 
     /// Writes a choice made here: dated strictly after what it replaces, synced right away.
     private fun setPreference(spec: PreferencesMerge.Spec, value: Long) {
