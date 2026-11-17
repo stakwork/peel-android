@@ -125,4 +125,29 @@ class ChatSectionsTest {
         assertEquals(emptyList<ConversationRow>(), sections.direct)
         assertEquals(emptyList<ConversationRow>(), sections.unread)
     }
+
+    private fun at(chat: String, isTribe: Boolean, ts: Long, unread: Long = 0) =
+        ConversationRow(chat, alias = chat, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = ts,
+            lastFromMe = null, unread = unread, muteLevel = 0)
+
+    @Test
+    fun `recent merges tribes and people newest first, trimmed to ten`() {
+        val rows = (1..12).map { at("c$it", it % 2 == 0, ts = it.toLong()) }
+        val trimmed = ChatSections.of(rows, true, true, false, false)
+        assertEquals((12 downTo 3).map { "c$it" }, trimmed.combined.map { it.chat })
+        assertEquals(12, trimmed.allCombinedCount)
+
+        val all = ChatSections.of(rows, true, true, false, false, allRecent = true)
+        assertEquals(12, all.combined.size)
+        assertEquals(12, all.allCombinedCount)
+    }
+
+    @Test
+    fun `recent leaves unread to its section and has no show all when it fits`() {
+        val rows = listOf(at("a", false, 1), at("b", true, 2, unread = 3), at("c", true, 3))
+        val s = ChatSections.of(rows, true, true, false, false)
+        assertEquals(listOf("b"), s.unread.map { it.chat })
+        assertEquals(listOf("c", "a"), s.combined.map { it.chat })
+        assertNull(s.allCombinedCount)
+    }
 }

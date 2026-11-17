@@ -137,4 +137,14 @@ enum class Setting(val key: String) {
     /// The tribes this account created (`OwnedTribes.encode`, comma-separated pubkeys): owner
     /// actions are offered for them even where the registry's owner key is not the account's.
     OWNED_TRIBES("ownedTribes"),
+
+    /// The chat list's layout, as PeelCore's `Setting.sidebarLayout` keeps it (JSON, `ChatSections.Layout`):
+    /// `combinedView` (Recent instead of Separated) and `allRecent` ("Show all" in Recent), by those names.
+    /// Local to a device, as in PeelCore: it is not a synced preference there either.
+    SIDEBAR_LAYOUT("sidebarLayout"),
+
+    /// Peel's `peel.chats_recent_view` ("1" Recent / "0" Separated): the chat list's switch, synced.
+    /// Unset until chosen here or taken from another device; the layout's own `combinedView` stands until then.
+    CHATS_RECENT_VIEW("chatsRecentView"),
+    CHATS_RECENT_VIEW_UPDATED_AT("chatsRecentViewUpdatedAt"),
 }
