@@ -135,3 +135,23 @@ successful restore `Engine.settleReadsAfterRestore()` re-asks `getReads`
 (iOS does so after the restore) and then marks read every chat whose newest
 message is ours, mirroring iOS's `setLastMessagesOnChats`. Chats whose
 newest message is incoming are untouched.
+
+## Note — a boost on our message is the row's last message (bug fix)
+
+Reported on iOS (Tom): after someone boosts the last message we sent in a
+tribe, the row moved to Unread with badge 1 but still previewed our own
+message. Root cause (iOS): the list picked each chat's last message from the
+`message_preview` partial index, which excluded boosts (type 29), while the
+unread count did count someone else's boost on our message — two rules for
+one row. Android had the same split: the `l` (last/order) and `p` (preview)
+subqueries in `Storage.conversations()` skipped type 29 while the unread
+count included it. Fix: one shared rule, `BOOST_ON_MINE` (someone else's,
+undeleted boost whose `replyUuid` is one of our messages), feeds the unread
+count and both subqueries, so a boost counts as the last message exactly when
+it counts as unread. Our own boosts and boosts on others' messages still
+never move a row. No index exists here, so no migration. The preview reads
+"Paul boosted your message: 5 sats" ("Someone" without an alias) through
+`ConversationPreview.line` (new `msat` argument; "You boosted a message: N
+sats" is there for a fromMe boost but the query never selects one). Tests:
+`ConversationPreviewTest`, `StorageConversationOrderTest`. Not run here (no
+build environment).

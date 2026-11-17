@@ -59,6 +59,17 @@ class ConversationPreviewTest {
     }
 
     @Test
+    fun `a boost reads as a sentence without a prefix`() {
+        val sender = JSONObject().put("alias", "Paul").toString()
+        val boost = ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, false, true, sender, 5000)
+        assertEquals("Paul boosted your message: 5 sats", boost)
+        assertEquals("Someone boosted your message: 1 sat", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, false, false, null, 1000))
+        assertEquals("You boosted a message: 5 sats", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, true, true, sender, 5000))
+        assertEquals("Paul boosted your message", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, false, true, sender, null))
+        assertEquals("Message deleted", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", true, false, true, sender, 5000))
+    }
+
+    @Test
     fun `no message and wordless text give no line`() {
         assertNull(ConversationPreview.line(null, null, false, null, true, null))
         assertNull(line(0, ""))

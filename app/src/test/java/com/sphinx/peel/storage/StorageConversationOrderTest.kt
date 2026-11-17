@@ -39,6 +39,51 @@ class StorageConversationOrderTest {
         assertEquals(100L, rows[1].lastTimestamp)
     }
 
+    private fun Storage.mine(chat: String, uuid: String, timestamp: Long) {
+        next++
+        insertMessages(listOf(MessageRow(uuid = uuid, serverIndex = next, type = 0, chat = chat, fromMe = true, sender = null, body = "mine", msat = null, timestamp = timestamp, tag = null, paymentHash = null)))
+    }
+
+    private fun Storage.boost(chat: String, target: String, timestamp: Long, fromMe: Boolean = false) {
+        next++
+        insertMessages(
+            listOf(
+                MessageRow(
+                    uuid = "b$next", serverIndex = next, type = 29, chat = chat, fromMe = fromMe, sender = """{"alias":"Paul"}""",
+                    body = """{"replyUuid":"$target"}""", msat = 5000, timestamp = timestamp, tag = null, paymentHash = null,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `a boost on my message becomes the preview and moves the row`() {
+        val s = newStorage()
+        s.chat("a", "A"); s.chat("b", "B")
+        s.mine("a", "m1", 100)
+        s.insertMessages(listOf(msg("b", 0, 200)))
+        s.boost("a", "m1", 300)
+        val rows = s.conversations()
+        assertEquals(listOf("a", "b"), rows.map { it.chat })
+        assertEquals(1L, rows[0].unread)
+        assertEquals(300L, rows[0].lastTimestamp)
+        assertEquals("Paul boosted your message: 5 sats", rows[0].previewLine)
+    }
+
+    @Test
+    fun `a boost on someone else's message or my own boost does not`() {
+        val s = newStorage()
+        s.chat("a", "A")
+        s.mine("a", "m1", 100)
+        s.insertMessages(listOf(msg("a", 0, 150).copy(uuid = "theirs")))
+        s.boost("a", "theirs", 300)
+        s.boost("a", "m1", 400, fromMe = true)
+        val row = s.conversations().single()
+        assertEquals(150L, row.lastTimestamp)
+        assertEquals(0L, row.unread)
+        assertEquals("hi", row.previewLine)
+    }
+
     @Test
     fun `chats without a message go last, by alias`() {
         val s = newStorage()

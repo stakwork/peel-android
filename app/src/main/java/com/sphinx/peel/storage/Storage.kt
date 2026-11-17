@@ -85,6 +85,15 @@ data class ContactRow(
 /// minus boosts, which count only on our own message.
 private const val COUNTED_TYPES = "(0, 5, 6, 2, 32)"
 
+/// A boost that is news to us, as a row of `message` (unqualified): someone
+/// else's, not deleted, on one of our own messages. The one rule for both the
+/// unread count and the row's last message/preview in [Storage.conversations]
+/// — a boost that badges a chat must also be what its row shows (the iOS bug:
+/// the badge counted it, the preview skipped it). Our own boosts never count.
+private const val BOOST_ON_MINE =
+    "(type = 29 AND fromMe = 0 AND deleted = 0 AND EXISTS (" +
+        "SELECT 1 FROM message t WHERE t.chat = message.chat AND t.uuid = message.replyUuid AND t.fromMe = 1))"
+
 /// A stranger's page's connection key starts so (`WalletScope.Origin.key`).
 private const val ORIGIN_KEY_PREFIX = "origin:"
 
@@ -122,6 +131,8 @@ data class ConversationRow(
     val previewDeleted: Boolean = false,
     val previewFromMe: Boolean? = null,
     val previewSender: String? = null,
+    /// The preview message's msat, read only for a boost ("boosted your message: 5 sats").
+    val previewMsat: Long? = null,
     /// Unread messages that mention this account (tribes only), filled in
     /// by [Storage.conversations] only for a chat on "mentions only" —
     /// what that level shows instead of `unread` (`ChatReadState.shownUnread`).
@@ -139,7 +150,7 @@ data class ConversationRow(
 
     /// One line for the row, null for a chat with nothing yet.
     val previewLine: String? get() =
-        com.sphinx.peel.engine.ConversationPreview.line(previewType, previewBody, previewDeleted, previewFromMe, isTribe, previewSender)
+        com.sphinx.peel.engine.ConversationPreview.line(previewType, previewBody, previewDeleted, previewFromMe, isTribe, previewSender, previewMsat)
 
     /// The alias, or the chat's own key trimmed to 12 characters — same
     /// fallback as `Conversation.name`.
@@ -1344,7 +1355,9 @@ class Storage(context: Context, account: String = "default") {
     /// `conversationsSQL`. Only text/attachment (0, 6) and undeleted
     /// payment/call (5, 32) messages with visible words count (noWords is
     /// approximated by a non-blank body), newest `timestamp DESC, id DESC`;
-    /// joins, boosts and control messages never move a chat. Order is
+    /// joins and control messages never move a chat, nor do boosts — except
+    /// someone else's boost on one of our messages ([BOOST_ON_MINE]): it is
+    /// unread news, so it is the last message and the preview too. Order is
     /// `lastTimestamp IS NULL, lastTimestamp DESC, alias`: chats without
     /// such a message last, ties broken by plain alias ascending.
     ///
@@ -1373,20 +1386,26 @@ class Storage(context: Context, account: String = "default") {
                 (SELECT MAX(m.serverIndex) FROM message m
                     WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.deleted = 0 AND m.type IN $COUNTED_TYPES),
                 p.type, p.body, p.deleted, p.fromMe, p.sender,
-                c.isNew
+                c.isNew, p.msat
             FROM contact c
             LEFT JOIN message p ON p.id = (
                 SELECT id FROM message
                 WHERE chat = c.pubkey
-                    AND type IN (0, 2, 5, 6, 32)
-                    AND (deleted = 1 OR type != 0 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                    AND (
+                        (type IN (0, 2, 5, 6, 32)
+                            AND (deleted = 1 OR type != 0 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != ''))
+                        OR $BOOST_ON_MINE
+                    )
                 ORDER BY timestamp DESC, id DESC LIMIT 1
             )
             LEFT JOIN message l ON l.id = (
                 SELECT id FROM message
                 WHERE chat = c.pubkey AND deleted = 0
-                    AND type IN (0, 5, 6, 32)
-                    AND (type = 6 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                    AND (
+                        (type IN (0, 5, 6, 32)
+                            AND (type = 6 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != ''))
+                        OR $BOOST_ON_MINE
+                    )
                 ORDER BY timestamp DESC, id DESC LIMIT 1
             )
             WHERE c.ready = 1
@@ -1413,6 +1432,7 @@ class Storage(context: Context, account: String = "default") {
                         previewFromMe = if (cursor.isNull(13)) null else cursor.getInt(13) != 0,
                         previewSender = cursor.getString(14),
                         isNew = cursor.getInt(15) != 0,
+                        previewMsat = if (cursor.isNull(16)) null else cursor.getLong(16),
                     ),
                 )
             }
