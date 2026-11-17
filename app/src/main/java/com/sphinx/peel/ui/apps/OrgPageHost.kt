@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Message
 import android.os.SystemClock
@@ -14,6 +15,7 @@ import android.view.ViewGroup
 import android.view.MotionEvent
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -23,6 +25,8 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +72,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.webkit.ProfileStore
 import androidx.webkit.ScriptHandler
@@ -83,6 +88,7 @@ import com.sphinx.peel.ui.page.WalletSheets
 import com.sphinx.peel.engine.OrgPageRules
 import com.sphinx.peel.engine.OrgRequest
 import com.sphinx.peel.engine.PageLog
+import com.sphinx.peel.engine.PageMedia
 import com.sphinx.peel.ui.theme.Theme
 import java.io.File
 import java.util.UUID
@@ -124,6 +130,9 @@ class OrgPageController(
     var walletOffered by mutableStateOf(true)
     /// Counts up when the web view's process died and a new web view must be made.
     var generation by mutableIntStateOf(0)
+    /// Asks the system for the permissions the app does not hold yet (the page screen's launcher: the system's own prompt), then
+    /// tells `done` which the app holds. Until the screen sets it, nothing is held, so nothing is granted.
+    var askSystem: (permissions: List<String>, done: (holds: (String) -> Boolean) -> Unit) -> Unit = { _, done -> done { false } }
 
     class SharedFile(val file: File, val mimeType: String?)
 
@@ -354,6 +363,25 @@ internal class OrgPageChromeClient(
         controller.progress = newProgress / 100f
     }
 
+    /// The camera or microphone (strut's camera sheet; iOS `requestMediaCapturePermissionFor`): for the origin Peel loaded, after
+    /// the system's own permission, which is asked only when the app does not hold it yet; anything else is denied ([PageMedia]).
+    override fun onPermissionRequest(request: PermissionRequest) {
+        val origin = request.origin?.toString().orEmpty()
+        val asked = request.resources?.toList().orEmpty()
+        val grantable = PageMedia.grantable(origin, controller.page.origin, asked)
+        if (grantable.isEmpty()) {
+            pageLog(PageLog.permission(origin, asked, emptyList()))
+            runCatching { request.deny() }
+            return
+        }
+        controller.askSystem(PageMedia.systemPermissions(grantable)) { holds ->
+            val granted = PageMedia.granted(grantable, holds)
+            pageLog(PageLog.permission(origin, asked, granted))
+            // A request the page withdrew meanwhile may refuse an answer.
+            runCatching { if (granted.isEmpty()) request.deny() else request.grant(granted.toTypedArray()) }
+        }
+    }
+
     /// The page's console, redacted ([PageLog.console]); true, so the WebView does not also log it as it was written.
     override fun onConsoleMessage(message: ConsoleMessage): Boolean {
         pageLog(PageLog.console(message.messageLevel().name, message.message(), message.sourceId(), message.lineNumber()))
@@ -511,6 +539,27 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
         OrgPageController(page, OrgDownloads(orgDownloadsRoot(context)), scope, profile).also { c ->
             c.wallet = OrgWalletBridge(page, wallet, sheets, scope) { StrutWallet.personActed(c.lastTouchAt, SystemClock.elapsedRealtime()) }
         }
+    }
+    // The system's own prompt for what a page's camera or microphone needs ([OrgPageChromeClient.onPermissionRequest]); what waits
+    // for its answer is told once it comes.
+    val holds = { permission: String -> ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED }
+    val waiting = remember(controller) { mutableListOf<((String) -> Boolean) -> Unit>() }
+    val systemPrompt = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        val answered = waiting.toList()
+        waiting.clear()
+        answered.forEach { it(holds) }
+    }
+    DisposableEffect(controller, systemPrompt) {
+        controller.askSystem = { permissions, done ->
+            val missing = permissions.filterNot(holds)
+            if (missing.isEmpty()) {
+                done(holds)
+            } else {
+                waiting += done
+                systemPrompt.launch(missing.toTypedArray())
+            }
+        }
+        onDispose { controller.askSystem = { _, done -> done { false } } }
     }
     BackHandler { if (controller.canGoBack) controller.goBack() else onClose() }
     // The notifications the wallet host has for this page's scope go into its main frame (iOS `listenToWallet`).

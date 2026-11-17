@@ -41,6 +41,13 @@ object PageLog {
 
     fun httpError(url: String?, status: Int): String = "httpError ${origin(url)} status=$status"
 
+    /// A page's request for the camera or microphone: who asked, for what (the resource's last word, e.g. `VIDEO_CAPTURE`), and
+    /// what it was given.
+    fun permission(asker: String?, asked: List<String>, granted: List<String>): String =
+        "permission ${origin(asker)} asked=${resources(asked)} granted=${resources(granted)}"
+
+    private fun resources(list: List<String>): String = list.joinToString(",") { it.substringAfterLast('.') }.ifEmpty { "-" }
+
     fun renderGone(didCrash: Boolean, priorityAtExit: Int, current: Boolean): String =
         "renderGone didCrash=$didCrash priorityAtExit=$priorityAtExit current=$current"
 

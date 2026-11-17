@@ -3,6 +3,7 @@ package com.sphinx.peel.ui.apps
 import android.app.Application
 import android.net.Uri
 import android.os.Message
+import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -11,6 +12,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.sphinx.peel.engine.OrgDownloads
 import com.sphinx.peel.engine.OrgPageRequest
 import com.sphinx.peel.engine.PageLog
+import com.sphinx.peel.engine.PageMedia
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.After
@@ -210,6 +212,49 @@ class OrgPageHostTest {
             ),
             lines,
         )
+    }
+
+    private class Asked(private val from: String, private val what: Array<String>) : PermissionRequest() {
+        var granted: List<String>? = null
+        var denied = false
+        override fun getOrigin(): Uri = Uri.parse(from)
+        override fun getResources(): Array<String> = what
+        override fun grant(resources: Array<String>) { granted = resources.toList() }
+        override fun deny() { denied = true }
+    }
+
+    /// strut's camera sheet (iOS `requestMediaCapturePermissionFor`): the page's own origin gets the camera once the system's
+    /// permission is held, asked through the screen's prompt only for what is missing (docs/phases/42-page-host-logs.md).
+    @Test fun `the page's own origin gets the camera after the system's permission`() {
+        val askedSystem = mutableListOf<List<String>>()
+        var holdsCamera = true
+        controller.askSystem = { permissions, done -> askedSystem += permissions; done { it == PageMedia.CAMERA && holdsCamera } }
+        val camera = Asked("https://acme.sphinx.chat/", arrayOf(PageMedia.VIDEO))
+        chrome.onPermissionRequest(camera)
+        assertEquals(listOf(listOf(PageMedia.CAMERA)), askedSystem)
+        assertEquals(listOf(PageMedia.VIDEO), camera.granted)
+
+        // The person said no to the system: the page is told no.
+        holdsCamera = false
+        val refused = Asked("https://acme.sphinx.chat/", arrayOf(PageMedia.VIDEO))
+        chrome.onPermissionRequest(refused)
+        assertTrue(refused.denied)
+        assertNull(refused.granted)
+    }
+
+    @Test fun `another origin, a sandboxed frame or anything but the camera and microphone is denied without asking`() {
+        val askedSystem = mutableListOf<List<String>>()
+        controller.askSystem = { permissions, done -> askedSystem += permissions; done { true } }
+        for (request in listOf(
+            Asked("https://evil.example.com/", arrayOf(PageMedia.VIDEO)),
+            Asked("null", arrayOf(PageMedia.VIDEO)),
+            Asked("https://acme.sphinx.chat/", arrayOf("android.webkit.resource.PROTECTED_MEDIA_ID")),
+        )) {
+            chrome.onPermissionRequest(request)
+            assertTrue(request.denied)
+            assertNull(request.granted)
+        }
+        assertEquals(emptyList<List<String>>(), askedSystem)
     }
 
     @Test fun `a new window goes here, out, or nowhere`() {
