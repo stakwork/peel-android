@@ -529,7 +529,11 @@ private fun ChatRow(
     onClick: () -> Unit,
 ) {
     val unread = conversation.shownUnread
-    val bold = conversation.isUnread
+    // Bold/bright is for something actually unread (PeelCore's own `lit`,
+    // ChatListRow): a new contact sits in the Unread section (`isUnread`
+    // covers that) but its row text stays normal, with only the trailing
+    // NEW tag marking it.
+    val bold = unread > 0
     Row(
         Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

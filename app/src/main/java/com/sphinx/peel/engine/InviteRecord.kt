@@ -3,6 +3,7 @@ package com.sphinx.peel.engine
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Locale
 
 /// An invite made here with sats (`Engine.makeInvite`). The core keeps no
@@ -65,8 +66,17 @@ data class InviteRecord(
         }
 
     /// Where it stands, in a line under the amount (PeelCore's `statusLine`).
+    /// The date and time are locale-formatted (`DateTimeFormatter.ofLocalized*`,
+    /// the same idiom `ConversationDate.dateLabel` already uses) rather than a
+    /// fixed "d MMM 'at' HH:mm" pattern, which hardcoded the English word "at"
+    /// into every locale. Unlike iOS's `statusLine` this always shows the year
+    /// rather than omitting it for the current one: java.time's localized
+    /// styles have no "year, unless current" variant to build that on.
     fun statusLine(zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String {
-        val made = "Made " + DateTimeFormatter.ofPattern("d MMM 'at' HH:mm", locale).withZone(zone).format(Instant.ofEpochMilli(createdAt))
+        val created = Instant.ofEpochMilli(createdAt).atZone(zone)
+        val date = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale).format(created)
+        val time = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).format(created)
+        val made = "Made $date, $time"
         return when (status) {
             Status.SENDING -> "Setting up…"
             Status.READY -> "$made · waiting to be used"
