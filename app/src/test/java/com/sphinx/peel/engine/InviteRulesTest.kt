@@ -64,4 +64,36 @@ class InviteRulesTest {
         assertEquals(S.USED, S.fromRaw("used"))
         assertNull(S.fromRaw("nope"))
     }
+
+    @Test
+    fun `status lines and short statuses read as the iPhone's do`() {
+        val zone = java.time.ZoneOffset.UTC
+        val en = java.util.Locale.ENGLISH
+        val made = InviteRecord("c", "l", 5_000, null, null, "t", S.SENDING, 1_700_223_780_000) // 17 Nov 2023, 12:23 UTC
+        // Narrow-no-break-space before AM/PM varies by JDK (ConversationDateTest's own
+        // pre-existing flake, unrelated to this): normalized to a plain space before comparing.
+        assertEquals(
+            "Made Nov 17, 2023, 12:23 PM · waiting to be used",
+            made.copy(status = S.READY).statusLine(zone, en).replace(' ', ' '),
+        )
+        assertEquals("Setting up…", made.copy(status = S.SENDING).statusLine(zone, en))
+        assertEquals("Cancelling, sats not back yet", made.copy(status = S.CANCELLING).statusLine(zone, en))
+        assertEquals("Cancelled, sats returned", made.copy(status = S.CANCELLED).statusLine(zone, en))
+        assertEquals("Used", made.copy(status = S.USED).statusLine(zone, en))
+        assertEquals("Payment failed", made.copy(status = S.FAILED).statusLine(zone, en))
+        assertEquals("Sending…", made.copy(status = S.SENDING).shortStatus)
+        assertEquals("Cancelling…", made.copy(status = S.CANCELLING).shortStatus)
+        assertEquals(Sats.format(made.amountMsat), made.copy(status = S.READY).shortStatus)
+    }
+
+    /// The date/time used to be a fixed "d MMM 'at' HH:mm" pattern, which hardcoded the English
+    /// word "at" into every locale (and every clock convention) regardless of the device's own.
+    @Test
+    fun `status line is locale-formatted, not a fixed English pattern`() {
+        val zone = java.time.ZoneOffset.UTC
+        val made = InviteRecord("c", "l", 5_000, null, null, "t", S.READY, 1_700_223_780_000)
+        val french = made.statusLine(zone, java.util.Locale.FRENCH)
+        assertFalse(french.contains(" at "))
+        assertTrue(french.contains("2023"))
+    }
 }

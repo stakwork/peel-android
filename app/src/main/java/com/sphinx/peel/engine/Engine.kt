@@ -654,7 +654,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
         if (rows.isNotEmpty()) {
             // Messages and the contacts they reveal in one transaction.
-            storage.insertMessages(rows, rows.mapNotNull { contactHint(it) })
+            storage.insertMessages(rows, rows.mapNotNull { contactHint(it) }, marksNewContacts = !restoreProgressFlow.value.restoring)
             // A key exchange (someone adding this account, or its answer) makes a contact the
             // core holds: ready, so the chat list shows them. Not while restoring, which
             // marks everyone once from its contacts run.
@@ -1558,11 +1558,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
     /// Marks a chat read up to its newest stored message, here and on the
     /// server so the account's other devices agree — PeelCore's
-    /// `markRead`, trimmed (no new-contact clearing; see [markUnread]). Offline, the marker is kept
+    /// `markRead`, trimmed (clearing a new contact's tag first). Offline, the marker is kept
     /// as pending (`Storage.setRead`) rather than lost, and
     /// `fetchReadsAndMutes`'s `publishPendingReads` sends it once a
     /// connection answers `getReads`.
     suspend fun markRead(chat: String) {
+        // Opening the chat clears a new contact's tag, before the marker (a chat with no message has no marker to move).
+        storage.clearNewContact(chat)
         val index = storage.highestServerIndex(chat) ?: return
         val connected = transport != null
         if (!storage.setRead(chat, index, pending = !connected)) return

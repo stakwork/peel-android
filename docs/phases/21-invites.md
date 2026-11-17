@@ -28,7 +28,8 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
 - **Invites made here**: `invite` table (DB v11), `Engine.makeInvite` / `cancelInvite` / `forgetInvite`,
   statuses sending/ready/failed/cancelling/cancelled/used, funding payment status moves them
   (`InviteRules`, `Storage.markSendStatus`), sending ones are re-asked on connect (`pendingSendTags`).
-  UI: `ui/invites/InvitesScreen.kt` (list, new invite with confirmation, QR/copy/share, cancel).
+  UI: `ui/invites/InvitesScreen.kt` (`NewInviteScreen` with confirmation, `InviteDetailScreen`: QR/copy/share, cancel in place). There is no
+  invites list: "Invite someone" opens the form, and pending invites are rows at the end of Direct messages in the chat list.
 - **Add contact**: `ui/contacts/AddContactScreen.kt` (code / `share_contact` link / invite / bare pubkey +
   route hint), reached from the Chats "Add contact" row (and the empty chat list). `ContactCode` is the
   port of iOS `ContactCode`.
@@ -48,7 +49,8 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
   as iOS). A core refusal (`SphinxException`) is the one failure that restores the invite.
 - `handle` results are published only for a live key exchange (type 10, not while restoring); PeelCore
   publishes every handled result (settle of received payments, pings). Not widened here.
-- Not ported: `contact.isNew` badge, tribe links in add-contact, waiting-sats accounting. (`deleteContact` is phase 24.)
+- `contact.isNew` (DB v17): set by `Storage.insertMessages(marksNewContacts = true)` for a live/caught-up type-10 message not from us (not while restoring), cleared by `Engine.markRead`; the chat shows in Unread with a NEW tag.
+- Not ported: tribe links in add-contact, waiting-sats accounting. (`deleteContact` is phase 24.)
 - Contact "ready" on Android comes from the core's `listContacts` (`Engine.markPeopleReady`), after an add
   and after a type 10/11 message.
 - Tests: `InviteLinkTest`, `ContactCodeTest`, `InviterFlowTest` (clear-first/restore, keep/delete matrix,

@@ -110,6 +110,38 @@ class StorageInviteTest {
     }
 
     @Test
+    fun `someone adding us is a new contact until their chat is opened`() {
+        val storage = newStorage()
+        storage.insertMessages(listOf(keyExchange("02carol", null)), marksNewContacts = true)
+        storage.upsertContact("02carol", "Carol", null, isTribe = false, ready = true)
+        assertTrue(storage.conversations().single().isNew)
+        assertTrue(storage.conversations().single().isUnread)
+        // A later write of the contact keeps the flag.
+        storage.markContactsReady(listOf("02carol"))
+        assertTrue(storage.contact("02carol")!!.isNew)
+        assertTrue(storage.clearNewContact("02carol"))
+        assertFalse(storage.conversations().single().isNew)
+        assertFalse(storage.clearNewContact("02carol"))
+    }
+
+    @Test
+    fun `a restored, repeated or own key exchange marks no new contact`() {
+        val restoring = newStorage()
+        restoring.upsertContact("02carol", "Carol", null, isTribe = false, ready = true)
+        restoring.insertMessages(listOf(keyExchange("02carol", null)))
+        assertFalse(restoring.conversations().single().isNew)
+
+        val storage = newStorage()
+        storage.upsertContact("02carol", "Carol", null, isTribe = false, ready = true)
+        storage.insertMessages(listOf(keyExchange("02carol", null, fromMe = true, uuid = "m")), marksNewContacts = true)
+        assertFalse(storage.conversations().single().isNew)
+        storage.insertMessages(listOf(keyExchange("02carol", null)), marksNewContacts = true)
+        storage.clearNewContact("02carol")
+        storage.insertMessages(listOf(keyExchange("02carol", null)), marksNewContacts = true) // the same uuid again
+        assertFalse(storage.conversations().single().isNew)
+    }
+
+    @Test
     fun `an invite still sending is asked about on connect`() {
         val storage = newStorage()
         storage.insertInvite(invite(S.SENDING))

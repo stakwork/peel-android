@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -47,6 +48,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
@@ -56,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
+import com.sphinx.peel.engine.InviteRecord
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.dateLabel
 import com.sphinx.peel.storage.ConversationRow
@@ -76,13 +81,13 @@ import kotlinx.coroutines.withContext
 
 /// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
 /// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
-enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITES, JOIN_TRIBE, CREATE_TRIBE }
+enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITE, JOIN_TRIBE, CREATE_TRIBE }
 
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
 /// the large title with the connection bolt, then `ChatListBody` for
 /// everything else.
 @Composable
-fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenRoute: (DashboardRoute) -> Unit = {}, onOpenChat: (String) -> Unit = {}) {
+fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenRoute: (DashboardRoute) -> Unit = {}, onOpenInvite: (String) -> Unit = {}, onOpenChat: (String) -> Unit = {}) {
     val connection by engine.connectionState.collectAsState()
 
     Column(modifier.fillMaxSize()) {
@@ -100,7 +105,7 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
             ConnectionBolt(connected = connection == ConnectionState.Connected)
         }
         com.sphinx.peel.ui.diagnostics.DiagnosticsNotice(storage)
-        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenRoute = onOpenRoute, onOpenChat = onOpenChat)
+        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite, onOpenChat = onOpenChat)
     }
 }
 
@@ -116,11 +121,14 @@ private fun ChatListBody(
     query: String,
     modifier: Modifier = Modifier,
     onOpenRoute: (DashboardRoute) -> Unit = {},
+    onOpenInvite: (String) -> Unit = {},
     onOpenChat: (String) -> Unit = {},
 ) {
     var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
     var unreadMentions by remember { mutableStateOf(0L) }
     var unreadThreads by remember { mutableStateOf(0L) }
+    // The invites still waiting (sending, ready, cancelling): a row each at the end of Direct messages.
+    var pendingInvites by remember { mutableStateOf(emptyList<InviteRecord>()) }
     var refresh by remember { mutableStateOf(0) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
@@ -152,6 +160,7 @@ private fun ChatListBody(
             storage.unreadMentions(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You")
         }
         unreadThreads = withContext(Dispatchers.Default) { storage.unreadThreadCount().toLong() }
+        pendingInvites = withContext(Dispatchers.Default) { storage.invites().filter { it.isPending } }
         recentView = withContext(Dispatchers.Default) { engine.chatsRecentView() ?: layout.combinedView }
     }
     // `refresh`: a row action (read, unread, mute) just changed something.
@@ -169,7 +178,7 @@ private fun ChatListBody(
     // While searching it's found by name the same way any other chat is.
     // Unread, it is in the Unread section like any chat.
     val agentConversation = conversations.firstOrNull { it.chat == engine.agentPubkey }
-        ?.takeIf { ChatSections.matches(it.name, query) && it.shownUnread == 0L }
+        ?.takeIf { ChatSections.matches(it.name, query) && !it.isUnread }
     val sectionable = if (agentConversation == null) {
         conversations
     } else {
@@ -186,7 +195,7 @@ private fun ChatListBody(
     Box(modifier) {
         if (conversations.isEmpty() && !searching) {
             // Only for a kept public app here: a workspace's Apps row stays where iOS has it, in the list.
-            EmptyChats(restoring = restoreProgress.restoring, showsApps = openedApps, onOpenRoute = onOpenRoute)
+            EmptyChats(restoring = restoreProgress.restoring, showsApps = openedApps, pendingInvites = pendingInvites, onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite)
         } else if (noMatches) {
             NoSearchResults(query)
         } else {
@@ -248,8 +257,9 @@ private fun ChatListBody(
                     }
                     item { ActionRow("Join a tribe") { onOpenRoute(DashboardRoute.JOIN_TRIBE) } }
                     item { ActionRow("Create a tribe") { onOpenRoute(DashboardRoute.CREATE_TRIBE) } }
+                    items(pendingInvites, key = { "invite-${it.code}" }) { invite -> PendingInviteRow(invite) { onOpenInvite(invite.code) } }
                     item { ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
-                    item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) } }
+                    item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITE) } }
                 }
 
                 // Searching shows every matching section, no chevron, no
@@ -294,8 +304,9 @@ private fun ChatListBody(
                             item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
                         }
                         if (!searching) {
+                            items(pendingInvites, key = { "invite-${it.code}" }) { invite -> PendingInviteRow(invite) { onOpenInvite(invite.code) } }
                             item { ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
-                            item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) } }
+                            item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITE) } }
                         }
                     }
                 }
@@ -421,7 +432,13 @@ private fun EmptySearch() {
 }
 
 @Composable
-private fun EmptyChats(restoring: Boolean, showsApps: Boolean, onOpenRoute: (DashboardRoute) -> Unit) {
+private fun EmptyChats(
+    restoring: Boolean,
+    showsApps: Boolean,
+    pendingInvites: List<InviteRecord>,
+    onOpenRoute: (DashboardRoute) -> Unit,
+    onOpenInvite: (String) -> Unit,
+) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -445,8 +462,9 @@ private fun EmptyChats(restoring: Boolean, showsApps: Boolean, onOpenRoute: (Das
         if (!restoring) {
             // Nobody to talk to yet: the two ways to get someone here must not hide behind a chat.
             Spacer(Modifier.height(16.dp))
+            for (invite in pendingInvites) PendingInviteRow(invite) { onOpenInvite(invite.code) }
             ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) }
-            ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITES) }
+            ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITE) }
         }
         // A new worker has no chats yet but has the Stadeum's worker app: Apps must not hide behind a chat either.
         if (showsApps) {
@@ -511,6 +529,11 @@ private fun ChatRow(
     onClick: () -> Unit,
 ) {
     val unread = conversation.shownUnread
+    // Bold/bright is for something actually unread (PeelCore's own `lit`,
+    // ChatListRow): a new contact sits in the Unread section (`isUnread`
+    // covers that) but its row text stays normal, with only the trailing
+    // NEW tag marking it.
+    val bold = unread > 0
     Row(
         Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -522,8 +545,8 @@ private fun ChatRow(
                 Text(
                     if (isAgent) "Peel" else conversation.name,
                     style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (unread > 0) Theme.colors.text else Theme.colors.secondaryText,
+                    fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (bold) Theme.colors.text else Theme.colors.secondaryText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
@@ -547,13 +570,14 @@ private fun ChatRow(
         if (unread > 0) {
             Spacer(Modifier.width(8.dp))
             UnreadBadge(unread)
+        } else if (conversation.isNew) {
+            Spacer(Modifier.width(8.dp))
+            NewTag()
         } else {
             // Nothing unread to show as a count — PeelCore's own
             // `ChatListRow` still shows the chat's own mute state as a
             // trailing glyph (bell-slash/"@"), state already stored and
-            // read (Phase 6), just never shown here until now. No "New"
-            // badge yet (PeelCore's `ChatReadState.isNew`) - this port
-            // tracks no such flag for a just-added contact.
+            // read (Phase 6), just never shown here until now.
             when (conversation.muteLevel) {
                 2 -> {
                     Spacer(Modifier.width(8.dp))
@@ -565,6 +589,54 @@ private fun ChatRow(
                 }
             }
         }
+    }
+}
+
+/// "NEW" on a contact who just added this account, until its chat is opened (PeelCore's `ChatReadState.isNew` tag).
+@Composable
+private fun NewTag() {
+    Text(
+        "NEW",
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = Theme.colors.buttonText,
+        modifier = Modifier.clip(CircleShape).background(Theme.colors.button).padding(horizontal = 8.dp, vertical = 3.dp),
+    )
+}
+
+/// A pending invite in Direct messages (PeelCore's `PendingInviteRow`): a dashed ring round an envelope, its name
+/// (or "Invite") and, at the right, how it stands. Opens its detail.
+@Composable
+private fun PendingInviteRow(invite: InviteRecord, onClick: () -> Unit) {
+    val ring = Theme.colors.secondaryText
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(30.dp).drawBehind {
+                drawCircle(ring, style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+            },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Mail, contentDescription = null, tint = ring, modifier = Modifier.size(14.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            invite.nickname ?: "Invite",
+            style = MaterialTheme.typography.bodyLarge,
+            color = Theme.colors.secondaryText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            invite.shortStatus,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp, fontFeatureSettings = "tnum"),
+            color = Theme.colors.secondaryText.copy(alpha = 0.7f),
+            maxLines = 1,
+        )
     }
 }
 

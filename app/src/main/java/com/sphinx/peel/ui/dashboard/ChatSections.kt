@@ -50,10 +50,10 @@ data class ChatSections(
         ): ChatSections {
             val searching = query.isNotBlank()
             val matching = if (searching) conversations.filter { matches(it.name, query) } else conversations
-            val unreadDirect = matching.filter { !it.isTribe && it.shownUnread > 0 }
-            val unreadTribes = matching.filter { it.isTribe && it.shownUnread > 0 }
-            val tribes = matching.filter { it.isTribe && it.shownUnread == 0L }
-            val direct = matching.filter { !it.isTribe && it.shownUnread == 0L }
+            val unreadDirect = matching.filter { !it.isTribe && it.isUnread }
+            val unreadTribes = matching.filter { it.isTribe && it.isUnread }
+            val tribes = matching.filter { it.isTribe && !it.isUnread }
+            val direct = matching.filter { !it.isTribe && !it.isUnread }
             val (shownTribes, tribesCount) = shown(tribes, tribesOpen || searching, allTribes, searching)
             val (shownDirect, directCount) = shown(direct, directOpen || searching, allDirect, searching)
             val merged = (tribes + direct).sortedByDescending { it.lastTimestamp ?: 0L }
