@@ -3,6 +3,12 @@ package com.sphinx.peel.ui.apps
 import android.app.Application
 import android.net.Uri
 import android.os.Message
+import android.app.Activity
+import android.content.ClipData
+import android.content.Intent
+import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -10,6 +16,8 @@ import android.webkit.WebView
 import androidx.test.core.app.ApplicationProvider
 import com.sphinx.peel.engine.OrgDownloads
 import com.sphinx.peel.engine.OrgPageRequest
+import com.sphinx.peel.engine.PageLog
+import com.sphinx.peel.engine.PageMedia
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.After
@@ -17,12 +25,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowLog
 
 /// The org-page host's policy as Android's web view calls it (`OrgPageClient`, `OrgPageChromeClient`, `OrgPageController`),
 /// on Robolectric's WebView. What the rules decide is `OrgPageTest`'s; this checks they are applied: what loads, with which
@@ -174,6 +184,130 @@ class OrgPageHostTest {
         // A file it was on is not reloaded with the bearer: the page's own request.
         controller.lastUrl = "https://acme.sphinx.chat/lab/jobs/j/files/a.pdf"
         assertEquals(strut.url, controller.initialRequest().url)
+    }
+
+    /// A gone renderer reported by a web view this page no longer holds is that one's alone (docs/phases/42-page-host-logs.md).
+    @Test fun `a web view the page no longer holds going does not take the page's own`() {
+        val stale = WebView(app)
+        val before = controller.generation
+        val detail = object : RenderProcessGoneDetail() {
+            override fun didCrash() = false
+            override fun rendererPriorityAtExit() = 0
+        }
+        assertTrue(client.onRenderProcessGone(stale, detail))
+        assertSame(web, controller.web)
+        assertEquals(before, controller.generation)
+    }
+
+    /// What the page's steps write to logcat: the origin and numbers, never the app, the folder or the token.
+    @Test fun `the client logs each step by its origin alone`() {
+        val url = "https://acme.sphinx.chat/lab/?app=x&solo=1"
+        val before = ShadowLog.getLogsForTag(PageLog.TAG).size
+        client.onPageStarted(web, url, null)
+        client.onReceivedHttpError(web, Req(url), WebResourceResponse("text/html", "utf-8", 500, "Error", emptyMap(), null))
+        client.onPageFinished(web, url)
+        chrome.onProgressChanged(web, 100)
+        val lines = ShadowLog.getLogsForTag(PageLog.TAG).drop(before).map { it.msg }
+        assertEquals(
+            listOf(
+                "pageStarted https://acme.sphinx.chat gen=0",
+                "httpError https://acme.sphinx.chat status=500",
+                "pageFinished https://acme.sphinx.chat gen=0",
+                "progress 100 gen=0",
+            ),
+            lines,
+        )
+    }
+
+    private class Asked(private val from: String, private val what: Array<String>) : PermissionRequest() {
+        var granted: List<String>? = null
+        var denied = false
+        override fun getOrigin(): Uri = Uri.parse(from)
+        override fun getResources(): Array<String> = what
+        override fun grant(resources: Array<String>) { granted = resources.toList() }
+        override fun deny() { denied = true }
+    }
+
+    /// strut's camera sheet (iOS `requestMediaCapturePermissionFor`): the page's own origin gets the camera once the system's
+    /// permission is held, asked through the screen's prompt only for what is missing (docs/phases/42-page-host-logs.md).
+    @Test fun `the page's own origin gets the camera after the system's permission`() {
+        val askedSystem = mutableListOf<List<String>>()
+        var holdsCamera = true
+        controller.askSystem = { permissions, done -> askedSystem += permissions; done { it == PageMedia.CAMERA && holdsCamera } }
+        val camera = Asked("https://acme.sphinx.chat/", arrayOf(PageMedia.VIDEO))
+        chrome.onPermissionRequest(camera)
+        assertEquals(listOf(listOf(PageMedia.CAMERA)), askedSystem)
+        assertEquals(listOf(PageMedia.VIDEO), camera.granted)
+
+        // The person said no to the system: the page is told no.
+        holdsCamera = false
+        val refused = Asked("https://acme.sphinx.chat/", arrayOf(PageMedia.VIDEO))
+        chrome.onPermissionRequest(refused)
+        assertTrue(refused.denied)
+        assertNull(refused.granted)
+    }
+
+    @Test fun `another origin, a sandboxed frame or anything but the camera and microphone is denied without asking`() {
+        val askedSystem = mutableListOf<List<String>>()
+        controller.askSystem = { permissions, done -> askedSystem += permissions; done { true } }
+        for (request in listOf(
+            Asked("https://evil.example.com/", arrayOf(PageMedia.VIDEO)),
+            Asked("null", arrayOf(PageMedia.VIDEO)),
+            Asked("https://acme.sphinx.chat/", arrayOf("android.webkit.resource.PROTECTED_MEDIA_ID")),
+        )) {
+            chrome.onPermissionRequest(request)
+            assertTrue(request.denied)
+            assertNull(request.granted)
+        }
+        assertEquals(emptyList<List<String>>(), askedSystem)
+    }
+
+    /// strut's camera sheet is a video with no poster until the first frame: WebView's own default (a big play button) is not drawn.
+    @Test fun `a video with no poster shows a transparent pixel, not a play button`() {
+        val poster = chrome.defaultVideoPoster!!
+        assertEquals(1, poster.width)
+        assertEquals(1, poster.height)
+        assertEquals(0, android.graphics.Color.alpha(poster.getPixel(0, 0)))
+    }
+
+    private class Params(private val accept: Array<String>, private val multiple: Boolean = false) : WebChromeClient.FileChooserParams() {
+        override fun getMode() = if (multiple) MODE_OPEN_MULTIPLE else MODE_OPEN
+        override fun getAcceptTypes() = accept
+        override fun isCaptureEnabled() = false
+        override fun getTitle(): CharSequence? = null
+        override fun getFilenameHint(): String? = null
+        override fun createIntent() = Intent(Intent.ACTION_GET_CONTENT).setType(accept.firstOrNull() ?: "*/*")
+    }
+
+    /// A page's `<input type=file>` ("or choose one from this device"): the system's picker, and the page gets what was picked,
+    /// told once; nothing shown and nothing told until the screen can show it (docs/phases/42-page-host-logs.md).
+    @Test fun `a file input shows the system's picker and the page gets what was picked`() {
+        val told = mutableListOf<List<Uri>?>()
+        val callback = ValueCallback<Array<Uri>> { told += it?.toList() }
+        assertFalse(chrome.onShowFileChooser(web, callback, Params(arrayOf("image/*"))))
+        assertEquals(emptyList<List<Uri>?>(), told)
+
+        val photo = Uri.parse("content://media/external/images/1")
+        var shownFor: WebChromeClient.FileChooserParams? = null
+        controller.chooseFiles = { params, done -> shownFor = params; done(arrayOf(photo)); true }
+        assertTrue(chrome.onShowFileChooser(web, callback, Params(arrayOf("image/*"))))
+        assertEquals(listOf("image/*"), shownFor!!.acceptTypes.toList())
+        assertEquals(listOf(listOf(photo)), told)
+
+        controller.chooseFiles = { _, done -> done(null); true }
+        chrome.onShowFileChooser(web, callback, Params(arrayOf("image/*")))
+        assertEquals(listOf(listOf(photo), null), told)
+    }
+
+    @Test fun `what the picker returned is every file picked, or none`() {
+        val a = Uri.parse("content://docs/a")
+        val b = Uri.parse("content://docs/b")
+        assertEquals(listOf(a), pickedFiles(Activity.RESULT_OK, Intent().setData(a))!!.toList())
+        val two = Intent().apply { clipData = ClipData.newRawUri(null, a).apply { addItem(ClipData.Item(b)) } }
+        assertEquals(listOf(a, b), pickedFiles(Activity.RESULT_OK, two)!!.toList())
+        assertNull(pickedFiles(Activity.RESULT_CANCELED, Intent().setData(a)))
+        assertNull(pickedFiles(Activity.RESULT_OK, null))
+        assertNull(pickedFiles(Activity.RESULT_OK, Intent()))
     }
 
     @Test fun `a new window goes here, out, or nowhere`() {
