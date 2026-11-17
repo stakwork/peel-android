@@ -13,6 +13,15 @@ class ChatSectionsTest {
         )
 
     @Test
+    fun `a new contact is in the unread section with nothing unread`() {
+        val rows = listOf(row("d1", false), row("d2", false).copy(isNew = true))
+        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
+
+        assertEquals(listOf("d2"), sections.unread.map { it.chat })
+        assertEquals(listOf("d1"), sections.direct.map { it.chat })
+    }
+
+    @Test
     fun `splits tribes from direct messages`() {
         val rows = listOf(row("t1", true), row("d1", false), row("t2", true))
         val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)

@@ -113,6 +113,8 @@ fun MainTabs(
     // thread; `openRoute` stays THREADS underneath, so Back from the chat
     // returns to the list.
     var openThreadRoot by remember { mutableStateOf<String?>(null) }
+    // The invite whose detail is open (a pending one tapped in the chat list, or the one just made).
+    var openInvite by remember { mutableStateOf<String?>(null) }
 
     // A tapped notification: open its chat (or Payments), once.
     LaunchedEffect(deepLink) {
@@ -267,7 +269,10 @@ fun MainTabs(
             if (phase != null) CallBanner(phase, onTap = { CallController.callScreenShown = true }, onLeave = ::leaveCall)
             val chat = openChat
             val route = openRoute
-            if (route != null && chat == null) {
+            val inviteCode = openInvite
+            if (inviteCode != null && chat == null) {
+                com.sphinx.peel.ui.invites.InviteDetailScreen(engine, storage, inviteCode, onClose = { openInvite = null })
+            } else if (route != null && chat == null) {
                 val back = { openRoute = null }
                 when (route) {
                     DashboardRoute.APPS -> AppsScreen(storage, onBack = back, onTalk = { home -> back(); talkToJamie(home) }, onOpenPublic = { pages.open(it, ready = true) })
@@ -291,7 +296,11 @@ fun MainTabs(
                         onBack = back,
                         onDone = { tribeChat -> openRoute = null; openChat = tribeChat },
                     )
-                    DashboardRoute.INVITES -> com.sphinx.peel.ui.invites.InvitesScreen(engine, storage, onBack = back)
+                    DashboardRoute.INVITE -> com.sphinx.peel.ui.invites.NewInviteScreen(
+                        engine,
+                        onBack = back,
+                        onMade = { made -> openRoute = null; openInvite = made.code },
+                    )
                     DashboardRoute.MENTIONS -> MentionsScreen(
                         storage,
                         onBack = back,
@@ -320,7 +329,7 @@ fun MainTabs(
             } else {
                 Box(Modifier.weight(1f)) {
                     when (tab) {
-                        MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }) { openChat = it }
+                        MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }, onOpenInvite = { openInvite = it }) { openChat = it }
                         MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
                         MainTab.YOU -> YouScreen(engine, storage, secretStore, forget)
                         MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }

@@ -76,6 +76,8 @@ data class ContactRow(
     /// same gap its own name/photo already has).
     val pricePerMessageMsat: Long = 0,
     val escrowMsat: Long = 0,
+    /// Someone just added this account and it has not been opened since (PeelCore's `contact.isNew`).
+    val isNew: Boolean = false,
 )
 
 /// The message types that count as unread (and that "Mark unread" can sit
@@ -129,7 +131,12 @@ data class ConversationRow(
     /// chat can be marked unread at all (PeelCore's `ReadToggle`: only
     /// once someone else has written in it). Null when there is none.
     val newestIncoming: Long? = null,
+    /// A contact who just added this account, until its chat is opened (PeelCore's `ChatReadState.isNew`).
+    val isNew: Boolean = false,
 ) {
+    /// In the Unread section and bold: something new, or a new contact (PeelCore's `isUnread`).
+    val isUnread: Boolean get() = shownUnread > 0 || isNew
+
     /// One line for the row, null for a chat with nothing yet.
     val previewLine: String? get() =
         com.sphinx.peel.engine.ConversationPreview.line(previewType, previewBody, previewDeleted, previewFromMe, isTribe, previewSender)
@@ -156,7 +163,7 @@ data class ConversationRow(
     /// not [shownUnread]: a muted chat with unread messages can be marked read.
     val readToggle: ReadToggle?
         get() = when {
-            unread > 0 -> ReadToggle.MARK_READ
+            unread > 0 || isNew -> ReadToggle.MARK_READ
             newestIncoming != null && newestIncoming > 0 -> ReadToggle.MARK_UNREAD
             else -> null
         }
@@ -591,6 +598,13 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
+    /// Opening a chat clears its contact's NEW flag (PeelCore's `clearNewContact`). True when it was set.
+    fun clearNewContact(chat: String): Boolean {
+        val statement = helper.writableDatabase.compileStatement("UPDATE contact SET isNew = 0 WHERE pubkey = ? AND isNew = 1")
+        statement.bindString(1, chat)
+        return statement.use { it.executeUpdateDelete() } > 0
+    }
+
     /// Sets a chat's own mute level here, keeping its read marker —
     /// PeelCore's `Storage.setMute`. The server holds the level too
     /// (`Engine.setMute` sends it first).
@@ -792,7 +806,7 @@ class Storage(context: Context, account: String = "default") {
     /// the server: moved to `DELIVERED` rather than left exactly as
     /// `insertWithOnConflict` would leave it (unmatched silently, since
     /// `CONFLICT_IGNORE` cannot also update the row it left alone).
-    fun insertMessages(rows: List<MessageRow>, contacts: List<ContactRow> = emptyList()) {
+    fun insertMessages(rows: List<MessageRow>, contacts: List<ContactRow> = emptyList(), marksNewContacts: Boolean = false) {
         if (rows.isEmpty() && contacts.isEmpty()) return
         val db = helper.writableDatabase
         db.beginTransaction()
@@ -832,6 +846,12 @@ class Storage(context: Context, account: String = "default") {
                 // (a key exchange, type 10, whose sender names it): the invite is used.
                 if (inserted != -1L && row.type == CONTACT_KEY_MESSAGE_TYPE && !row.fromMe) {
                     inviteCodeOf(row.sender)?.let { markInviteUsed(db, it, row.chat) }
+                }
+                // Someone adding this account for the first time is a new contact until opened (not when restoring:
+                // `marksNewContacts` false). Their contact row may not exist yet; `upsertContact` keeps the flag.
+                if (inserted != -1L && marksNewContacts && row.type == CONTACT_KEY_MESSAGE_TYPE && !row.fromMe) {
+                    db.execSQL("INSERT OR IGNORE INTO contact (pubkey) VALUES (?)", arrayOf(row.chat))
+                    db.execSQL("UPDATE contact SET isNew = 1 WHERE pubkey = ?", arrayOf(row.chat))
                 }
                 if (inserted == -1L && row.uuid != null) {
                     db.execSQL(
@@ -1253,6 +1273,7 @@ class Storage(context: Context, account: String = "default") {
             // 0 (no price) the moment any other field about it changes.
             put("pricePerMessageMsat", existing?.pricePerMessageMsat ?: 0)
             put("escrowMsat", existing?.escrowMsat ?: 0)
+            put("isNew", if (existing?.isNew == true) 1 else 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         contactsVersionFlow.value += 1
@@ -1276,6 +1297,7 @@ class Storage(context: Context, account: String = "default") {
             put("ready", if (existing.ready) 1 else 0)
             put("pricePerMessageMsat", pricePerMessageMsat)
             put("escrowMsat", escrowMsat)
+            put("isNew", if (existing.isNew) 1 else 0)
         }
         db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         contactsVersionFlow.value += 1
@@ -1306,6 +1328,7 @@ class Storage(context: Context, account: String = "default") {
                     put("ready", 1)
                     put("pricePerMessageMsat", existing?.pricePerMessageMsat ?: 0)
                     put("escrowMsat", existing?.escrowMsat ?: 0)
+                    put("isNew", if (existing?.isNew == true) 1 else 0)
                 }
                 db.insertWithOnConflict("contact", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         contactsVersionFlow.value += 1
@@ -1349,7 +1372,8 @@ class Storage(context: Context, account: String = "default") {
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0),
                 (SELECT MAX(m.serverIndex) FROM message m
                     WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.deleted = 0 AND m.type IN $COUNTED_TYPES),
-                p.type, p.body, p.deleted, p.fromMe, p.sender
+                p.type, p.body, p.deleted, p.fromMe, p.sender,
+                c.isNew
             FROM contact c
             LEFT JOIN message p ON p.id = (
                 SELECT id FROM message
@@ -1388,6 +1412,7 @@ class Storage(context: Context, account: String = "default") {
                         previewDeleted = !cursor.isNull(12) && cursor.getInt(12) != 0,
                         previewFromMe = if (cursor.isNull(13)) null else cursor.getInt(13) != 0,
                         previewSender = cursor.getString(14),
+                        isNew = cursor.getInt(15) != 0,
                     ),
                 )
             }
@@ -1458,7 +1483,7 @@ class Storage(context: Context, account: String = "default") {
 
     private fun readContact(db: SQLiteDatabase, pubkey: String): ContactRow? {
         db.query(
-            "contact", arrayOf("pubkey", "alias", "photoUrl", "isTribe", "ready", "pricePerMessageMsat", "escrowMsat"),
+            "contact", arrayOf("pubkey", "alias", "photoUrl", "isTribe", "ready", "pricePerMessageMsat", "escrowMsat", "isNew"),
             "pubkey = ?", arrayOf(pubkey), null, null, null,
         ).use { cursor ->
             if (!cursor.moveToFirst()) return null
@@ -1470,6 +1495,7 @@ class Storage(context: Context, account: String = "default") {
                 ready = cursor.getInt(4) != 0,
                 pricePerMessageMsat = cursor.getLong(5),
                 escrowMsat = cursor.getLong(6),
+                isNew = cursor.getInt(7) != 0,
             )
         }
     }
@@ -2127,7 +2153,7 @@ class Storage(context: Context, account: String = "default") {
 
     companion object {
         /// The schema version the app's database is at (a seam: tests assert it rather than a number of their own).
-        const val VERSION = 16
+        const val VERSION = 17
     }
 
     fun deleteAccount() {
@@ -2160,6 +2186,7 @@ class Storage(context: Context, account: String = "default") {
             v14(db)
             v15(db)
             v16(db)
+            v17(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -2181,6 +2208,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 14) v14(db)
             if (oldVersion < 15) v15(db)
             if (oldVersion < 16) v16(db)
+            if (oldVersion < 17) v17(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -2509,6 +2537,11 @@ class Storage(context: Context, account: String = "default") {
                 )
                 """.trimIndent(),
             )
+        }
+
+        // `contact.isNew` (PeelCore's `contact.isNew`): someone who just added this account, until its chat is opened. Not set for rows stored before.
+        private fun v17(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE contact ADD COLUMN isNew INTEGER NOT NULL DEFAULT 0")
         }
 
         companion object {

@@ -1,5 +1,10 @@
 package com.sphinx.peel.engine
 
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
 /// An invite made here with sats (`Engine.makeInvite`). The core keeps no
 /// record of invites, and the server only the code and its sats, so this is
 /// the only list of them. The nickname and message are for this account
@@ -50,6 +55,27 @@ data class InviteRecord(
 
     /// Still waiting to be used: listed as open, and may be cancelled.
     val isPending: Boolean get() = status in PENDING_STATUSES
+
+    /// What a list row shows at its right (PeelCore's `shortStatus`): the amount, unless it is on its way or being cancelled.
+    val shortStatus: String
+        get() = when (status) {
+            Status.SENDING -> "Sending…"
+            Status.CANCELLING -> "Cancelling…"
+            else -> Sats.format(amountMsat)
+        }
+
+    /// Where it stands, in a line under the amount (PeelCore's `statusLine`).
+    fun statusLine(zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String {
+        val made = "Made " + DateTimeFormatter.ofPattern("d MMM 'at' HH:mm", locale).withZone(zone).format(Instant.ofEpochMilli(createdAt))
+        return when (status) {
+            Status.SENDING -> "Setting up…"
+            Status.READY -> "$made · waiting to be used"
+            Status.CANCELLING -> "Cancelling, sats not back yet"
+            Status.CANCELLED -> "Cancelled, sats returned"
+            Status.USED -> "Used"
+            Status.FAILED -> "Payment failed"
+        }
+    }
 
     companion object {
         val PENDING_STATUSES = listOf(Status.SENDING, Status.READY, Status.CANCELLING)

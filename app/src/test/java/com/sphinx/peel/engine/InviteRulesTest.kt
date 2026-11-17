@@ -64,4 +64,20 @@ class InviteRulesTest {
         assertEquals(S.USED, S.fromRaw("used"))
         assertNull(S.fromRaw("nope"))
     }
+
+    @Test
+    fun `status lines and short statuses read as the iPhone's do`() {
+        val zone = java.time.ZoneOffset.UTC
+        val en = java.util.Locale.ENGLISH
+        val made = InviteRecord("c", "l", 5_000, null, null, "t", S.SENDING, 1_700_223_780_000) // 17 Nov 2023, 12:23 UTC
+        assertEquals("Made 17 Nov at 12:23 · waiting to be used", made.copy(status = S.READY).statusLine(zone, en))
+        assertEquals("Setting up…", made.copy(status = S.SENDING).statusLine(zone, en))
+        assertEquals("Cancelling, sats not back yet", made.copy(status = S.CANCELLING).statusLine(zone, en))
+        assertEquals("Cancelled, sats returned", made.copy(status = S.CANCELLED).statusLine(zone, en))
+        assertEquals("Used", made.copy(status = S.USED).statusLine(zone, en))
+        assertEquals("Payment failed", made.copy(status = S.FAILED).statusLine(zone, en))
+        assertEquals("Sending…", made.copy(status = S.SENDING).shortStatus)
+        assertEquals("Cancelling…", made.copy(status = S.CANCELLING).shortStatus)
+        assertEquals(Sats.format(made.amountMsat), made.copy(status = S.READY).shortStatus)
+    }
 }
