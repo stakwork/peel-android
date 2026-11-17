@@ -1,8 +1,11 @@
-# Phase 42 — Page host: a blank page on a phone, its logs and three fixes
+# Phase 42 — Page host: a blank page on a phone, its logs and its two causes
 
-Status: **written without a build here (no Android SDK on this Mac); CI runs the unit tests, lint and `assembleDebug`. Nothing was
-run on a device. The cause of the blank page is not known yet: this phase adds the logs that should name it, and fixes three code
-paths that can leave a page blank with no failure screen.**
+Status: **cause found on the phone and fixed; verified on that phone.** There were two causes (see "The cause", below): the
+WebView's WRAP_CONTENT layout height made `100vh` zero, and a new page kept the last page's emptied AndroidView. Both are fixed.
+With the fixes, Peel Dev (a debug build of this branch plus #102, on the Pixel 9a below) draws strut's worker app, and draws
+example.com opened over it. Release 0.1.6 still has both bugs until the next release. The logs below, and three other paths
+fixed from the code alone (not seen on the phone), came first. Tests and lint pass locally (Java 21); the only local failure is
+`ConversationDateTest.todayShowsTime`, which is Java 21's narrow no-break space before PM and passes in CI on Java 17.
 
 ## What was seen
 On a Pixel 9a (GrapheneOS, Android 16, WebView `app.vanadium.webview` 140.0.7339.35), Peel 0.1.6 (release APK):
@@ -16,7 +19,24 @@ On a Pixel 9a (GrapheneOS, Android 16, WebView `app.vanadium.webview` 140.0.7339
   `Renderer process crash detected (code -1)` were logged.
 - The page host (phase 29/30) had never been run on a device before.
 
-## Which paths give "a web view, nothing painted, no failure screen, Reload does nothing"
+## The cause (found on the phone)
+With Peel Dev (debuggable, so its WebView could be inspected over adb with the DevTools protocol) on the same phone:
+1. **Strut's worker app: `100vh` was 0.** The page loaded (`pageStarted`, `pageFinished`, `commitVisible`; strut's own scripts
+   logging to the console). Chromium called it attached, visible and 1080x2041. But every element from `<html>` down to the app's
+   iframe had a computed height of 0px, while `innerHeight` was 777. In that page, `100vh` and `100dvh` measured 0, and a fixed
+   `height:100%` measured 777. strut's solo layout is `.app-solo { height: 100vh }`. What showed was the page's own near-black
+   body under Peel's header. The reason: `AndroidView` gives a view without layout params WRAP_CONTENT, and a WebView whose
+   layout height is WRAP_CONTENT lays the page out on a zero-height viewport (it sizes itself to its content). Fix:
+   `makeOrgWebView` gives the WebView MATCH_PARENT. Accompanist's WebView does the same, for this reason.
+2. **A page opened over another: no web view at all.** example.com opened while the worker app showed logged the old page's
+   `close` and no new `webView`. `OrgPageScreen` keyed its `AndroidView` on `controller.generation` alone, which is 0 for every
+   new page. So Compose kept the old `AndroidView` (its factory never ran again), while the old controller's dispose destroyed
+   that view's WebView and took it out. The result was an empty holder, a controller with no web view, no failure screen, and a
+   Reload that did nothing (it returned at `web ?: return`). That matches the "no WebView node" uiautomator showed. Fix: key on
+   the controller too. The same applied to an org page opened over another one in `MainTabs`.
+The per-page profile was not a cause: `MULTI_PROFILE` works on this WebView (`profile=on`, and the page loads).
+
+## Which paths give "a web view, nothing painted, no failure screen, Reload does nothing" (read from the code, before the phone)
 From `ui/apps/OrgPageHost.kt` as it was:
 1. **The page left with no web view** (`controller.web == null`). `processGone()` destroys the web view and removes it from its
    holder, then counts `generation` up, so a new web view is made. If the page is ever left without one, `reload()` began
@@ -65,17 +85,11 @@ From `ui/apps/OrgPageHost.kt` as it was:
   - The wallet bridge's install is caught. A throw is a page without the wallet (its existing notice), not a crash.
 
 ## Open
-- **The cause.** The next release-signed build on the phone, read with `adb logcat -s PeelPage`, should name it:
-  - no `loadUrl` line after `webView`: the web view is never made or never loads;
-  - `loadUrl` but never `pageStarted`/`error`: a navigation that never commits (path 2);
-  - `renderGone current=true` and then no new `webView gen=n+1`: path 1;
-  - `profile=threw:…`: path 3;
-  - `detached`/`size 0x0`: the web view is not in the window.
-- **If it is the profile** (loads hang only with `profile=on`), the fix is to make the page without a profile: wipe the shared data
-  as the non-profile path already does. Not done here without that evidence: profiles are what keeps an org page's data apart
-  while another page is open.
+- Release 0.1.6 has both bugs. A release with this phase is what fixes Peel for workers; that release is not cut here.
+- The paths fixed from the code alone (a stale web view's gone renderer, Reload with no web view, a throwing profile) were not
+  seen on the phone.
 - The progress bar still starts at `onPageStarted` (commit). Showing it from `loadUrl` would make a hang visible, but a load that
-  becomes a download never calls `onPageFinished`, so the bar could stay up. Left until the logs say a hang is what happens.
+  becomes a download never calls `onPageFinished`, so the bar could stay up. No hang was seen, so it is left.
 
 ## Tests
 JVM: `PageLogTest`. It checks that origins drop the path, query, fragment and credentials; that steps and failures carry no app or
@@ -85,6 +99,10 @@ Robolectric:
 - `PublicPageHostTest`: Reload and Try again with no web view make a new one; a profile that throws is dropped.
 - `PageHostLogTest`: the real `OrgPageScreen` logs `webView`, the first `loadUrl` and `close` for an org page and a public page,
   with no bearer, app or path in any line.
+- `OrgPageScreenTest`: the real `OrgPageScreen` gives its WebView MATCH_PARENT, and a page opened over another gets a web view of
+  its own. Each test fails without its fix (checked).
+  - The page-switch test runs its own `Recomposer` and `BroadcastFrameClock`. After an earlier test has destroyed its activity,
+    Robolectric's shared Compose frame clock runs no more frames, so a state change would never recompose.
 
-Not covered by CI (needs a device): what a real WebView reports; whether profiles load on Vanadium; the renderer kill; the
-attach/size lines.
+On the phone (Peel Dev): the worker app and example.com, each drawn, the second opened over the first; `100vh` measured over the
+DevTools protocol. Not covered anywhere: the renderer kill and the stale-view path.
