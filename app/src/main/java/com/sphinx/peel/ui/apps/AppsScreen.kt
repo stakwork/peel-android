@@ -218,7 +218,7 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit) {
+internal fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val link = app.shareLink()
     Box {
@@ -267,7 +267,7 @@ private fun OpenedAppRow(app: OpenedApp, onOpen: () -> Unit, onRemove: () -> Uni
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TalkRow(home: TalkHome, onClick: () -> Unit, onHistory: () -> Unit) {
+internal fun TalkRow(home: TalkHome, onClick: () -> Unit, onHistory: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Box {
     Row(

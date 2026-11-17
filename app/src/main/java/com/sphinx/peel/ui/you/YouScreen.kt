@@ -1037,7 +1037,7 @@ private fun StadeumButton(label: String, color: Color, onClick: () -> Unit) {
 /// You › Connected apps (iOS `ConnectedAppsScreen`, docs/phases/34-wallet-host.md): each org or app the person connected, its spending
 /// limit (editable) and what it spent, what happens over it, Disconnect. Live from storage; the rows' rules are `ConnectedAppRow`.
 @Composable
-private fun ConnectedAppsScreen(storage: Storage, onBack: () -> Unit) {
+internal fun ConnectedAppsScreen(storage: Storage, onBack: () -> Unit) {
     val version by storage.walletConnectionsVersion.collectAsState()
     val connections = remember(version) { storage.walletConnections() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)) {

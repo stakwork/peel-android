@@ -107,6 +107,7 @@ sections for code that isn't written yet.
   - `InviteLink.appOf` (`engine/Invite.kt`), `OpenedApp` (`engine/PublicApp.kt`), `Storage` v16 `public_app`, `PublicPageRouter(opened)`, `AppsScreen(onOpenPublic)`, `Stadeum.showsApps(openedApps)` (the Chats row),
     `VisitorSignature.address`/`Engine.signInAddress` — worker onboarding (`docs/phases/41-worker-onboarding.md`): an invite link's `&a=`
     opens a public app, `sign_in` sends the account's Sphinx address with the root key, opened public apps stay in Apps.
+  - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

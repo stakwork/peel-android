@@ -66,16 +66,20 @@ import kotlinx.coroutines.launch
 /// Whatever sheet the page's wallet host has up (iOS `PhoneWalletSheets` shown as a sheet): none dismissed by a tap outside; Back
 /// is a no. Keyed by the sheet's id, so a new sheet starts with a fresh form and a fresh 700 ms.
 @Composable
-fun WalletSheets(sheets: PhoneWalletSheets) {
+fun WalletSheets(sheets: PhoneWalletSheets, clock: () -> Long = DEFAULT_CLOCK) {
     val shown = sheets.shown ?: return
     androidx.compose.runtime.key(shown.id) {
         when (shown) {
-            is WalletSheet.Connect -> WalletConnectPhoneSheet(shown.sheet) { sheets.answer(WalletSheetAnswer(connect = it)) }
-            is WalletSheet.Payment -> WalletPaymentPhoneSheet(shown.sheet) { sheets.answer(WalletSheetAnswer(paid = it)) }
-            is WalletSheet.Credit -> WalletCreditPhoneSheet(shown.sheet) { sheets.answer(WalletSheetAnswer(paid = it)) }
+            is WalletSheet.Connect -> WalletConnectPhoneSheet(shown.sheet, clock = clock) { sheets.answer(WalletSheetAnswer(connect = it)) }
+            is WalletSheet.Payment -> WalletPaymentPhoneSheet(shown.sheet, clock = clock) { sheets.answer(WalletSheetAnswer(paid = it)) }
+            is WalletSheet.Credit -> WalletCreditPhoneSheet(shown.sheet, clock = clock) { sheets.answer(WalletSheetAnswer(paid = it)) }
         }
     }
 }
+
+/// The sheets' arming clock. A parameter of each sheet only so a test can drive it (Robolectric's SystemClock does not follow
+/// Compose's test clock); production always uses this default, so nothing changes.
+internal val DEFAULT_CLOCK: () -> Long = { SystemClock.elapsedRealtime() }
 
 private val sheetProperties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false, usePlatformDefaultWidth = false)
 
@@ -106,9 +110,9 @@ private fun SectionTitle(text: String) =
 /// the spending limit (lowered here if wanted, never above what was asked), what to do over it. A sign-in alone has no wallet
 /// sections. The yes is off for the first 700 ms: a tap meant for the page is never the yes.
 @Composable
-fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, done: (WalletConnectAnswer?) -> Unit) {
+fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, clock: () -> Long = DEFAULT_CLOCK, done: (WalletConnectAnswer?) -> Unit) {
     val form = remember(sheet) { WalletConnectForm(sheet) }
-    val gate = remember(sheet) { ArmingGate({ SystemClock.elapsedRealtime() }) }
+    val gate = remember(sheet) { ArmingGate(clock) }
     var settled by remember(sheet) { mutableStateOf(false) }
     LaunchedEffect(sheet) {
         delay(ArmingGate.SETTLE_MS)
@@ -195,8 +199,8 @@ fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, done: (WalletConnectAnswe
 /// The PAYMENT sheet, for one payment over the limit (iOS `WalletPaymentPhoneSheet`): the amount Peel decoded, the payee, the memo
 /// or message, the fee, the app's own words marked as its, and the touch-safe two-step.
 @Composable
-fun WalletPaymentPhoneSheet(sheet: WalletPaymentSheet, done: (Boolean) -> Unit) {
-    val step = remember(sheet) { WalletPayStep(sheet.amountMsat, { SystemClock.elapsedRealtime() }) }
+fun WalletPaymentPhoneSheet(sheet: WalletPaymentSheet, clock: () -> Long = DEFAULT_CLOCK, done: (Boolean) -> Unit) {
+    val step = remember(sheet) { WalletPayStep(sheet.amountMsat, clock) }
     val state by step.attempt.state.collectAsState()
     val scope = rememberCoroutineScope()
     var ready by remember(sheet) { mutableStateOf(false) }
@@ -256,8 +260,8 @@ fun WalletPaymentPhoneSheet(sheet: WalletPaymentSheet, done: (Boolean) -> Unit) 
 /// Peel decoded it, the rest marked as the server's, and the touch-safe two-step (the first tap arms the amount; the second, 700 ms later, pays it).
 /// It comes down by itself when the host cancels it (the invoice ended, or the page sent `buy_credit_cancel`).
 @Composable
-fun WalletCreditPhoneSheet(sheet: WalletCreditSheet, done: (Boolean) -> Unit) {
-    val step = remember(sheet) { WalletPayStep(sheet.amountMsat, { SystemClock.elapsedRealtime() }, armedNote = WalletWords.CREDIT_ARMED_NOTE) }
+fun WalletCreditPhoneSheet(sheet: WalletCreditSheet, clock: () -> Long = DEFAULT_CLOCK, done: (Boolean) -> Unit) {
+    val step = remember(sheet) { WalletPayStep(sheet.amountMsat, clock, armedNote = WalletWords.CREDIT_ARMED_NOTE) }
     val state by step.attempt.state.collectAsState()
     val scope = rememberCoroutineScope()
     var ready by remember(sheet) { mutableStateOf(false) }

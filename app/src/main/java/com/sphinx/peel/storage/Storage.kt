@@ -2125,6 +2125,11 @@ class Storage(context: Context, account: String = "default") {
         }
     }
 
+    companion object {
+        /// The schema version the app's database is at (a seam: tests assert it rather than a number of their own).
+        const val VERSION = 16
+    }
+
     fun deleteAccount() {
         helper.close()
         appContext.deleteDatabase(dbName)
@@ -2507,7 +2512,7 @@ class Storage(context: Context, account: String = "default") {
         }
 
         companion object {
-            const val VERSION = 16
+            const val VERSION = Storage.VERSION
         }
     }
 }

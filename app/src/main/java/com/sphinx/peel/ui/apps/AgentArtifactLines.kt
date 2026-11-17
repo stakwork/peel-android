@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.AgentArtifact
 import com.sphinx.peel.engine.AgentHandle
 import com.sphinx.peel.engine.Opening
+import com.sphinx.peel.engine.Openings
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.UrlParts
 import com.sphinx.peel.ui.theme.Theme
@@ -38,10 +39,14 @@ import com.sphinx.peel.ui.theme.Theme
 /// neither, the line says why (one on the Mac's own strut, which only the Mac reaches). In a tribe ([inTribe], Jamie's deliverables,
 /// docs/hive-tribes.md) the same, but anyone could have sent it: an app asks first.
 @Composable
-fun AgentArtifactLines(artifacts: List<AgentArtifact>, modifier: Modifier = Modifier, inTribe: Boolean = false) {
+fun AgentArtifactLines(
+    artifacts: List<AgentArtifact>, modifier: Modifier = Modifier, inTribe: Boolean = false,
+    /// Where the openings come from: Stadeum's, always, outside a test (a seam so the line can be driven with fakes).
+    openings: () -> Openings = { Stadeum.openings },
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         // By position: a reply may name one thing twice.
-        artifacts.forEachIndexed { index, artifact -> AgentArtifactLine(artifact, inTribe, key = index) }
+        artifacts.forEachIndexed { index, artifact -> AgentArtifactLine(artifact, inTribe, key = index, openings = openings) }
     }
 }
 
@@ -76,19 +81,19 @@ object ArtifactOpening {
 }
 
 @Composable
-private fun AgentArtifactLine(artifact: AgentArtifact, inTribe: Boolean, key: Int) {
-    val openings = Stadeum.openings
+private fun AgentArtifactLine(artifact: AgentArtifact, inTribe: Boolean, key: Int, openings: () -> Openings) {
+    val current = openings()
     val openPage = LocalPageOpener.current
     val linkOpener = LocalLinkOpener.current
     val talkOpener = LocalTalkOpener.current
     val context = LocalContext.current
     var asking by remember(artifact, key) { mutableStateOf(false) }
-    val place = ArtifactOpening.whereTo(artifact) { openings.opening(it) }
-    val action = ArtifactOpening.action(artifact) { handle, title -> openings.opening(handle, title) }
+    val place = ArtifactOpening.whereTo(artifact) { current.opening(it) }
+    val action = ArtifactOpening.action(artifact) { handle, title -> current.opening(handle, title) }
     // Made again on the tap: the tokens may have been renewed since.
     val run: (() -> Unit)? = when (action) {
         is ArtifactOpening.Action.Page -> ({
-            (Stadeum.openings.opening(action.handle, action.title) as? Opening.Page)?.let { if (talkOpener != null) talkOpener.showPage(it.request) else openPage(it.request) }
+            (openings().opening(action.handle, action.title) as? Opening.Page)?.let { if (talkOpener != null) talkOpener.showPage(it.request) else openPage(it.request) }
         })
         is ArtifactOpening.Action.Link -> ({
             // On the call screen a link goes straight to the browser (iOS: `TalkSafariView`, no Hive handling); elsewhere to the app's handler.
