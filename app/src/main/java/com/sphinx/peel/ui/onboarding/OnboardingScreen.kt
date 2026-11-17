@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -381,7 +382,7 @@ fun OnboardingScreen(
 
 private const val MAX_NAME_LENGTH = 100
 
-/// The invite's text box, with Paste and Scan beside it. The text is a secret of sorts (anyone
+/// The invite's text box, with a scan icon in it and Paste below. The text is a secret of sorts (anyone
 /// holding the link can use the invite): never logged, and the screen is `SecureWindow`.
 @Composable
 private fun InviteField(text: String, onTextChange: (String) -> Unit, onScan: () -> Unit) {
@@ -393,11 +394,15 @@ private fun InviteField(text: String, onTextChange: (String) -> Unit, onScan: ()
             label = { Text("sphinx.chat://?action=i&d=…") },
             minLines = 2,
             maxLines = 5,
+            trailingIcon = {
+                IconButton(onClick = onScan) {
+                    Icon(Icons.Filled.QrCodeScanner, contentDescription = "Scan QR code", tint = Theme.colors.accent)
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { clipboard.getText()?.text?.let(onTextChange) }) { Text("Paste") }
-            OutlinedButton(onClick = onScan) { Text("Scan QR") }
         }
     }
 }
