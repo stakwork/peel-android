@@ -8,7 +8,10 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Message
 import android.os.SystemClock
+import android.util.Log
+import android.view.View
 import android.view.MotionEvent
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
@@ -78,6 +81,7 @@ import com.sphinx.peel.ui.page.PhoneWalletSheets
 import com.sphinx.peel.ui.page.WalletSheets
 import com.sphinx.peel.engine.OrgPageRules
 import com.sphinx.peel.engine.OrgRequest
+import com.sphinx.peel.engine.PageLog
 import com.sphinx.peel.ui.theme.Theme
 import java.io.File
 import java.util.UUID
@@ -96,8 +100,12 @@ class OrgPageController(
     val downloads: OrgDownloads,
     private val scope: CoroutineScope,
     /// The per-page profile the web view's data lives in, when this device's WebView has profiles (deleted with the page).
-    val profile: String? = null,
+    profile: String? = null,
 ) {
+    /// The per-page profile, or none: none on a WebView without profiles, and none once putting a web view in it threw
+    /// ([dropProfile]); a page with none has the shared web data wiped instead.
+    var profile: String? = profile
+        private set
     var canGoBack by mutableStateOf(false)
     var isLoading by mutableStateOf(false)
     var progress by mutableStateOf(0f)
@@ -141,14 +149,30 @@ class OrgPageController(
         showsAnotherApp = page.showsAnotherApp(web.url)
     }
 
-    fun load(request: OrgRequest) { web?.loadUrl(request.url, request.headers) }
+    fun load(request: OrgRequest) {
+        val web = web ?: return
+        pageLog(PageLog.step("loadUrl", request.url, generation))
+        web.loadUrl(request.url, request.headers)
+    }
+
+    /// Putting a web view in [profile] threw: the page goes on with none, so its data is wiped as on a WebView without profiles
+    /// (on make and on close) rather than left in the shared store, and close does not delete a profile it never used.
+    fun dropProfile() {
+        profile = null
+    }
+
+    /// No web view to act on (its process ended and none has been made since): a new one is made, which loads where the page was.
+    private fun renew(why: String) {
+        pageLog("$why with no web view: a new one gen=${generation + 1}")
+        generation++
+    }
 
     fun goBack() { web?.goBack() }
 
     /// Loads it again where the person went (see [OrgPageRequest.reload]).
     fun reload() {
-        val web = web ?: return
         problem = null
+        val web = web ?: return renew("reload")
         when (val again = page.reload(web.url)) {
             is PhonePage.Reload.Load -> load(again.request)
             PhonePage.Reload.InPlace -> web.reload()
@@ -165,13 +189,16 @@ class OrgPageController(
     /// Loads again what failed, with the page's bearer when that was strut's UI.
     fun retry() {
         problem = null
-        load(page.retry(failedUrl, web?.url))
+        val web = web ?: return renew("retry")
+        load(page.retry(failedUrl, web.url))
     }
 
-    /// The web view's process ended (memory, a crash): a new web view loads it again, with the token, where it was when that is
-    /// strut's UI (iOS `webViewWebContentProcessDidTerminate`).
-    fun processGone() {
-        web?.let { it.release() }
+    /// [gone]'s process ended (memory, a crash): it is destroyed (the web view must not be used again), and when it is the one this
+    /// page shows, a new web view loads it again, with the token, where it was when that is strut's UI (iOS
+    /// `webViewWebContentProcessDidTerminate`). One this page no longer holds goes alone: it must not take the page's own with it.
+    fun processGone(gone: WebView) {
+        gone.release()
+        if (gone !== web) return
         web = null
         generation++
     }
@@ -202,11 +229,18 @@ class OrgPageController(
         val name = profile
         if (name != null) {
             val deleted = runCatching { ProfileStore.getInstance().deleteProfile(name) }.getOrDefault(false)
+            pageLog("close profileDeleted=$deleted gen=$generation")
             if (!deleted) wipeSharedWebData(null)
         } else {
+            pageLog("close profile=none gen=$generation")
             wipeSharedWebData(null)
         }
     }
+}
+
+/// One line to logcat under [PageLog.TAG]; built by [PageLog] only, so it never carries more than an origin (see there).
+internal fun pageLog(line: String) {
+    Log.i(PageLog.TAG, line)
 }
 
 private fun WebView.release() {
@@ -253,15 +287,20 @@ internal class OrgPageClient(
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+        pageLog(PageLog.step("pageStarted", url, controller.generation))
         controller.isLoading = true
         controller.failedThisLoad = false
         handOverIfNeeded(view)
         controller.sync()
     }
 
-    override fun onPageCommitVisible(view: WebView, url: String?) = handOverIfNeeded(view)
+    override fun onPageCommitVisible(view: WebView, url: String?) {
+        pageLog(PageLog.step("commitVisible", url, controller.generation))
+        handOverIfNeeded(view)
+    }
 
     override fun onPageFinished(view: WebView, url: String?) {
+        pageLog(PageLog.step("pageFinished", url, controller.generation))
         controller.isLoading = false
         controller.reissued = 0
         if (!controller.failedThisLoad) controller.problem = null
@@ -272,11 +311,13 @@ internal class OrgPageClient(
 
     override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
         if (!request.isForMainFrame) return
+        pageLog(PageLog.httpError(request.url.toString(), errorResponse.statusCode))
         OrgPageRules.failure(errorResponse.statusCode)?.let { controller.failed(it, request.url.toString()) }
     }
 
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
         if (!request.isForMainFrame) return
+        pageLog(PageLog.error(request.url.toString(), error.errorCode, error.description))
         val why = error.description?.toString().orEmpty()
         // A load we cancelled, or turned into a download or a refusal.
         if (why.contains("ERR_ABORTED")) return
@@ -284,7 +325,8 @@ internal class OrgPageClient(
     }
 
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-        controller.processGone()
+        pageLog(PageLog.renderGone(detail.didCrash(), detail.rendererPriorityAtExit(), current = view === controller.web))
+        controller.processGone(view)
         return true
     }
 
@@ -307,7 +349,14 @@ internal class OrgPageChromeClient(
     private val now: () -> Long = { SystemClock.elapsedRealtime() },
 ) : WebChromeClient() {
     override fun onProgressChanged(view: WebView, newProgress: Int) {
+        pageLog("progress $newProgress gen=${controller.generation}")
         controller.progress = newProgress / 100f
+    }
+
+    /// The page's console, redacted ([PageLog.console]); true, so the WebView does not also log it as it was written.
+    override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+        pageLog(PageLog.console(message.messageLevel().name, message.message(), message.sourceId(), message.lineNumber()))
+        return true
     }
 
     override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
@@ -362,18 +411,26 @@ private fun share(context: Context, file: OrgPageController.SharedFile) {
     }
 }
 
+/// Puts the page's web view in the page's profile ([setProfile] is `WebViewCompat.setProfile` on it): "on"; "none" when the page
+/// has none; or what it threw, after which the page has none ([OrgPageController.dropProfile]: its data is wiped instead of kept
+/// in the shared store with no wipe, which is what a swallowed failure used to leave).
+internal fun useProfile(controller: OrgPageController, setProfile: (String) -> Unit): String {
+    val name = controller.profile ?: return "none"
+    return runCatching { setProfile(name) }.fold({ "on" }, { controller.dropProfile(); PageLog.threw(it) })
+}
+
 /// Makes the page's web view: no data kept, the token's hand-over before the page's own script, and the policy of
-/// [OrgPageClient] and [OrgPageChromeClient]. Not unit-tested (a WebView with profiles and document-start scripts needs a device).
+/// [OrgPageClient] and [OrgPageChromeClient]. Writes what it made to [PageLog] (features, profile, scripts, then each step).
+/// Not unit-tested (a WebView with profiles and document-start scripts needs a device).
 @SuppressLint("SetJavaScriptEnabled", "RequiresFeature", "ClickableViewAccessibility")
 internal fun makeOrgWebView(context: Context, controller: OrgPageController): WebView {
     val page = controller.page
+    val generation = controller.generation
     val web = WebView(context)
-    // A profile of its own when this WebView has them (before anything else is done to it); else the shared data is wiped.
-    if (controller.profile != null) {
-        runCatching { WebViewCompat.setProfile(web, controller.profile) }
-    } else {
-        wipeSharedWebData(web)
-    }
+    // A profile of its own when this WebView has them (before anything else is done to it); else, or when that threw, the shared
+    // data is wiped.
+    val profile = useProfile(controller) { WebViewCompat.setProfile(web, it) }
+    if (controller.profile == null) wipeSharedWebData(web)
     web.settings.javaScriptEnabled = true
     web.settings.domStorageEnabled = true
     web.settings.allowFileAccess = false
@@ -392,11 +449,41 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
     web.webViewClient = OrgPageClient(controller, outside)
     web.webChromeClient = OrgPageChromeClient(controller, outside)
     web.setDownloadListener { url, userAgent, disposition, _, _ -> controller.download(url, userAgent, disposition) }
+    // Whether it is in the window, and at what size: a web view that is not is the other way a page shows nothing.
+    web.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+        override fun onViewAttachedToWindow(v: View) = pageLog("attached gen=$generation")
+        override fun onViewDetachedFromWindow(v: View) = pageLog("detached gen=$generation")
+    })
+    web.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+        if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) pageLog("size ${right - left}x${bottom - top} gen=$generation")
+    }
     controller.web = web
-    controller.walletOffered = controller.wallet?.install(web) ?: true
-    controller.documentStartScript = page.script != null && page.origin.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
-        runCatching<ScriptHandler> { WebViewCompat.addDocumentStartJavaScript(web, page.script!!, setOf(page.origin)) }.isSuccess
+    // A bridge that throws is a page without the wallet (its notice says so), not a page that never opens.
+    var wallet = "none"
+    controller.walletOffered = controller.wallet?.let { bridge ->
+        runCatching { bridge.install(web) }
+            .onSuccess { wallet = if (it) "installed" else "unsupported" }
+            .onFailure { wallet = PageLog.threw(it) }
+            .getOrDefault(false)
+    } ?: true
+    val documentStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+    val tokenScript = when {
+        page.script == null -> "none"
+        page.origin.isEmpty() || !documentStart -> "atPageStart"
+        else -> runCatching<ScriptHandler> { WebViewCompat.addDocumentStartJavaScript(web, page.script!!, setOf(page.origin)) }
+            .fold({ "documentStart" }, { PageLog.threw(it) })
+    }
+    controller.documentStartScript = tokenScript == "documentStart"
+    val webView = runCatching { WebViewCompat.getCurrentWebViewPackage(context)?.let { "${it.packageName}/${it.versionName}" } }.getOrNull()
+    pageLog(
+        PageLog.made(
+            generation, webView, WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE), documentStart,
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER),
+            profile, tokenScript, wallet,
+        ),
+    )
     val first = controller.initialRequest()
+    pageLog(PageLog.step("loadUrl", first.url, generation))
     web.loadUrl(first.url, first.headers)
     return web
 }

@@ -78,6 +78,31 @@ class PublicPageHostTest {
         assertTrue(shadowOf(web).lastAdditionalHttpHeaders.isEmpty())
     }
 
+    /// Reload and Try again with no web view (its process ended and none was made since) make a new one, which loads where the
+    /// page was; they used to do nothing at all (docs/phases/42-page-host-logs.md).
+    @Test fun `reload and try again with no web view make a new one`() {
+        controller.web = null
+        val before = controller.generation
+        controller.reload()
+        assertEquals(before + 1, controller.generation)
+        controller.failed("The page did not load.", page.url)
+        controller.retry()
+        assertEquals(before + 2, controller.generation)
+        assertNull(controller.problem)
+        assertEquals(page.url, controller.initialRequest().url)
+    }
+
+    /// A page whose web view could not be put in its profile goes on with none: its data is wiped as without profiles.
+    @Test fun `a profile that cannot be used is dropped`() {
+        val profiled = OrgPageController(page, OrgDownloads(java.io.File(app.cacheDir, "profile-downloads-test")), CoroutineScope(Dispatchers.Unconfined), "peel_org_test")
+        assertEquals("on", useProfile(profiled) {})
+        assertEquals("peel_org_test", profiled.profile)
+        assertEquals("threw:IllegalStateException", useProfile(profiled) { throw IllegalStateException("in use") })
+        assertNull(profiled.profile)
+        assertEquals("none", useProfile(profiled) { error("not called") })
+        profiled.close()
+    }
+
     @Test fun `a failing load shows the failure screen`() {
         client.onPageStarted(web, page.url, null)
         client.onReceivedHttpError(web, Req(page.url), WebResourceResponse("text/html", "utf-8", 404, "Not Found", emptyMap(), null))

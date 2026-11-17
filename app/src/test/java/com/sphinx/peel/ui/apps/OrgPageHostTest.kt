@@ -10,6 +10,7 @@ import android.webkit.WebView
 import androidx.test.core.app.ApplicationProvider
 import com.sphinx.peel.engine.OrgDownloads
 import com.sphinx.peel.engine.OrgPageRequest
+import com.sphinx.peel.engine.PageLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.After
@@ -17,12 +18,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowLog
 
 /// The org-page host's policy as Android's web view calls it (`OrgPageClient`, `OrgPageChromeClient`, `OrgPageController`),
 /// on Robolectric's WebView. What the rules decide is `OrgPageTest`'s; this checks they are applied: what loads, with which
@@ -174,6 +177,39 @@ class OrgPageHostTest {
         // A file it was on is not reloaded with the bearer: the page's own request.
         controller.lastUrl = "https://acme.sphinx.chat/lab/jobs/j/files/a.pdf"
         assertEquals(strut.url, controller.initialRequest().url)
+    }
+
+    /// A gone renderer reported by a web view this page no longer holds is that one's alone (docs/phases/42-page-host-logs.md).
+    @Test fun `a web view the page no longer holds going does not take the page's own`() {
+        val stale = WebView(app)
+        val before = controller.generation
+        val detail = object : RenderProcessGoneDetail() {
+            override fun didCrash() = false
+            override fun rendererPriorityAtExit() = 0
+        }
+        assertTrue(client.onRenderProcessGone(stale, detail))
+        assertSame(web, controller.web)
+        assertEquals(before, controller.generation)
+    }
+
+    /// What the page's steps write to logcat: the origin and numbers, never the app, the folder or the token.
+    @Test fun `the client logs each step by its origin alone`() {
+        val url = "https://acme.sphinx.chat/lab/?app=x&solo=1"
+        val before = ShadowLog.getLogsForTag(PageLog.TAG).size
+        client.onPageStarted(web, url, null)
+        client.onReceivedHttpError(web, Req(url), WebResourceResponse("text/html", "utf-8", 500, "Error", emptyMap(), null))
+        client.onPageFinished(web, url)
+        chrome.onProgressChanged(web, 100)
+        val lines = ShadowLog.getLogsForTag(PageLog.TAG).drop(before).map { it.msg }
+        assertEquals(
+            listOf(
+                "pageStarted https://acme.sphinx.chat gen=0",
+                "httpError https://acme.sphinx.chat status=500",
+                "pageFinished https://acme.sphinx.chat gen=0",
+                "progress 100 gen=0",
+            ),
+            lines,
+        )
     }
 
     @Test fun `a new window goes here, out, or nowhere`() {
