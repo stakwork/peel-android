@@ -10,6 +10,7 @@ import android.os.Message
 import android.os.SystemClock
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import android.view.MotionEvent
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -427,6 +428,10 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
     val page = controller.page
     val generation = controller.generation
     val web = WebView(context)
+    // The page's own size, not its content's: a web view whose layout height is WRAP_CONTENT (what AndroidView gives a view with
+    // no layout params) lays the page out on a zero-height viewport, so `100vh` is 0 and a page sized by it (strut's solo app)
+    // shows nothing at all (docs/phases/42-page-host-logs.md).
+    web.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     // A profile of its own when this WebView has them (before anything else is done to it); else, or when that threw, the shared
     // data is wiped.
     val profile = useProfile(controller) { WebViewCompat.setProfile(web, it) }
@@ -546,7 +551,10 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
             )
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            key(controller.generation) {
+            // A new web view for a new page (another controller) as for a new process (another generation): keyed on the generation
+            // alone, the next page kept the last page's AndroidView, whose web view that page's close had just destroyed, and
+            // showed nothing (docs/phases/42-page-host-logs.md).
+            key(controller, controller.generation) {
                 AndroidView(factory = { makeOrgWebView(it, controller) }, modifier = Modifier.fillMaxSize())
             }
             if (controller.isLoading) {
