@@ -363,6 +363,11 @@ internal class OrgPageChromeClient(
         controller.progress = newProgress / 100f
     }
 
+    /// No picture for a video that has none of its own: WebView's default is a big grey play button, drawn stretched over strut's
+    /// camera sheet until the camera's first frame (docs/phases/42-page-host-logs.md). A transparent pixel instead, so the sheet is
+    /// dark until then, as on iOS.
+    override fun getDefaultVideoPoster(): Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+
     /// The camera or microphone (strut's camera sheet; iOS `requestMediaCapturePermissionFor`): for the origin Peel loaded, after
     /// the system's own permission, which is asked only when the app does not hold it yet; anything else is denied ([PageMedia]).
     override fun onPermissionRequest(request: PermissionRequest) {

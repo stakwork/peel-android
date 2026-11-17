@@ -257,6 +257,14 @@ class OrgPageHostTest {
         assertEquals(emptyList<List<String>>(), askedSystem)
     }
 
+    /// strut's camera sheet is a video with no poster until the first frame: WebView's own default (a big play button) is not drawn.
+    @Test fun `a video with no poster shows a transparent pixel, not a play button`() {
+        val poster = chrome.defaultVideoPoster!!
+        assertEquals(1, poster.width)
+        assertEquals(1, poster.height)
+        assertEquals(0, android.graphics.Color.alpha(poster.getPixel(0, 0)))
+    }
+
     @Test fun `a new window goes here, out, or nowhere`() {
         web.loadUrl(strut.url)
         controller.lastTouchAt = 9_900

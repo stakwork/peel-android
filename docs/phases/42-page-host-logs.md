@@ -45,7 +45,8 @@ names no frame (iOS also checks it is the main frame), so a same-origin frame of
 camera in its own page. `OrgPageChromeClient.onPermissionRequest` asks the system for `CAMERA`/`RECORD_AUDIO` only when the app
 lacks it, through the page screen's `RequestMultiplePermissions` launcher (`OrgPageController.askSystem`). The system's own prompt
 is the only one, as on iOS. Each request is logged (`permission <origin> asked= granted=`). On the phone: allowed at the prompt,
-`granted=VIDEO_CAPTURE`, and the task's camera opened.
+`granted=VIDEO_CAPTURE`, and the task's camera opened. Before the camera's first frame the sheet showed WebView's default video poster,
+a big grey play button stretched across the screen; `OrgPageChromeClient.getDefaultVideoPoster` is now a transparent pixel.
 
 ## Which paths give "a web view, nothing painted, no failure screen, Reload does nothing" (read from the code, before the phone)
 From `ui/apps/OrgPageHost.kt` as it was:
@@ -115,7 +116,8 @@ Robolectric:
 - `PageMediaTest` (JVM): the page's own origin (a trailing slash or `:443` alike) gets the camera and microphone; another origin,
   http, another port, an opaque `null`, and any other resource get nothing; each is granted only with its system permission.
 - `OrgPageHostTest`: the page's own origin is granted the camera after the system's permission and denied when the person says no;
-  another origin, a sandboxed frame or another resource is denied without asking the system.
+  another origin, a sandboxed frame or another resource is denied without asking the system; a video with no poster gets a
+  transparent pixel.
 - `OrgPageScreenTest`: the real `OrgPageScreen` gives its WebView MATCH_PARENT, and a page opened over another gets a web view of
   its own. Each test fails without its fix (checked).
   - The page-switch test runs its own `Recomposer` and `BroadcastFrameClock`. After an earlier test has destroyed its activity,
