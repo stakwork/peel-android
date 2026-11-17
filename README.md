@@ -18,6 +18,21 @@ Needs the Android SDK (`local.properties` → `sdk.dir`) and a JDK 17.
 ./gradlew testDebugUnitTest
 ```
 
+### Peel Dev beside the release app
+
+`./gradlew installDebug` replaces a release Peel (same app id, another signature: Android refuses, and uninstalling Peel erases
+its account). To keep both, opt in with `PEEL_DEV_APP=true`: a debug build is then `com.sphinx.peel.dev`, named "Peel Dev", with
+its own data, account and keys, installed beside Peel. Unset, nothing changes.
+
+```sh
+PEEL_DEV_APP=true ./gradlew installDebug
+```
+
+Set it once for yourself with `PEEL_DEV_APP=true` in `~/.gradle/gradle.properties`. Both apps answer `sphinx.chat://` and
+`peel://open` links, so Android asks which one opens a link. Peel Dev has no push (the Firebase plugin is not applied to it);
+it stays connected over MQTT while open. Being a debug build, its web views can be inspected from
+desktop Chrome (`chrome://inspect`).
+
 ## Regenerating the sphinxrs bridge
 
 `sphinxrs/src/main/java/uniffi/sphinxrs/sphinxrs.kt` and the `.so` files in
