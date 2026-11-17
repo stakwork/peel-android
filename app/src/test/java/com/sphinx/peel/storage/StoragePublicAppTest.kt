@@ -4,6 +4,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.sphinx.peel.engine.OpenedApp
 import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.SignInKey
+import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.WalletConnection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,7 +13,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/// `public_app` (v15, docs/phases/41-worker-onboarding.md): the strangers' public apps opened here, kept for the Apps list.
+/// `public_app` (v16, docs/phases/41-worker-onboarding.md): the strangers' public apps opened here, kept for the Apps list.
 @RunWith(RobolectricTestRunner::class)
 class StoragePublicAppTest {
     private fun newStorage() = Storage(ApplicationProvider.getApplicationContext(), account = "test-${System.nanoTime()}")
@@ -80,5 +81,17 @@ class StoragePublicAppTest {
         assertFalse(app.matches("shop"))
         assertEquals("shop.example.com", OpenedApp(shop, 1).caption)
         assertEquals("shop.example.com", OpenedApp(shop, 1, " ").title)
+    }
+
+    /// A worker (no Hive workspace, no development home) sees the Chats screen's Apps row only once a public app is kept here,
+    /// and not after the last one is removed: the gate ChatsScreen reads (`Stadeum.showsApps(openedApps)`).
+    @Test fun `a kept public app shows Apps to someone with no workspace`() {
+        val storage = newStorage()
+        fun showsApps() = Stadeum.showsApps(emptyList(), null, openedApps = storage.openedApps().isNotEmpty())
+        assertFalse(showsApps())
+        storage.rememberPublicApp(worker, at = 10)
+        assertTrue(showsApps())
+        storage.forgetPublicApp(worker)
+        assertFalse(showsApps())
     }
 }

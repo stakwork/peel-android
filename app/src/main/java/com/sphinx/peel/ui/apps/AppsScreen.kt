@@ -154,9 +154,12 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
                     }
                 }
             }
-            // Off while a read is under way: another would cut it short.
-            IconButton(onClick = { refresh++ }, enabled = live.isNotEmpty() && !reading) {
-                Icon(Icons.Filled.Refresh, "Refresh", tint = Theme.colors.secondaryText)
+            // Off while a read is under way: another would cut it short. None with no workspace to read (a worker's Apps holds
+            // only the public apps opened here, which nothing reads).
+            if (live.isNotEmpty()) {
+                IconButton(onClick = { refresh++ }, enabled = !reading) {
+                    Icon(Icons.Filled.Refresh, "Refresh", tint = Theme.colors.secondaryText)
+                }
             }
         }
         OutlinedTextField(
