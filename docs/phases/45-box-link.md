@@ -94,7 +94,8 @@ coming back to the front (Android's own, as `StadeumModel.cameToFront`). Its wor
   file is untouched, deleted when empty, unreadable throws; never described with its token; due; the box's page (folder, bearer,
   hand-over, `org:box:` wallet scope, Reload keeps the bearer); the three routes on a stand-in (the post's body and no credential, the
   refusals in words, renewal signing only a fresh challenge for the box's own host, 403 as unlinked, the token check).
-- `engine/BoxesTest` (Robolectric, 12): nothing signed or sent without the yes; one link per box; boxes that can't be read never
+- `engine/BoxesTest` (Robolectric, 13): nothing signed or sent without the yes; one link per box; a renewal never replaces a box
+  linked again meanwhile (found by `/code-review`); boxes that can't be read never
   written over; another host's link never asked, a broken one said; a link opened while locked waits and links once open, none with
   no account; a due box renewed and an unlinked one let go; a failed renewal said and kept; a refused token renewed once before the box
   opens and the router keeps its page, a box whose link is gone let go and its page closed; a box refusing a fresh token let go;
@@ -122,6 +123,17 @@ as strut's `src/apps/jamie.test.ts` does); Remove was its `account/unlink`.
    unlock `GET /people/challenge 200` → `POST /people/token 200`; Open with the renewed token `GET /apps 200`, `GET / 200`.
 6. Forget (long press): the row and the file gone; strut's `account/links` still has the link (Forget is local).
 7. A broken link (`&` lost): "That link to a box doesn't work. …", nothing asked.
+
+## Review (2026-11-18)
+
+One `/code-review` (high): 7 findings. Fixed: a renewal that started before the box was linked again (as another member) could
+replace the new link (now it renews only the link it started from); Open's token-check failure said "could not renew" (now "could
+not check Peel's link"); Forget on unreadable boxes said nothing (now says why). Left: the token check reads `GET /apps`'s body (iOS
+does the same); `KeystoreBoxStore` repeats `KeystoreHiveStore` (kept apart so Hive's code is untouched); no Compose UI test of the
+question and the Boxes rows (covered end to end only); the store read on the main thread at unlock (as Stadeum's).
+
+`./gradlew testDebugUnitTest` on this Mac's JDK 21: 1287 tests, one failure, `ConversationDateTest.todayShowsTime`, which is JDK 21's
+time format (U+202F before "PM", which the test's `\s` does not replace), not this branch; the project targets JDK 17.
 
 ## Open
 

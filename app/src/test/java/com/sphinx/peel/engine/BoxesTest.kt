@@ -118,6 +118,7 @@ class BoxesTest {
         assertTrue(box.calls.isEmpty())
         model.forget(BoxFixture.box("http://127.0.0.1:3400"))
         assertEquals("not what Peel keeps", store.text)
+        assertTrue(model.problem!!.contains("couldn't read"))
         // Read again (the account opened again) and now readable: kept as it is.
         store.text = null
         model.open(store)
@@ -248,7 +249,24 @@ class BoxesTest {
         other.open(store)
         assertNull(other.page(other.links.single()))
         assertEquals(1, other.links.size)
-        assertTrue(other.problem!!.startsWith("Could not open 127.0.0.1."))
+        assertEquals("Could not open 127.0.0.1. 127.0.0.1 could not check Peel's link: HTTP 503.", other.problem)
+    }
+
+    /// A renewal that started before the box was linked again (as another member) never replaces the new link.
+    @Test fun `a renewal never replaces a box linked again meanwhile`() = runBlocking {
+        val store = MemoryBoxStore()
+        val old = BoxFixture.box("http://127.0.0.1:3400", renewedAt = BoxFixture.now.minusSeconds(90_000))
+        BoxLink.write(listOf(old), store)
+        lateinit var model: BoxesModel
+        val box = strut(token = {
+            // While this renewal is out, the person links the box again as bob.
+            model.take(offer()); model.accept()
+            BoxResponse(200, BoxFixture.answer(actor = "ada-3f9a", token = "strut-person.renewed"))
+        }, link = { BoxResponse(200, BoxFixture.answer(actor = "bob", name = "Bob", token = "strut-person.bob")) })
+        model = model(mapOf("http://127.0.0.1:3400" to box))
+        model.open(store)
+        assertEquals(listOf("bob"), model.links.map { it.actor })
+        assertEquals(listOf("strut-person.bob"), tokens(store))
     }
 
     /// Forget lets one box go from this device; the account forgotten takes every box with it, and a waiting question.

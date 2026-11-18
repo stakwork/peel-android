@@ -311,7 +311,7 @@ class BoxClient(val box: String, private val http: BoxHttp = OkHttpBox()) {
     suspend fun accepts(link: BoxLink): Boolean {
         val r = http.call("GET", "$box/apps", null, link.token, APPS_LIMIT, 20)
         if (r.status == 401) return false
-        if (r.status != 200) throw failure(r.status, r.body, linking = false)
+        if (r.status != 200) throw failure(r.status, r.body, linking = false, couldNot = "check Peel's link")
         return true
     }
 
@@ -319,7 +319,9 @@ class BoxClient(val box: String, private val http: BoxHttp = OkHttpBox()) {
         http.call(method, "$box/$path", json, null, LIMIT, 30)
 
     /// strut's refusal, in words the person can act on (strut's words beside them only where they say more).
-    internal fun failure(status: Int, body: String, linking: Boolean): BoxException {
+    internal fun failure(
+        status: Int, body: String, linking: Boolean, couldNot: String = if (linking) "link Peel" else "renew Peel's link",
+    ): BoxException {
         val said = (json(body)?.opt("error") as? String)?.let { TextLine.clean(it, 200) }
         return BoxException(
             when {
@@ -328,7 +330,7 @@ class BoxClient(val box: String, private val http: BoxHttp = OkHttpBox()) {
                 status == 409 -> "Your Sphinx account is already linked to someone else on $host. They remove it in Connect there first."
                 status == 413 -> "$host refused the link as too large."
                 status == 429 -> "$host is busy. Try again in a minute."
-                else -> "$host could not ${if (linking) "link Peel" else "renew Peel's link"}: ${said ?: "HTTP $status"}."
+                else -> "$host could not $couldNot: ${said ?: "HTTP $status"}."
             },
         )
     }

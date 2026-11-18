@@ -175,7 +175,10 @@ class BoxesModel(
     /// Forget: the box's link and token gone from this device. The box keeps the link until its member removes it in Connect there.
     fun forget(box: BoxLink) {
         val store = store ?: return
-        if (unreadable) return
+        if (unreadable) {
+            problem = "Peel couldn't read the boxes it keeps, so it won't change them now. Quit and reopen Peel, then try again."
+            return
+        }
         val kept = links.filter { it.url != box.url }
         try {
             BoxLink.write(kept, store)
@@ -264,12 +267,13 @@ class BoxesModel(
     }
 
     /// A new token for [box], kept; null when the box no longer links the key (`403 not_linked`): it is let go and [notice] says so.
-    /// Throws [Superseded] when the account closed or the box was forgotten meanwhile.
+    /// Throws [Superseded] when the account closed, or the box was forgotten or linked again (another member, another token)
+    /// meanwhile: what is kept now is never replaced by a renewal of what was.
     internal suspend fun renew(box: BoxLink, at: Instant = now()): BoxLink? {
         val sign = sign ?: throw BoxException("Peel's account is not open.")
         val gen = generation
         val renewal = clientFor(box.url).renew(box, at, sign)
-        if (gen != generation || links.none { it.url == box.url }) throw Superseded()
+        if (gen != generation || links.none { it.url == box.url && it.token == box.token }) throw Superseded()
         return when (renewal) {
             is BoxClient.Renewal.Renewed -> { keep(renewal.link); renewal.link }
             BoxClient.Renewal.Unlinked -> { drop(box); null }
