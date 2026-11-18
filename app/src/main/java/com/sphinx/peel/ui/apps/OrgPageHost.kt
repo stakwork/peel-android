@@ -17,6 +17,7 @@ import android.view.ViewGroup
 import android.view.MotionEvent
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
@@ -75,6 +76,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.webkit.ProfileStore
@@ -91,7 +93,11 @@ import com.sphinx.peel.ui.page.WalletSheets
 import com.sphinx.peel.engine.OrgPageRules
 import com.sphinx.peel.engine.OrgRequest
 import com.sphinx.peel.engine.PageLog
+import com.sphinx.peel.engine.PageLocation
 import com.sphinx.peel.engine.PageMedia
+import com.sphinx.peel.engine.Seller
+import com.sphinx.peel.engine.SiteLocationGrant
+import com.sphinx.peel.engine.SiteLocationStore
 import com.sphinx.peel.ui.theme.Theme
 import java.io.File
 import java.util.UUID
@@ -142,6 +148,116 @@ class OrgPageController(
     var chooseFiles: (params: WebChromeClient.FileChooserParams, done: (Array<Uri>?) -> Unit) -> Boolean = { _, _ -> false }
 
     class SharedFile(val file: File, val mimeType: String?)
+
+    // MARK: - Location (engine/PageLocation.kt, docs/phases/42-page-host-logs.md)
+
+    /// Where the person's answers about sites are kept; none (tests, or a host with no storage) means Allow lasts for this page only.
+    var locations: SiteLocationStore? = null
+    /// Whether the page is showing (the screen is started): a page that is not never gets a prompt or a position.
+    var visible = true
+        private set
+    /// Sites allowed once, for this page session only (origin to precise); never stored.
+    private val allowedOnce = mutableMapOf<String, Boolean>()
+    /// Peel's own prompt, up while a page's request waits for the person.
+    var locationPrompt by mutableStateOf<LocationAsk?>(null)
+    /// The system refused for good (it will not ask again): the page is told no and the person is offered the phone's settings.
+    var locationSettingsOffer by mutableStateOf(false)
+    private var systemRefusedForGood = false
+    /// Whether the system would explain itself before asking again (the screen's `shouldShowRequestPermissionRationale`); false means
+    /// a refusal is for good.
+    var systemRationale: (String) -> Boolean = { true }
+    /// The phone's settings for this app.
+    var openPhoneSettings: () -> Unit = {}
+    private val nowSeconds: () -> Long = { System.currentTimeMillis() / 1000 }
+
+    /// A question to the person: [host] wants the location; [answer] is called once with their choice, null for a dismissal.
+    class LocationAsk(val host: String, val answer: (LocationAnswer?) -> Unit)
+    class LocationAnswer(val allow: Boolean, val once: Boolean, val precise: Boolean)
+
+    /// A page asked for its location ([OrgPageChromeClient.onGeolocationPermissionsShowPrompt]). [reply] is told once, yes or no; it is
+    /// never told to remember (Peel's own store is the only memory).
+    fun requestLocation(requestOrigin: String, reply: (Boolean) -> Unit) {
+        val who = PageLocation.mayAsk(requestOrigin, page.origin, visible)
+        if (who == null) {
+            pageLog(PageLog.location(requestOrigin, "other", "denied", "none"))
+            return reply(false)
+        }
+        val frame = who.frame.wire
+        val stored = locations?.siteLocation(who.origin)
+        val once = allowedOnce[who.origin]
+        when (PageLocation.decide(stored, once != null)) {
+            PageLocation.Decision.DENY -> {
+                pageLog(PageLog.location(who.origin, frame, "denied", "none"))
+                reply(false)
+            }
+            PageLocation.Decision.ALLOW -> proceedWithLocation(who, stored?.precise ?: once ?: false, reply)
+            PageLocation.Decision.ASK -> {
+                locationPrompt = LocationAsk(Seller.host(who.origin) ?: who.origin) { answer ->
+                    locationPrompt = null
+                    when {
+                        answer == null -> {
+                            pageLog(PageLog.location(who.origin, frame, "dismissed", "none"))
+                            reply(false)
+                        }
+                        !answer.allow -> {
+                            locations?.putSiteLocation(SiteLocationGrant(who.origin, false, false, nowSeconds()))
+                            pageLog(PageLog.location(who.origin, frame, "denied", "none"))
+                            reply(false)
+                        }
+                        else -> {
+                            if (answer.once) allowedOnce[who.origin] = answer.precise
+                            else locations?.putSiteLocation(SiteLocationGrant(who.origin, true, answer.precise, nowSeconds()))
+                            proceedWithLocation(who, answer.precise, reply)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The person allowed [who]: the system's permission (asked only when not held), then the page's answer.
+    private fun proceedWithLocation(who: PageLocation.Attribution, precise: Boolean, reply: (Boolean) -> Unit) {
+        val frame = who.frame.wire
+        val needed = PageLocation.systemPermissions(precise)
+        askSystem2(needed) { holds ->
+            val granted = PageLocation.granted(holds)
+            if (!granted && !systemRationale(PageLocation.COARSE)) {
+                systemRefusedForGood = true
+                locationSettingsOffer = true
+            }
+            pageLog(PageLog.location(who.origin, frame, if (granted) "allowed" else "denied", PageLocation.level(holds)))
+            reply(granted)
+        }
+    }
+
+    private fun askSystem2(needed: List<String>, done: (holds: (String) -> Boolean) -> Unit) {
+        if (systemRefusedForGood) {
+            // The system will not ask again unless the person changed it in settings: ask anyway only if it is now held.
+            askSystem(emptyList()) { holds ->
+                if (PageLocation.granted(holds)) { systemRefusedForGood = false; done(holds) } else { locationSettingsOffer = true; done(holds) }
+            }
+            return
+        }
+        askSystem(needed, done)
+    }
+
+    /// The page withdrew its request: Peel's prompt goes without an answer.
+    fun hideLocationPrompt() {
+        locationPrompt = null
+    }
+
+    /// The screen started or stopped. A page that is not showing has its web view paused (which stops its location) and any prompt
+    /// withdrawn (answered no, not remembered).
+    fun setVisible(showing: Boolean) {
+        visible = showing
+        if (showing) {
+            runCatching { web?.onResume() }
+        } else {
+            locationPrompt?.answer?.invoke(null)
+            locationPrompt = null
+            runCatching { web?.onPause() }
+        }
+    }
 
     var web: WebView? = null
     /// Whether the document-start script is in place; when not, [OrgPageClient] hands the token over as the page starts.
@@ -414,6 +530,14 @@ internal class OrgPageChromeClient(
         }
     }
 
+    /// Location (engine/PageLocation.kt): Peel's own prompt first, its own store second, the system's permission last; WebView is never told
+    /// to remember, and Peel never reads a position.
+    override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+        controller.requestLocation(origin) { granted -> runCatching { callback.invoke(origin, granted, false) } }
+    }
+
+    override fun onGeolocationPermissionsHidePrompt() = controller.hideLocationPrompt()
+
     /// A page's `<input type=file>` ("or choose one from this device"): the system's file picker, as WebKit shows its own on iOS. The
     /// page gets only what the person picks there; WebView is told exactly once, null when they picked nothing.
     override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
@@ -521,7 +645,8 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
     web.settings.allowContentAccess = false
     web.settings.javaScriptCanOpenWindowsAutomatically = false
     web.settings.setSupportMultipleWindows(true)
-    web.settings.setGeolocationEnabled(false)
+    // On, but nothing is given without the person's yes ([OrgPageChromeClient.onGeolocationPermissionsShowPrompt]).
+    web.settings.setGeolocationEnabled(true)
     CookieManager.getInstance().setAcceptThirdPartyCookies(web, false)
     web.setOnTouchListener { _, event ->
         if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_UP) {
@@ -579,7 +704,10 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
 /// [StrutWallet.GESTURE_WINDOW_MS] and for a link out for [OrgNavigation.TAP_WINDOW_MS]. [sheets] is the person's side of the wallet, made here
 /// unless a test brings its own (closing the page, which a lock does, answers whatever it waits on as a no).
 @Composable
-fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null) {
+fun OrgPageScreen(
+    page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null,
+    locations: SiteLocationStore? = null,
+) {
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
@@ -593,6 +721,7 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
             null
         }
         OrgPageController(page, OrgDownloads(orgDownloadsRoot(context)), scope, profile).also { c ->
+            c.locations = locations
             c.wallet = OrgWalletBridge(page, wallet, sheets, scope) { StrutWallet.personActed(c.lastTouchAt, SystemClock.elapsedRealtime()) }
         }
     }
@@ -636,6 +765,30 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
             }
         }
         onDispose { controller.askSystem = { _, done -> done { false } } }
+    }
+    // A page that is not showing is paused (WebView stops its location then) and gets no prompt ([OrgPageController.setVisible]).
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(controller, lifecycleOwner) {
+        val activity = context.findActivity()
+        controller.systemRationale = { permission -> activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, permission) } ?: true }
+        controller.openPhoneSettings = {
+            runCatching {
+                context.startActivity(
+                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+        controller.setVisible(lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> controller.setVisible(false)
+                androidx.lifecycle.Lifecycle.Event.ON_START -> controller.setVisible(true)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     BackHandler { if (controller.canGoBack) controller.goBack() else onClose() }
     // The notifications the wallet host has for this page's scope go into its main frame (iOS `listenToWallet`).
@@ -706,6 +859,16 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
         }
     }
     WalletSheets(sheets)
+    controller.locationPrompt?.let { ask -> LocationPromptSheet(ask) }
+    if (controller.locationSettingsOffer) {
+        AlertDialog(
+            onDismissRequest = { controller.locationSettingsOffer = false },
+            title = { Text("Location is off for Peel") },
+            text = { Text(PageLocation.SETTINGS_NOTE) },
+            confirmButton = { TextButton(onClick = { controller.locationSettingsOffer = false; controller.openPhoneSettings() }) { Text(PageLocation.OPEN_SETTINGS) } },
+            dismissButton = { TextButton(onClick = { controller.locationSettingsOffer = false }) { Text("Not now") } },
+        )
+    }
     controller.notice?.let { notice ->
         AlertDialog(
             onDismissRequest = { controller.notice = null },
@@ -714,4 +877,14 @@ fun OrgPageScreen(page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modi
             confirmButton = { TextButton(onClick = { controller.notice = null }) { Text("OK") } },
         )
     }
+}
+
+/// The activity behind a context (a Compose context may be wrapped).
+private fun Context.findActivity(): Activity? {
+    var c: Context? = this
+    while (c is android.content.ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
 }

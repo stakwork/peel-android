@@ -84,6 +84,7 @@ import com.sphinx.peel.engine.StadeumModel
 import com.sphinx.peel.engine.paymentConfirmationMsat
 import com.sphinx.peel.engine.setPaymentConfirmation
 import com.sphinx.peel.storage.Setting
+import com.sphinx.peel.engine.PageLocation
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.SecureWindow
 import com.sphinx.peel.ui.components.Avatar
@@ -100,7 +101,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class YouRoute { WORDS, CHANGE_PIN, DIAGNOSTICS, CONNECTED_APPS }
+private enum class YouRoute { WORDS, CHANGE_PIN, DIAGNOSTICS, CONNECTED_APPS, SITE_LOCATION }
 
 /// "You" (docs/design/iphone.md, screen 6), reworked to match the iOS app's
 /// own Profile: a centred "You" title, the avatar/name/balance header, an
@@ -123,12 +124,14 @@ fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForg
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
         YouRoute.DIAGNOSTICS -> com.sphinx.peel.ui.diagnostics.DiagnosticsScreen(onBack = { route = null })
         YouRoute.CONNECTED_APPS -> ConnectedAppsScreen(storage, onBack = { route = null })
+        YouRoute.SITE_LOCATION -> SiteLocationScreen(storage, onBack = { route = null })
         null -> YouMain(
             engine, storage, secretStore, onForgotten,
             onOpenWords = { route = YouRoute.WORDS },
             onOpenChangePin = { route = YouRoute.CHANGE_PIN },
             onOpenDiagnostics = { route = YouRoute.DIAGNOSTICS },
             onOpenConnectedApps = { route = YouRoute.CONNECTED_APPS },
+            onOpenSiteLocation = { route = YouRoute.SITE_LOCATION },
         )
     }
 }
@@ -145,6 +148,7 @@ private fun YouMain(
     onOpenChangePin: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenConnectedApps: () -> Unit,
+    onOpenSiteLocation: () -> Unit,
 ) {
     val connection by engine.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -333,6 +337,12 @@ private fun YouMain(
                 AccountRow(
                     label = "Connected apps", value = ConnectedAppRow.summary(remember(walletVersion) { storage.walletConnections().size }),
                     onClick = onOpenConnectedApps, chevron = true,
+                )
+                AccountDivider()
+                val siteVersion by storage.siteLocationsVersion.collectAsState()
+                AccountRow(
+                    label = "Site location", value = remember(siteVersion) { storage.siteLocations().size.let { if (it == 0) "None" else "$it" } },
+                    onClick = onOpenSiteLocation, chevron = true,
                 )
                 AccountDivider()
                 var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
@@ -1087,5 +1097,69 @@ private fun ConnectedAppCard(storage: Storage, connection: WalletConnection) {
         TextButton(onClick = { storage.deleteWalletConnection(connection.key); storage.forgetPublicAppsOf(connection.key) }, Modifier.padding(horizontal = 8.dp)) {
             Text(ConnectedAppRow.DISCONNECT, color = Theme.colors.destructive)
         }
+    }
+}
+
+/// You › Site location (docs/phases/42-page-host-logs.md): each site's answer about its location. Tap one to allow, block, make it precise
+/// or remove it. Android has one location permission for the whole app, so precise applies to every allowed site (the note says so).
+@Composable
+internal fun SiteLocationScreen(storage: Storage, onBack: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val version by storage.siteLocationsVersion.collectAsState()
+    val sites = remember(version) { storage.siteLocations() }
+    var open by remember { mutableStateOf<String?>(null) }
+    val grant = sites.firstOrNull { it.origin == open }
+    val settings = {
+        runCatching {
+            context.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", context.packageName, null))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+    fun forget(origin: String) {
+        runCatching { android.webkit.GeolocationPermissions.getInstance().clear(origin) }
+        storage.removeSiteLocation(origin)
+    }
+    if (grant != null) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)) {
+            item { RouteHeader(com.sphinx.peel.engine.Seller.host(grant.origin) ?: grant.origin, null, { open = null }) }
+            item { Spacer(Modifier.height(24.dp)) }
+            item {
+                Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(PageLocation.summary(grant), color = Theme.colors.text, fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Allowed", Modifier.weight(1f), color = Theme.colors.text)
+                        androidx.compose.material3.Switch(checked = grant.allowed, onCheckedChange = { storage.putSiteLocation(grant.copy(allowed = it, decidedAt = System.currentTimeMillis() / 1000)) })
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(PageLocation.PRECISE_LABEL, Modifier.weight(1f), color = Theme.colors.text)
+                        androidx.compose.material3.Switch(checked = grant.precise, onCheckedChange = { storage.putSiteLocation(grant.copy(precise = it, decidedAt = System.currentTimeMillis() / 1000)) })
+                    }
+                    Text(PageLocation.PRECISE_NOTE, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                    TextButton(onClick = { forget(grant.origin); open = null }) { Text("Remove", color = Theme.colors.destructive) }
+                }
+            }
+        }
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)) {
+        item { RouteHeader("Site location", null, onBack) }
+        item { Spacer(Modifier.height(24.dp)) }
+        if (sites.isEmpty()) item { StadeumNote("No site has asked for your location.") }
+        items(sites, key = { it.origin }) { site ->
+            Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).clickable { open = site.origin }.padding(16.dp)) {
+                Text(com.sphinx.peel.engine.Seller.host(site.origin) ?: site.origin, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                Text(PageLocation.summary(site), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        if (sites.isNotEmpty()) item {
+            TextButton(onClick = {
+                runCatching { android.webkit.GeolocationPermissions.getInstance().clearAll() }
+                storage.clearSiteLocations()
+            }) { Text("Forget all sites", color = Theme.colors.destructive) }
+        }
+        item { TextButton(onClick = { settings() }) { Text("Phone location settings") } }
     }
 }

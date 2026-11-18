@@ -46,6 +46,10 @@ object PageLog {
     fun permission(asker: String?, asked: List<String>, granted: List<String>): String =
         "permission ${origin(asker)} asked=${resources(asked)} granted=${resources(granted)}"
 
+    /// A page's location request, decided: the origin, which kind of frame asked, what was decided and at what accuracy. Never a coordinate.
+    fun location(asker: String?, frame: String, decision: String, level: String): String =
+        "location ${origin(asker)} frame=$frame decision=$decision level=$level"
+
     private fun resources(list: List<String>): String = list.joinToString(",") { it.substringAfterLast('.') }.ifEmpty { "-" }
 
     fun renderGone(didCrash: Boolean, priorityAtExit: Int, current: Boolean): String =

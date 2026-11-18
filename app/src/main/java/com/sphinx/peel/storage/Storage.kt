@@ -16,6 +16,7 @@ import com.sphinx.peel.engine.OverBudget
 import com.sphinx.peel.engine.OverBudgetException
 import com.sphinx.peel.engine.PING_PRICE_MSAT
 import com.sphinx.peel.engine.WalletBudget
+import com.sphinx.peel.engine.SiteLocationGrant
 import com.sphinx.peel.engine.WalletConnection
 import com.sphinx.peel.engine.WalletMethod
 import com.sphinx.peel.engine.WalletNotificationType
@@ -276,7 +277,7 @@ data class MessageRow(
 /// back). Ported from PeelCore's Storage.swift; no `tribe`/`chatState`/
 /// `payment` tables yet — nothing reads them (no chat UI), so there is
 /// nothing to port them for.
-class Storage(context: Context, account: String = "default") {
+class Storage(context: Context, account: String = "default") : com.sphinx.peel.engine.SiteLocationStore {
     private val appContext = context.applicationContext
     private val dbName = "peel-$account.db"
     private val helper = Helper(appContext, dbName)
@@ -1873,6 +1874,53 @@ class Storage(context: Context, account: String = "default") {
         walletConnectionsVersionFlow.value += 1
     }
 
+    // MARK: - Site location (docs/phases/42-page-host-logs.md)
+
+    private val siteLocationsVersionFlow = MutableStateFlow(0)
+
+    /// Moves when a site's location answer is saved or removed, so You › Site location follows.
+    val siteLocationsVersion: StateFlow<Int> = siteLocationsVersionFlow
+
+    private fun readSiteLocation(c: android.database.Cursor) = SiteLocationGrant(
+        origin = c.getString(c.getColumnIndexOrThrow("origin")),
+        allowed = c.getInt(c.getColumnIndexOrThrow("allowed")) != 0,
+        precise = c.getInt(c.getColumnIndexOrThrow("precise")) != 0,
+        decidedAt = c.getLong(c.getColumnIndexOrThrow("decidedAt")),
+    )
+
+    override fun siteLocation(origin: String): SiteLocationGrant? =
+        helper.readableDatabase.query("site_location", null, "origin = ?", arrayOf(origin), null, null, null)
+            .use { c -> if (c.moveToFirst()) readSiteLocation(c) else null }
+
+    /// Every site's answer, by origin.
+    fun siteLocations(): List<SiteLocationGrant> =
+        helper.readableDatabase.query("site_location", null, null, null, null, null, "origin ASC")
+            .use { c -> buildList { while (c.moveToNext()) add(readSiteLocation(c)) } }
+
+    override fun putSiteLocation(grant: SiteLocationGrant) {
+        val values = ContentValues().apply {
+            put("origin", grant.origin)
+            put("allowed", if (grant.allowed) 1 else 0)
+            put("precise", if (grant.precise) 1 else 0)
+            put("decidedAt", grant.decidedAt)
+        }
+        helper.writableDatabase.insertWithOnConflict("site_location", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        siteLocationsVersionFlow.value += 1
+    }
+
+    fun removeSiteLocation(origin: String) {
+        helper.writableDatabase.delete("site_location", "origin = ?", arrayOf(origin))
+        siteLocationsVersionFlow.value += 1
+    }
+
+    fun clearSiteLocations() {
+        helper.writableDatabase.delete("site_location", null, null)
+        siteLocationsVersionFlow.value += 1
+    }
+
+    /// Whether any allowed site is precise: the system's one app-wide permission follows it.
+    fun anySitePrecise(): Boolean = siteLocations().any { it.allowed && it.precise }
+
     // MARK: - Public apps opened here (docs/phases/41-worker-onboarding.md)
 
     private val publicAppsVersionFlow = MutableStateFlow(0)
@@ -2153,7 +2201,7 @@ class Storage(context: Context, account: String = "default") {
 
     companion object {
         /// The schema version the app's database is at (a seam: tests assert it rather than a number of their own).
-        const val VERSION = 17
+        const val VERSION = 18
     }
 
     fun deleteAccount() {
@@ -2187,6 +2235,7 @@ class Storage(context: Context, account: String = "default") {
             v15(db)
             v16(db)
             v17(db)
+            v18(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -2209,6 +2258,7 @@ class Storage(context: Context, account: String = "default") {
             if (oldVersion < 15) v15(db)
             if (oldVersion < 16) v16(db)
             if (oldVersion < 17) v17(db)
+            if (oldVersion < 18) v18(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -2542,6 +2592,13 @@ class Storage(context: Context, account: String = "default") {
         // `contact.isNew` (PeelCore's `contact.isNew`): someone who just added this account, until its chat is opened. Not set for rows stored before.
         private fun v17(db: SQLiteDatabase) {
             db.execSQL("ALTER TABLE contact ADD COLUMN isNew INTEGER NOT NULL DEFAULT 0")
+        }
+
+        // `site_location`: what the person said about a page's location, per origin (docs/phases/42-page-host-logs.md).
+        private fun v18(db: SQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE site_location (origin TEXT PRIMARY KEY NOT NULL, allowed INTEGER NOT NULL, precise INTEGER NOT NULL, decidedAt INTEGER NOT NULL)",
+            )
         }
 
         companion object {
