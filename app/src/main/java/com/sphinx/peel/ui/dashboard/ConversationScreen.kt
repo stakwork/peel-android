@@ -1736,7 +1736,7 @@ private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPl
     }
     val key = remember(row.id, row.uuid, row.body) { MediaPrefetcher.keyFor(row) }
     val state by remember(key) { engine.media.states.map { it[key] }.distinctUntilChanged() }
-        .collectAsState(initial = engine.media.states.value[key])
+        .collectAsState(initial = null)
     val autoDownload by engine.autoDownloadFlow.collectAsState()
     LaunchedEffect(key, autoDownload) { engine.media.request(row) }
     val startDownload = { engine.media.tap(row) }

@@ -89,7 +89,7 @@ object RetryBackoff {
 object AttachmentCache {
     fun fileKey(muid: String, key: String): String =
         MessageDigest.getInstance("SHA-256").digest("$muid\n$key".toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+            .joinToString("") { "%02x".format(java.util.Locale.ROOT, it) }
 
     fun file(dir: File, muid: String, key: String): File = File(dir, fileKey(muid, key))
 
