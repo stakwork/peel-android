@@ -208,4 +208,24 @@ class AttachmentRulesTest {
         assertFalse(MemesServer.isRedirect(200))
         assertFalse(MemesServer.isRedirect(404))
     }
+
+    @Test
+    fun `the agent's DM takes 32 million bytes, no more`() {
+        assertEquals(32_000_000, AgentAttachments.SEND_LIMIT)
+        assertTrue(AgentAttachments.fits(32_000_000))
+        assertFalse(AgentAttachments.fits(32_000_001))
+        assertTrue(AgentAttachments.tooLarge("big.pdf").startsWith("big.pdf is too large to send."))
+        assertEquals(4096, AgentAttachments.PICTURE_MAX_DIMENSION)
+    }
+
+    @Test
+    fun `a converted picture is named jpg and the Mac note shows for anything the model will not see`() {
+        assertEquals("scan.jpg", AgentAttachments.jpegName("scan.heic"))
+        assertEquals("a.b.jpg", AgentAttachments.jpegName("a.b.png"))
+        assertEquals("noext.jpg", AgentAttachments.jpegName("noext"))
+        assertFalse(AgentAttachments.showsMacNote(emptyList()))
+        assertFalse(AgentAttachments.showsMacNote(listOf(true to true)))
+        assertTrue(AgentAttachments.showsMacNote(listOf(true to false)))
+        assertTrue(AgentAttachments.showsMacNote(listOf(true to true, false to true)))
+    }
 }

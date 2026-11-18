@@ -177,4 +177,14 @@ class ControlPlanTest {
         assertEquals("Kate", AgentToolTitle.asked("Kate (chat=abc123):"))
         assertEquals("5, 1", AgentToolTitle.asked("""{"limit":5,"z":true}"""))
     }
+
+    @Test fun `the attachment tool and request read in words, asked by nothing`() {
+        assertEquals("Read an attachment", AgentToolTitle.of("read_attachment"))
+        assertEquals("Read an attachment", AgentToolTitle.of("sphinx_attachment"))
+        assertEquals("Read an attachment", AgentToolTitle.of("sphinx/attachment"))
+        assertEquals("", AgentToolTitle.asked("""{"uuid":"8f2c-1"}""", "sphinx_attachment"))
+        assertEquals("", AgentToolTitle.asked("""{"uuid":"8f2c-1"}""", "read_attachment"))
+        assertEquals("5, 1", AgentToolTitle.asked("""{"limit":5,"z":true}""", "sphinx_read"))
+        assertEquals("Read an attachment", AgentRequest("attachments.read", status = null).words)
+    }
 }

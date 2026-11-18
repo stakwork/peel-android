@@ -1441,10 +1441,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// `sendFileAttachment`.
     private suspend fun sendAttachment(
         chat: String, bytes: ByteArray, fileName: String, mediaType: String, caption: String, isTribe: Boolean,
-        replyTo: String?, inThread: String?,
+        replyTo: String?, inThread: String?, modelMaySee: Boolean = false,
     ): MessageRow {
         check(transport != null) { "Not connected." }
-        if (bytes.size > ATTACHMENT_LIMIT) throw IllegalStateException("That file is too large to send.")
+        val isAgentChat = chat == agentPubkey
+        // The agent's DM takes what the Mac can read: 32 MB, not the 100 MB of a chat with a person.
+        val limit = if (isAgentChat) AgentAttachments.SEND_LIMIT else ATTACHMENT_LIMIT
+        if (bytes.size > limit) throw IllegalStateException("That file is too large to send.")
         val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
         val key = MediaCrypto.newKey()
         val sealed = MediaCrypto.encrypt(bytes, key)
@@ -1462,7 +1465,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             put("mediaToken", mediaToken)
             if (replyTo != null) put("replyUuid", replyTo)
             if (inThread != null) put("threadUuid", inThread)
-            timeZoneMetadata(chat, isTribe)?.let { put("metadata", it) }
+            AttachmentMetadata.merged(timeZoneMetadata(chat, isTribe), AttachmentMetadata.vision(isAgentChat, mediaType, modelMaySee))
+                ?.let { put("metadata", it) }
         }.toString()
         val (myAlias, myPhoto) = sentIdentity(chat, isTribe)
         val result = run { time, stateBytes ->
@@ -1509,7 +1513,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// this function's: it only ever sends exactly the bytes it's given.
     suspend fun sendImageAttachment(
         chat: String, jpeg: ByteArray, caption: String, isTribe: Boolean, replyTo: String? = null, inThread: String? = null,
-    ): MessageRow = sendAttachment(chat, jpeg, "image.jpg", "image/jpg", caption, isTribe, replyTo, inThread)
+        modelMaySee: Boolean = false,
+    ): MessageRow = sendAttachment(chat, jpeg, "image.jpg", "image/jpg", caption, isTribe, replyTo, inThread, modelMaySee)
 
     /// A voice recording — always exactly `"audio.wav"`/`"audio/wav"`,
     /// PeelCore's own `VoiceMessage.fileName`/`mediaType`: the WAV
@@ -1530,10 +1535,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// either.
     suspend fun sendFileAttachment(
         chat: String, bytes: ByteArray, pickedName: String, declaredMediaType: String?, caption: String, isTribe: Boolean,
-        replyTo: String? = null, inThread: String? = null,
+        replyTo: String? = null, inThread: String? = null, modelMaySee: Boolean = false,
     ): MessageRow {
         val (fileName, mediaType) = classifyOutgoingFile(pickedName, declaredMediaType)
-        return sendAttachment(chat, bytes, fileName, mediaType, caption, isTribe, replyTo, inThread)
+        return sendAttachment(chat, bytes, fileName, mediaType, caption, isTribe, replyTo, inThread, modelMaySee)
     }
 
     /// What the bytes really are, given what the sender said — PeelCore's

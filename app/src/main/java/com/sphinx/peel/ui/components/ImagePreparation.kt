@@ -18,13 +18,28 @@ import java.io.ByteArrayOutputStream
 /// `maxDimension` on the long side: a phone camera's own resolution is
 /// far more than a chat attachment needs. Null for anything that
 /// doesn't actually decode as an image.
-fun prepareImageForSending(context: Context, uri: Uri, maxDimension: Int = 2048, quality: Int = 85): ByteArray? {
+fun prepareImageForSending(
+    context: Context, uri: Uri, maxDimension: Int = 2048, quality: Int = 85, flattenOnWhite: Boolean = false,
+): ByteArray? {
     val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+    return prepareImageBytes(bytes, maxDimension, quality, flattenOnWhite)
+}
+
+/// [prepareImageForSending] over bytes already read. [flattenOnWhite] draws a picture with transparency on white first (a JPEG has none;
+/// the agent's DM, as peel does), else it would turn black. Null when the bytes do not decode (a HEIC on an Android that cannot).
+fun prepareImageBytes(bytes: ByteArray, maxDimension: Int = 2048, quality: Int = 85, flattenOnWhite: Boolean = false): ByteArray? {
     val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
     val rotated = rotateUpright(decoded, exifRotationDegrees(bytes))
     val scaled = downscale(rotated, maxDimension)
+    val flat = if (flattenOnWhite && scaled.hasAlpha()) {
+        Bitmap.createBitmap(scaled.width, scaled.height, Bitmap.Config.ARGB_8888).also {
+            val canvas = android.graphics.Canvas(it)
+            canvas.drawColor(android.graphics.Color.WHITE)
+            canvas.drawBitmap(scaled, 0f, 0f, null)
+        }
+    } else scaled
     val output = ByteArrayOutputStream()
-    scaled.compress(Bitmap.CompressFormat.JPEG, quality, output)
+    flat.compress(Bitmap.CompressFormat.JPEG, quality, output)
     return output.toByteArray()
 }
 

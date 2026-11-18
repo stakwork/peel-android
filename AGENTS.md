@@ -109,6 +109,8 @@ sections for code that isn't written yet.
   - `InviteLink.appOf` (`engine/Invite.kt`), `OpenedApp` (`engine/PublicApp.kt`), `Storage` v16 `public_app`, `PublicPageRouter(opened)`, `AppsScreen(onOpenPublic)`, `Stadeum.showsApps(openedApps)` (the Chats row),
     `VisitorSignature.address`/`Engine.signInAddress` — worker onboarding (`docs/phases/41-worker-onboarding.md`): an invite link's `&a=`
     opens a public app, `sign_in` sends the account's Sphinx address with the root key, opened public apps stay in Apps.
+  - `engine/ModelSight.kt` (`ModelSight`: which pending pictures the model may see), `AttachmentMetadata.kt` (`vision`, `merged`: `{"peel":{"v":1,"vision":true}}` merged into the time-zone metadata), `AgentAttachments` in `AttachmentRules.kt` (32 MB send limit, 4096 px, the Mac note, `jpegName`),
+    `AgentToolTitle`/`AgentRequest.words` for `read_attachment`/`attachments.read` — attachments in the agent's DM (`docs/phases/44-agent-attachments.md`): files are held pending until Send (`ui/dashboard/PendingAttachments.kt`, `PendingTray`), pictures become JPEGs; threads still send on pick.
   - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s

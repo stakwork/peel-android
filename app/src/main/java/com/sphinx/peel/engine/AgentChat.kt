@@ -45,6 +45,7 @@ data class AgentRequest(
             kind == "chats.search" -> "Search your messages"
             kind == "send" -> "Send a message"
             kind == "approve" -> "Asked for your approval"
+            kind == "attachments.read" -> "Read an attachment"
             kind == "calendar.events" -> "Read your calendar"
             kind.startsWith("calendar.") -> "Change your calendar"
             else -> "Asked your Mac"
@@ -215,6 +216,7 @@ object AgentToolTitle {
         "update_automation" to "Change an automation",
         "delete_automation" to "Delete an automation",
         "run_automation_now" to "Run an automation",
+        "read_attachment" to "Read an attachment",
         // strut's own job steps, on the orchestrator.
         "job_start" to "Started a job",
         "job_continue" to "Sent a job your answer",
@@ -236,7 +238,13 @@ object AgentToolTitle {
         "automation_list" to "list_automations", "automation_preview" to "preview_schedule",
         "automation_create" to "create_automation", "automation_update" to "update_automation",
         "automation_delete" to "delete_automation", "automation_run-now" to "run_automation_now",
+        "sphinx_attachment" to "read_attachment",
     )
+
+    private fun canonical(rawName: String): String {
+        val name = rawName.replace("/", "_")
+        return strutNames[name] ?: name
+    }
 
     fun of(rawName: String): String {
         val name = rawName.replace("/", "_")
@@ -252,7 +260,9 @@ object AgentToolTitle {
     fun summary(line: String): String = chatId.replace(line, "").trim { it == ':' || it == ' ' }
 
     /// What a tool in the agent's DM was asked, from the bridge's one line of its input: an object's values ("pr6-peer, hello"), else the line.
-    fun asked(line: String): String {
+    /// [tool] is the tool's name when known: an attachment is asked by a uuid, which says nothing to a person, so it is asked by nothing.
+    fun asked(line: String, tool: String? = null): String {
+        if (tool != null && canonical(tool) == "read_attachment") return ""
         val fields = runCatching { JSONObject(line) }.getOrNull()
         if (fields == null) {
             // The bridge cuts a long input short: its title if one shows, never half an object.

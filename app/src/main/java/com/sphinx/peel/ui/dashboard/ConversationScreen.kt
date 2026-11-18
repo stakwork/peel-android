@@ -267,7 +267,20 @@ fun ConversationScreen(
     var sendingLabel by remember(chat) { mutableStateOf<String?>(null) }
     var cameraOutputUri by remember(chat) { mutableStateOf<android.net.Uri?>(null) }
 
+    // The agent's DM holds what is picked until Send (`PendingAttachments`); every other chat sends on pick.
+    val pending = remember(chat) { PendingAttachments(context) }
+    DisposableEffect(chat) { onDispose { pending.clear() } }
+
+    fun addPending(uri: android.net.Uri, picture: Boolean) {
+        scope.launch {
+            error = null
+            val refused = if (picture) pending.addPicture(uri) else pending.addFile(uri)
+            if (refused != null) error = refused
+        }
+    }
+
     fun sendImage(uri: android.net.Uri) {
+        if (isAgent) { addPending(uri, picture = true); return }
         scope.launch {
             sendingLabel = "Sending photo…"
             error = null
@@ -302,6 +315,7 @@ fun ConversationScreen(
     // the same way it does on PeelCore's own iPhone app (no dedicated
     // video picker there either — see `Engine.sendFileAttachment`).
     fun sendFile(uri: android.net.Uri) {
+        if (isAgent) { addPending(uri, picture = false); return }
         scope.launch {
             sendingLabel = "Sending file…"
             error = null
@@ -723,9 +737,40 @@ fun ConversationScreen(
             sendingLabel = sendingLabel,
             onSendSats = { moneyAction = ChatMoneyAction.SEND }.takeIf { !isTribe && !isAgent },
             onRequestSats = { moneyAction = ChatMoneyAction.REQUEST }.takeIf { !isTribe && !isAgent },
+            tray = if (isAgent) ({ PendingTray(pending, Modifier.padding(bottom = 6.dp)) }) else null,
+            hasPending = isAgent && pending.files.isNotEmpty(),
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
+                if (isAgent && pending.files.isNotEmpty()) {
+                    val inThreadOfReply = replyTo?.let { threadRoot(it) }
+                    draft = ""
+                    replyTo = null
+                    error = null
+                    newAfterIndex = null
+                    scope.launch {
+                        sendingLabel = "Sending…"
+                        try {
+                            val outcome = pending.sendAll(engine, chat, toSend, replyUuid, inThreadOfReply) { reload() }
+                            // A refused first file leaves the text on its own, as the Mac does.
+                            if (!outcome.captionSent) {
+                                try {
+                                    engine.sendMessage(chat, toSend, isTribe, replyUuid, inThreadOfReply)
+                                } catch (e: Exception) {
+                                    draft = toSend
+                                    throw e
+                                }
+                            }
+                            outcome.errors.firstOrNull()?.let { error = it }
+                            reload()
+                        } catch (e: Exception) {
+                            error = e.message ?: "Could not send that."
+                        } finally {
+                            sendingLabel = null
+                        }
+                    }
+                    return@Composer
+                }
                 // A reply always lands in a thread, the same thread its
                 // own parent is already in (or starts a new one at the
                 // parent, if it isn't in one yet) — PeelCore's `threadRoot`.
@@ -2207,6 +2252,9 @@ private fun Composer(
     onCancelRecord: () -> Unit,
     sendingLabel: String?,
     onSend: () -> Unit,
+    /// The agent DM's pending files, drawn above the field; [hasPending] lets Send go with no text.
+    tray: (@Composable () -> Unit)? = null,
+    hasPending: Boolean = false,
     /// Sats to a person (a DM, not a tribe or the agent): the attach menu's
     /// "Send sats" and "Request sats". Null hides them.
     onSendSats: (() -> Unit)? = null,
@@ -2247,6 +2295,7 @@ private fun Composer(
                 modifier = Modifier.padding(bottom = 6.dp),
             )
         }
+        tray?.invoke()
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             var attachMenuOpen by remember { mutableStateOf(false) }
             // The field's selection lives here (the cursor decides which
@@ -2321,7 +2370,7 @@ private fun Composer(
                     )
                 }
             }
-            val canSend = text.isNotBlank()
+            val canSend = text.isNotBlank() || hasPending
             if (canSend) {
                 Box(
                     Modifier
