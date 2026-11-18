@@ -129,3 +129,31 @@ object AttachmentCache {
         nameFile(dir, muid, key).delete()
     }
 }
+
+/// What the agent's DM takes as attachments (peel's `Engine.sendLimit`, 32_000_000 bytes; not 32 MiB), and the words and names of its pending files.
+/// Every other chat keeps `Engine`'s own 100 MB limit.
+object AgentAttachments {
+    /// The largest file sent to the agent, in bytes (`Engine.sendLimit`).
+    const val SEND_LIMIT = 32_000_000
+
+    /// The longest side of a picture sent to the agent: the Mac's text reader wants enough pixels.
+    const val PICTURE_MAX_DIMENSION = 4096
+
+    /// The note under the pending files when any is not a picture the model sees (iOS `FilesTray`).
+    const val MAC_NOTE = "The agent reads files on your Mac, so Peel needs to be open there."
+
+    /// Whether [size] bytes may go to the agent.
+    fun fits(size: Long): Boolean = size <= SEND_LIMIT
+
+    /// What a refused file says, in the style of the engine's "That file is too large to send."
+    fun tooLarge(name: String): String = "$name is too large to send. The agent takes files up to 32 MB."
+
+    /// Whether the note shows: a pending file the model will not see (not a picture, or its switch off).
+    fun showsMacNote(files: List<Pair<Boolean, Boolean>>): Boolean = files.any { (isPicture, modelSees) -> !isPicture || !modelSees }
+
+    /// A picture's name once it is a JPEG: its own with the extension replaced by `.jpg` ("scan.heic" -> "scan.jpg").
+    fun jpegName(name: String): String {
+        val base = name.substringBeforeLast('.', name).ifEmpty { "image" }
+        return "$base.jpg"
+    }
+}

@@ -80,7 +80,7 @@ fun AgentToolLines(tools: List<AgentToolLine>) {
     ) {
         // By position: a reply may run one tool twice.
         tools.forEachIndexed { index, tool ->
-            val asked = remember(tool) { AgentToolTitle.asked(tool.summary) }
+            val asked = remember(tool) { AgentToolTitle.asked(tool.summary, tool.name) }
             val line = AgentToolTitle.of(tool.name) + (if (asked.isNotEmpty()) " · $asked" else "") + (if (tool.failed) " · failed" else "")
             Row { Text(line, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
