@@ -78,6 +78,18 @@ class MainActivity : FragmentActivity() {
         deepLink = DeepLink.from(intent)
         takeInviteLink(intent)
         takePublicLink(intent)
+        takeBoxLink(intent)
+    }
+
+    /// A strut box's `peel://strut/link?url=…&challenge=…` (docs/phases/45-box-link.md): its question waits for the person's yes
+    /// (`Boxes.model.asking`, asked over the tabs once unlocked), or why Peel won't sign it is said; either way You opens, where
+    /// the boxes are (iOS `PhoneRouter.open(peelLink:)`). Held in memory only.
+    private fun takeBoxLink(intent: Intent?) {
+        val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
+        if (data.scheme?.lowercase() != "peel" || data.host?.lowercase() != "strut") return
+        val offer = com.sphinx.peel.engine.BoxLinkOffer.parse(data.toString())
+        if (offer != null) com.sphinx.peel.engine.Boxes.model.take(offer) else com.sphinx.peel.engine.Boxes.model.takeBroken()
+        deepLink = DeepLink.YOU
     }
 
     /// Only a strictly well-formed `peel://open?url=…`; anything else is ignored. Held in memory only.
@@ -113,6 +125,7 @@ class MainActivity : FragmentActivity() {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         deepLink = DeepLink.from(intent)
+        if (savedInstanceState == null) takeBoxLink(intent)
         val secretStore = FileSecretStore(applicationContext)
         val storage = Storage(applicationContext)
         setContent {
@@ -194,6 +207,7 @@ private fun PeelApp(
             RelockWhenIdle(current.engine, secretStore) { screen = Screen.Relock(current.engine) }
             BiometricHousekeeping(current.engine, secretStore)
             StadeumHousekeeping(current.engine)
+            BoxesHousekeeping(current.engine, storage)
             InviterNotice(current.engine)
             DisposableEffect(Unit) {
                 router.openWaitingLink()
@@ -309,6 +323,33 @@ private fun StadeumHousekeeping(engine: Engine) {
             lifecycleOwner.lifecycle.removeObserver(observer)
             model.close()
             model.sphinxProof = null
+        }
+    }
+}
+
+/// Opens the strut boxes this account is linked to while it is on screen (renewed when due, hourly, and on coming back to the
+/// front), and lets them go when the account closes or locks (iOS opens them at every unlock; docs/phases/45-box-link.md).
+@Composable
+private fun BoxesHousekeeping(engine: Engine, storage: Storage) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(engine, lifecycleOwner) {
+        val model = com.sphinx.peel.engine.Boxes.model
+        // Signing off the main thread: the native core's work, not the screen's.
+        model.sign = { challenge -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { engine.signBoxLink(challenge) } }
+        model.accountName = { storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotBlank() } }
+        model.open(com.sphinx.peel.account.KeystoreBoxStore(context.applicationContext))
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            if (first) first = false else model.cameToFront()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            model.close()
+            model.sign = null
+            model.accountName = null
         }
     }
 }

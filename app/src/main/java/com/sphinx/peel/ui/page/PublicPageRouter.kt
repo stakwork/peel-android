@@ -13,7 +13,8 @@ import com.sphinx.peel.engine.PublicAppLink
 ///    ([openOrg]) and does not touch a public page (nothing in iOS does);
 ///  - a link that arrives locked only waits (no page is touched), and opens at the unlock;
 ///  - a lock (or a failed open) closes both pages but keeps a waiting link; a sign-out or wipe ([reset]) drops all three;
-///  - an org page whose workspace is no longer in use closes ([workspacesChanged], iOS `MainTabs` `.onChange(of: live)`).
+///  - an org page whose workspace is no longer in use closes ([workspacesChanged], iOS `MainTabs` `.onChange(of: live)`), unless it
+///    is a linked box's page and the box is still linked (iOS `closeGoneOrgPage`, docs/phases/45-box-link.md).
 ///
 /// [opened] is told of each public page as it comes on screen, whichever way it came (a link, a worker's invite link, the Apps list):
 /// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/41-worker-onboarding.md; Android only).
@@ -55,10 +56,11 @@ class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
         orgPage = request
     }
 
-    /// iOS `.onChange(of: live)`: the org page goes when its workspace is no longer in use.
-    fun workspacesChanged(live: List<HivePeer>) {
+    /// iOS `closeGoneOrgPage` (`.onChange(of: live)` and of the boxes): the org page goes when its workspace is no longer in use,
+    /// and a box's page when [shows] (`BoxesModel.shows`) no longer has its box.
+    fun workspacesChanged(live: List<HivePeer>, shows: (OrgPageRequest) -> Boolean = { false }) {
         val shown = orgPage ?: return
-        if (!shown.isLive(live)) orgPage = null
+        if (!shown.isLive(live) && !shows(shown)) orgPage = null
     }
 
     fun close() {

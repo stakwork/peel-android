@@ -81,6 +81,11 @@ import com.sphinx.peel.engine.PaymentRules
 import com.sphinx.peel.engine.Sats
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.StadeumModel
+import com.sphinx.peel.engine.BoxLink
+import com.sphinx.peel.engine.Boxes
+import com.sphinx.peel.engine.BoxesModel
+import com.sphinx.peel.engine.BoxWords
+import androidx.compose.foundation.combinedClickable
 import com.sphinx.peel.engine.paymentConfirmationMsat
 import com.sphinx.peel.engine.setPaymentConfirmation
 import com.sphinx.peel.storage.Setting
@@ -281,6 +286,7 @@ private fun YouMain(
         item { SectionHeader("Stadeum") }
         item { StadeumSection(Stadeum.model) }
         item { Spacer(Modifier.height(24.dp)) }
+        item { BoxesSection(Boxes.model) }
 
         item { SectionHeader("Account") }
         item {
@@ -605,8 +611,9 @@ private fun YouMain(
                         }.getOrNull()
                         if (unregistered != true) android.util.Log.d("YouScreen", "server push unregister skipped or failed")
                         engine.cancel()
-                        // The Stadeum pairing goes with the account.
+                        // The Stadeum pairing goes with the account, and so do the boxes linked to its key (docs/phases/45-box-link.md).
                         Stadeum.model.disconnect()
+                        Boxes.model.forgetAll()
                         // The public sites' kept sign-ins too (docs/phases/42-page-host-logs.md), on the main thread.
                         com.sphinx.peel.ui.apps.forgetKeptWebData()
                         // Both stores, not just the mnemonic: otherwise the
@@ -1034,6 +1041,81 @@ private fun StadeumSection(model: StadeumModel) {
             problem, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.attention,
             modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 8.dp),
         )
+    }
+}
+
+/// You › Boxes (iOS `BoxesSection`, docs/phases/45-box-link.md): the strut boxes this account is linked to, each as its member. A tap
+/// opens the box's own strut UI as them, where its apps are ([BoxesModel.page]); a long press offers Forget. Shown once there is
+/// something to show: a box is linked from its own Connect, by its QR code or Open in Peel.
+@Composable
+private fun BoxesSection(model: BoxesModel) {
+    val links = model.links
+    val linking = model.linking
+    val lines = listOfNotNull(model.notice, model.problem)
+    if (links.isEmpty() && linking == null && lines.isEmpty()) return
+    val openPage = com.sphinx.peel.ui.apps.LocalPageOpener.current
+    val scope = rememberCoroutineScope()
+    // The box whose page is being opened, and the one whose menu is open.
+    var opening by remember { mutableStateOf<String?>(null) }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    fun open(box: BoxLink) {
+        opening = box.url
+        scope.launch {
+            try { model.page(box)?.let(openPage) } finally { opening = null }
+        }
+    }
+    Column(Modifier.fillMaxWidth()) {
+        SectionHeader("Boxes")
+        if (links.isNotEmpty() || linking != null) {
+            Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+                links.forEachIndexed { i, box ->
+                    if (i > 0) AccountDivider()
+                    Box {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .combinedClickable(
+                                    enabled = opening == null,
+                                    onClickLabel = "Open ${box.host} as ${box.person}",
+                                    onLongClickLabel = "Forget",
+                                    onLongClick = { menuFor = box.url },
+                                    onClick = { open(box) },
+                                )
+                                .heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(box.host, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                            if (opening == box.url) {
+                                androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text(box.person, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText, textAlign = TextAlign.End)
+                            }
+                        }
+                        DropdownMenu(expanded = menuFor == box.url, onDismissRequest = { menuFor = null }) {
+                            DropdownMenuItem(
+                                text = { Text("Forget", color = Theme.colors.destructive) },
+                                onClick = { menuFor = null; model.forget(box) },
+                            )
+                        }
+                    }
+                }
+                if (linking != null) {
+                    if (links.isNotEmpty()) AccountDivider()
+                    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Linking Peel to ${linking.host}…", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                    }
+                }
+            }
+        }
+        lines.forEach { line ->
+            Text(line, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.attention, modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 8.dp))
+        }
+        Text(
+            BoxWords.HOW_TO_LINK, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
+            modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 8.dp),
+        )
+        Spacer(Modifier.height(24.dp))
     }
 }
 

@@ -792,16 +792,26 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     suspend fun signVisitor(challenge: VisitorChallenge, key: SignInKey): VisitorSignature {
         val message = challenge.text.toByteArray(Charsets.UTF_8)
         return when (key) {
-            SignInKey.root -> {
-                val time = mutex.withLock { clock.next() }
-                VisitorSignature(accountKey, uniffi.sphinxrs.signBytes(seed, 0u, time, network, message), signInAddress())
-            }
+            SignInKey.root -> signWithAccountKey(message)
             SignInKey.domain -> {
                 val signed = uniffi.sphinxrs.signBytesLud05(bip39Seed, challenge.host, message)
                 VisitorSignature(signed.pubkey, signed.sig)
             }
         }
     }
+
+    /// [message] as a Lightning signed message with the account's own key (child 0; sphinx-rs `sign_bytes`), the key, and the
+    /// account's Sphinx address beside it (iOS `signWithAccountKey`). Only for a strut challenge a caller read and checked: a
+    /// visitor's ([signVisitor]) or a box's ([signBoxLink]).
+    private suspend fun signWithAccountKey(message: ByteArray): VisitorSignature {
+        val time = mutex.withLock { clock.next() }
+        return VisitorSignature(accountKey, uniffi.sphinxrs.signBytes(seed, 0u, time, network, message), signInAddress())
+    }
+
+    /// Signs a box's link challenge (strut's plans/people-and-hosts.md §2.1, `docs/phases/45-box-link.md`): its UTF-8 bytes with
+    /// the account's own key, as a visitor's sign-in with it is signed (iOS `Engine.signBoxLink`). Only a [BoxChallenge], so never
+    /// a message a page chose; the caller checked whom it names and where it is for.
+    suspend fun signBoxLink(challenge: BoxChallenge): VisitorSignature = signWithAccountKey(challenge.text.toByteArray(Charsets.UTF_8))
 
     val visitorSigner: VisitorSigner = VisitorSigner { challenge, key -> signVisitor(challenge, key) }
 
