@@ -145,3 +145,26 @@ Robolectric:
 
 On the phone (Peel Dev): the worker app and example.com, each drawn, the second opened over the first; `100vh` measured over the
 DevTools protocol. Not covered anywhere: the renderer kill and the stale-view path.
+
+## Location (a page's `navigator.geolocation`)
+
+Status: built. Before this, `setGeolocationEnabled(false)` and no manifest permission meant a page's location was refused before anyone was asked.
+
+- Rules are pure in `engine/PageLocation.kt` (`mayAsk`, `decide`, `systemPermissions`; JVM-tested in `PageLocationTest`). A request is attributed
+  to the page's origin when it comes from that origin or from an opaque one (strut's sandboxed app frame, which only gets location when strut's
+  page delegates it with `allow="geolocation"`); a frame of another site, a page that isn't showing, or an insecure page (https, or http on
+  loopback) is denied with no prompt.
+- `OrgPageChromeClient.onGeolocationPermissionsShowPrompt` → `OrgPageController.requestLocation`: a stored no is silent; a stored yes or an
+  "Allow once" (kept in the controller for that page session, never stored) goes to the system permission (asked only when not held: COARSE, or
+  COARSE+FINE for precise); otherwise Peel's own prompt (`PageLocationPrompt.kt`) first. `callback.invoke(origin, granted, false)`: retain is
+  always false, Peel's `site_location` table (Storage v18, same database as wallet connections) is the only memory. Permanently refused by the
+  system (no rationale after a refusal): the page is told no and the person is offered Open phone settings.
+- Android has one location permission for the whole app, so "precise" applies to every allowed site (the prompt and You say so); an
+  approximate-only choice in the system's dialog is respected (the engine then gives coarse positions).
+- The screen pauses the web view on ON_STOP (WebView.onPause stops geolocation) and resumes on ON_START; a non-resumed page is not visible
+  to `mayAsk`, and a waiting prompt is withdrawn. No ACCESS_BACKGROUND_LOCATION; the OS is asked only when a page asks.
+- You › Site location lists each site (Allowed · approximate / precise / Blocked) with Allow, Precise, Remove, Forget all sites (also
+  `GeolocationPermissions.clear/clearAll`) and a phone-settings link.
+- Errors are the engine's: denied → PERMISSION_DENIED, location services off → POSITION_UNAVAILABLE, timeouts. Logging (`PageLog.location`)
+  records origin, frame kind, decision and accuracy level only; Peel never reads a coordinate.
+- Not done: no device run (geolocation, the system dialog and `onPause` need a device).

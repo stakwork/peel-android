@@ -17,6 +17,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.sphinx.peel.engine.OrgDownloads
 import com.sphinx.peel.engine.OrgPageRequest
 import com.sphinx.peel.engine.PageLog
+import com.sphinx.peel.engine.PageLocation
 import com.sphinx.peel.engine.PageMedia
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -260,6 +261,62 @@ class OrgPageHostTest {
             assertNull(request.granted)
         }
         assertEquals(emptyList<List<String>>(), askedSystem)
+    }
+
+    private class Geo : android.webkit.GeolocationPermissions.Callback {
+        val calls = mutableListOf<Triple<String, Boolean, Boolean>>()
+        override fun invoke(origin: String, allow: Boolean, retain: Boolean) { calls += Triple(origin, allow, retain) }
+    }
+
+    private class MemoryLocations : com.sphinx.peel.engine.SiteLocationStore {
+        val grants = mutableMapOf<String, com.sphinx.peel.engine.SiteLocationGrant>()
+        override fun siteLocation(origin: String) = grants[origin]
+        override fun putSiteLocation(grant: com.sphinx.peel.engine.SiteLocationGrant) { grants[grant.origin] = grant }
+    }
+
+    /// Location: Peel's prompt, then its store, then the system; WebView is never told to remember.
+    @Test fun `a page's location waits for Peel's prompt, is stored, and is never retained`() {
+        val store = MemoryLocations().also { controller.locations = it }
+        val askedSystem = mutableListOf<List<String>>()
+        controller.askSystem = { permissions, done -> askedSystem += permissions; done { true } }
+        val first = Geo()
+        chrome.onGeolocationPermissionsShowPrompt("https://acme.sphinx.chat", first)
+        assertEquals(emptyList<Any>(), first.calls)
+        controller.locationPrompt!!.answer(OrgPageController.LocationAnswer(allow = true, once = false, precise = true))
+        assertEquals(listOf(Triple("https://acme.sphinx.chat", true, false)), first.calls)
+        assertEquals(listOf(listOf(PageLocation.COARSE, PageLocation.FINE)), askedSystem)
+        assertTrue(store.grants["https://acme.sphinx.chat"]!!.precise)
+        // Now stored: no prompt.
+        val second = Geo()
+        chrome.onGeolocationPermissionsShowPrompt("null", second)
+        assertNull(controller.locationPrompt)
+        assertEquals(listOf(Triple("null", true, false)), second.calls)
+    }
+
+    @Test fun `a refused, other-origin or hidden page is denied, allow once is not stored`() {
+        val store = MemoryLocations().also { controller.locations = it }
+        controller.askSystem = { _, done -> done { true } }
+        val other = Geo()
+        chrome.onGeolocationPermissionsShowPrompt("https://evil.example.com", other)
+        assertEquals(listOf(Triple("https://evil.example.com", false, false)), other.calls)
+        assertNull(controller.locationPrompt)
+
+        val once = Geo()
+        chrome.onGeolocationPermissionsShowPrompt("https://acme.sphinx.chat", once)
+        controller.locationPrompt!!.answer(OrgPageController.LocationAnswer(allow = true, once = true, precise = false))
+        assertTrue(once.calls.single().second)
+        assertTrue(store.grants.isEmpty())
+
+        val no = Geo()
+        store.putSiteLocation(com.sphinx.peel.engine.SiteLocationGrant("https://acme.sphinx.chat", false, false, 1))
+        chrome.onGeolocationPermissionsShowPrompt("https://acme.sphinx.chat", no)
+        assertEquals(listOf(Triple("https://acme.sphinx.chat", false, false)), no.calls)
+        assertNull(controller.locationPrompt)
+
+        controller.setVisible(false)
+        val hidden = Geo()
+        chrome.onGeolocationPermissionsShowPrompt("https://acme.sphinx.chat", hidden)
+        assertEquals(false, hidden.calls.single().second)
     }
 
     /// strut's camera sheet is a video with no poster until the first frame: WebView's own default (a big play button) is not drawn.

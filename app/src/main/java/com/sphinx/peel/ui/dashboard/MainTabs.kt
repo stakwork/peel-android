@@ -340,10 +340,10 @@ fun MainTabs(
         }
     }
     // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
-    shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg) }
+    shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg, locations = storage) }
     // A Talk card's page: a sheet over the call screen (iOS `.sheet(item: $opener.opened)`); the call goes on behind it.
     talkOpener.page?.takeIf { talk.home != null && it.isLive(live) }?.let {
-        com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = talkOpener::close)
+        com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = talkOpener::close, locations = storage)
     }
     }
     }
