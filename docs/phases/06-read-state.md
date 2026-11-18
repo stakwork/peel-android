@@ -165,3 +165,14 @@ own messages. `ConversationPreview.line` takes `boostOnMine` (a correlated
 EXISTS in the query → `ConversationRow.previewBoostOnMine`) and reads "You
 boosted a message: N sats", "<alias> boosted your message: N sats", "<alias>
 boosted a message: N sats" ("Someone" without an alias).
+
+## Note — every boost from someone else is unread (Tom's decision)
+
+The server's badge counts all boosts from others, so the app must too: the
+unread subquery in `Storage.conversations()` now counts every undeleted boost
+with `fromMe = 0`, whatever message it boosts (the `EXISTS` on our own message
+and the `BOOST_ON_MINE` constant are gone). Our own boosts still never count.
+The row badge, the app-icon total and `maybeReadAll` all sum that one count.
+`previewBoostOnMine` stays: it only picks "boosted your message" vs "boosted a
+message". `MessageNotifier` never notified boosts and `ReadToggle`'s
+`newestIncoming` (`COUNTED_TYPES`) has no boost rows to open at; both unchanged.

@@ -334,7 +334,7 @@ class StorageTest {
     }
 
     @Test
-    fun `a boost on my own message counts as unread, a boost on someone else's doesn't`() {
+    fun `a boost on my message and a boost on someone else's both count as unread`() {
         val storage = newStorage()
         storage.upsertContact("alice", "Alice", null, isTribe = true, ready = true)
         storage.insertMessages(
@@ -361,7 +361,7 @@ class StorageTest {
         storage.setRead("alice", index = 3, pending = false)
         assertEquals(0L, storage.conversations().single().unread)
 
-        // A boost on someone else's message: not news to me.
+        // A boost on someone else's message counts too (the server's badge does).
         storage.insertMessages(
             listOf(
                 MessageRow(
@@ -370,7 +370,18 @@ class StorageTest {
                 ),
             ),
         )
-        assertEquals(0L, storage.conversations().single().unread)
+        assertEquals(1L, storage.conversations().single().unread)
+
+        // Our own boost never does.
+        storage.insertMessages(
+            listOf(
+                MessageRow(
+                    uuid = "boost-3", serverIndex = 5, type = 29, chat = "alice", fromMe = true, sender = null,
+                    body = """{"replyUuid":"theirs"}""", msat = 1000, timestamp = 500, tag = null, paymentHash = null,
+                ),
+            ),
+        )
+        assertEquals(1L, storage.conversations().single().unread)
     }
 
     @Test
@@ -479,7 +490,7 @@ class StorageTest {
     }
 
     @Test
-    fun `a boost counts as unread only when it targets our message`() {
+    fun `every boost from someone else counts as unread, ours never`() {
         val storage = newStorage()
         storage.upsertContact("alice", "Alice", null, isTribe = false, ready = true)
         storage.insertMessages(
@@ -488,11 +499,12 @@ class StorageTest {
                 msg("theirs", 2, 0, "alice"),
                 msg("b1", 3, 29, "alice", replyUuid = "mine"),
                 msg("b2", 4, 29, "alice", replyUuid = "theirs"),
+                msg("b3", 5, 29, "alice", fromMe = true, replyUuid = "theirs"),
             ),
         )
 
-        // "theirs" and the boost of "mine".
-        assertEquals(2L, storage.conversations().single().unread)
+        // "theirs" and both boosts from them; our own boost is not counted.
+        assertEquals(3L, storage.conversations().single().unread)
     }
 
     @Test

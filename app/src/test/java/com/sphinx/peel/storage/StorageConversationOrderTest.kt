@@ -71,7 +71,7 @@ class StorageConversationOrderTest {
     }
 
     @Test
-    fun `a boost on someone else's message or my own boost is the preview but not unread`() {
+    fun `a boost on someone else's message is the preview and unread, my own boost is not unread`() {
         val s = newStorage()
         s.chat("a", "A")
         s.mine("a", "m1", 100)
@@ -79,12 +79,12 @@ class StorageConversationOrderTest {
         s.boost("a", "theirs", 300)
         val other = s.conversations().single()
         assertEquals(300L, other.lastTimestamp)
-        assertEquals(1L, other.unread) // only their own text; the boost adds none
+        assertEquals(2L, other.unread) // their text and their boost (on theirs, still counted)
         assertEquals("Paul boosted a message: 5 sats", other.previewLine)
         s.boost("a", "m1", 400, fromMe = true)
         val mine = s.conversations().single()
         assertEquals(400L, mine.lastTimestamp)
-        assertEquals(1L, mine.unread)
+        assertEquals(2L, mine.unread) // our own boost adds none
         assertEquals("You boosted a message: 5 sats", mine.previewLine)
     }
 
