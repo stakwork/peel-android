@@ -82,8 +82,13 @@ data class ContactRow(
 
 /// The message types that count as unread (and that "Mark unread" can sit
 /// just below): the list in [Storage.conversations]'s unread subquery,
-/// minus boosts, which count only on our own message.
+/// plus any undeleted boost from someone else (`ANY_BOOST`, the server's badge counts them all).
 private const val COUNTED_TYPES = "(0, 5, 6, 2, 32)"
+
+/// Any undeleted boost, whoever sent it and whatever it targets: it is the
+/// chat's last message and preview, as on iOS. Someone else's also counts as
+/// unread (our own never does), whatever message it boosts.
+private const val ANY_BOOST = "(type = 29 AND deleted = 0)"
 
 /// A stranger's page's connection key starts so (`WalletScope.Origin.key`).
 private const val ORIGIN_KEY_PREFIX = "origin:"
@@ -122,6 +127,10 @@ data class ConversationRow(
     val previewDeleted: Boolean = false,
     val previewFromMe: Boolean? = null,
     val previewSender: String? = null,
+    /// The preview message's msat, read only for a boost ("boosted your message: 5 sats").
+    val previewMsat: Long? = null,
+    /// The preview is a boost on one of our own messages.
+    val previewBoostOnMine: Boolean = false,
     /// Unread messages that mention this account (tribes only), filled in
     /// by [Storage.conversations] only for a chat on "mentions only" —
     /// what that level shows instead of `unread` (`ChatReadState.shownUnread`).
@@ -139,7 +148,7 @@ data class ConversationRow(
 
     /// One line for the row, null for a chat with nothing yet.
     val previewLine: String? get() =
-        com.sphinx.peel.engine.ConversationPreview.line(previewType, previewBody, previewDeleted, previewFromMe, isTribe, previewSender)
+        com.sphinx.peel.engine.ConversationPreview.line(previewType, previewBody, previewDeleted, previewFromMe, isTribe, previewSender, previewMsat, previewBoostOnMine)
 
     /// The alias, or the chat's own key trimmed to 12 characters — same
     /// fallback as `Conversation.name`.
@@ -1344,15 +1353,16 @@ class Storage(context: Context, account: String = "default") {
     /// `conversationsSQL`. Only text/attachment (0, 6) and undeleted
     /// payment/call (5, 32) messages with visible words count (noWords is
     /// approximated by a non-blank body), newest `timestamp DESC, id DESC`;
-    /// joins, boosts and control messages never move a chat. Order is
+    /// joins and control messages never move a chat, nor do boosts — except
+    /// any undeleted boost ([ANY_BOOST]), mine or theirs, on any message: it is
+    /// the last message and the preview too. Order is
     /// `lastTimestamp IS NULL, lastTimestamp DESC, alias`: chats without
     /// such a message last, ties broken by plain alias ascending.
     ///
-    /// A boost only counts toward unread if it targets one of *this
-    /// account's own* messages (someone boosting a third party's message
-    /// is not news to you) — PeelCore's own `countsAsUnreadSQL` rule, one
-    /// correlated subquery now that `message.replyUuid` is a real column
-    /// (`Storage.v6`) rather than something buried in raw JSON `body`.
+    /// Every undeleted boost from someone else counts toward unread, whatever
+    /// message it targets (Tom: the server's badge counts all of them); our own
+    /// boosts never do. The row badge, the app-icon total and read-all all sum
+    /// this one count.
     fun conversations(): List<ConversationRow> {
         val rows = mutableListOf<ConversationRow>()
         helper.readableDatabase.rawQuery(
@@ -1366,27 +1376,32 @@ class Storage(context: Context, account: String = "default") {
                     WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.isControl = 0
                         AND m.type IN (0, 5, 6, 2, 32, 29)
                         AND m.serverIndex > COALESCE((SELECT lastRead FROM chatState WHERE chat = c.pubkey), -1)
-                        AND (m.type != 29 OR EXISTS (
-                            SELECT 1 FROM message t WHERE t.chat = c.pubkey AND t.uuid = m.replyUuid AND t.fromMe = 1
-                        ))),
+                        AND (m.type != 29 OR m.deleted = 0)),
                 COALESCE((SELECT muteLevel FROM chatState WHERE chat = c.pubkey), 0),
                 (SELECT MAX(m.serverIndex) FROM message m
                     WHERE m.chat = c.pubkey AND m.fromMe = 0 AND m.deleted = 0 AND m.type IN $COUNTED_TYPES),
                 p.type, p.body, p.deleted, p.fromMe, p.sender,
-                c.isNew
+                c.isNew, p.msat,
+                (p.type = 29 AND EXISTS (SELECT 1 FROM message t WHERE t.chat = p.chat AND t.uuid = p.replyUuid AND t.fromMe = 1))
             FROM contact c
             LEFT JOIN message p ON p.id = (
                 SELECT id FROM message
                 WHERE chat = c.pubkey
-                    AND type IN (0, 2, 5, 6, 32)
-                    AND (deleted = 1 OR type != 0 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                    AND (
+                        (type IN (0, 2, 5, 6, 32)
+                            AND (deleted = 1 OR type != 0 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != ''))
+                        OR type = 29
+                    )
                 ORDER BY timestamp DESC, id DESC LIMIT 1
             )
             LEFT JOIN message l ON l.id = (
                 SELECT id FROM message
                 WHERE chat = c.pubkey AND deleted = 0
-                    AND type IN (0, 5, 6, 32)
-                    AND (type = 6 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != '')
+                    AND (
+                        (type IN (0, 5, 6, 32)
+                            AND (type = 6 OR TRIM(COALESCE(body, ''), ' ' || char(9) || char(10) || char(13)) != ''))
+                        OR $ANY_BOOST
+                    )
                 ORDER BY timestamp DESC, id DESC LIMIT 1
             )
             WHERE c.ready = 1
@@ -1413,6 +1428,8 @@ class Storage(context: Context, account: String = "default") {
                         previewFromMe = if (cursor.isNull(13)) null else cursor.getInt(13) != 0,
                         previewSender = cursor.getString(14),
                         isNew = cursor.getInt(15) != 0,
+                        previewMsat = if (cursor.isNull(16)) null else cursor.getLong(16),
+                        previewBoostOnMine = !cursor.isNull(17) && cursor.getInt(17) != 0,
                     ),
                 )
             }

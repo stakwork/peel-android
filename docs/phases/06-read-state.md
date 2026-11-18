@@ -135,3 +135,44 @@ successful restore `Engine.settleReadsAfterRestore()` re-asks `getReads`
 (iOS does so after the restore) and then marks read every chat whose newest
 message is ours, mirroring iOS's `setLastMessagesOnChats`. Chats whose
 newest message is incoming are untouched.
+
+## Note — a boost on our message is the row's last message (bug fix)
+
+Reported on iOS (Tom): after someone boosts the last message we sent in a
+tribe, the row moved to Unread with badge 1 but still previewed our own
+message. Root cause (iOS): the list picked each chat's last message from the
+`message_preview` partial index, which excluded boosts (type 29), while the
+unread count did count someone else's boost on our message — two rules for
+one row. Android had the same split: the `l` (last/order) and `p` (preview)
+subqueries in `Storage.conversations()` skipped type 29 while the unread
+count included it. Fix: one shared rule, `BOOST_ON_MINE` (someone else's,
+undeleted boost whose `replyUuid` is one of our messages), feeds the unread
+count and both subqueries, so a boost counts as the last message exactly when
+it counts as unread. Our own boosts and boosts on others' messages still
+never move a row. No index exists here, so no migration. The preview reads
+"Paul boosted your message: 5 sats" ("Someone" without an alias) through
+`ConversationPreview.line` (new `msat` argument; "You boosted a message: N
+sats" is there for a fromMe boost but the query never selects one). Tests:
+`ConversationPreviewTest`, `StorageConversationOrderTest`. Not run here (no
+build environment).
+
+## Note — any boost is the row's last message/preview (Tom's decision)
+
+Superseding the note above: every undeleted boost (type 29, either sender, any
+target) is a chat row's last message (`l`, sort) and preview (`p`); a deleted
+boost previews as "Message deleted". Unread still counts only boosts on our
+own messages. `ConversationPreview.line` takes `boostOnMine` (a correlated
+EXISTS in the query → `ConversationRow.previewBoostOnMine`) and reads "You
+boosted a message: N sats", "<alias> boosted your message: N sats", "<alias>
+boosted a message: N sats" ("Someone" without an alias).
+
+## Note — every boost from someone else is unread (Tom's decision)
+
+The server's badge counts all boosts from others, so the app must too: the
+unread subquery in `Storage.conversations()` now counts every undeleted boost
+with `fromMe = 0`, whatever message it boosts (the `EXISTS` on our own message
+and the `BOOST_ON_MINE` constant are gone). Our own boosts still never count.
+The row badge, the app-icon total and `maybeReadAll` all sum that one count.
+`previewBoostOnMine` stays: it only picks "boosted your message" vs "boosted a
+message". `MessageNotifier` never notified boosts and `ReadToggle`'s
+`newestIncoming` (`COUNTED_TYPES`) has no boost rows to open at; both unchanged.

@@ -30,13 +30,87 @@ class StorageConversationOrderTest {
     }
 
     @Test
-    fun `a later boost or join does not reorder`() {
+    fun `a later join does not reorder, a boost does`() {
         val s = newStorage()
         s.chat("a", "A"); s.chat("b", "B")
         s.insertMessages(listOf(msg("a", 0, 100), msg("b", 0, 200), msg("a", 29, 300), msg("a", 1, 400)))
         val rows = s.conversations()
-        assertEquals(listOf("b", "a"), rows.map { it.chat })
-        assertEquals(100L, rows[1].lastTimestamp)
+        assertEquals(listOf("a", "b"), rows.map { it.chat })
+        assertEquals(300L, rows[0].lastTimestamp)
+    }
+
+    private fun Storage.mine(chat: String, uuid: String, timestamp: Long) {
+        next++
+        insertMessages(listOf(MessageRow(uuid = uuid, serverIndex = next, type = 0, chat = chat, fromMe = true, sender = null, body = "mine", msat = null, timestamp = timestamp, tag = null, paymentHash = null)))
+    }
+
+    private fun Storage.boost(chat: String, target: String, timestamp: Long, fromMe: Boolean = false) {
+        next++
+        insertMessages(
+            listOf(
+                MessageRow(
+                    uuid = "b$next", serverIndex = next, type = 29, chat = chat, fromMe = fromMe, sender = """{"alias":"Paul"}""",
+                    body = """{"replyUuid":"$target"}""", msat = 5000, timestamp = timestamp, tag = null, paymentHash = null,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `a boost on my message becomes the preview and moves the row`() {
+        val s = newStorage()
+        s.chat("a", "A"); s.chat("b", "B")
+        s.mine("a", "m1", 100)
+        s.insertMessages(listOf(msg("b", 0, 200)))
+        s.boost("a", "m1", 300)
+        val rows = s.conversations()
+        assertEquals(listOf("a", "b"), rows.map { it.chat })
+        assertEquals(1L, rows[0].unread)
+        assertEquals(300L, rows[0].lastTimestamp)
+        assertEquals("Paul boosted your message: 5 sats", rows[0].previewLine)
+    }
+
+    @Test
+    fun `a boost on someone else's message is the preview and unread, my own boost is not unread`() {
+        val s = newStorage()
+        s.chat("a", "A")
+        s.mine("a", "m1", 100)
+        s.insertMessages(listOf(msg("a", 0, 150).copy(uuid = "theirs")))
+        s.boost("a", "theirs", 300)
+        val other = s.conversations().single()
+        assertEquals(300L, other.lastTimestamp)
+        assertEquals(2L, other.unread) // their text and their boost (on theirs, still counted)
+        assertEquals("Paul boosted a message: 5 sats", other.previewLine)
+        s.boost("a", "m1", 400, fromMe = true)
+        val mine = s.conversations().single()
+        assertEquals(400L, mine.lastTimestamp)
+        assertEquals(2L, mine.unread) // our own boost adds none
+        assertEquals("You boosted a message: 5 sats", mine.previewLine)
+    }
+
+    @Test
+    fun `any boost moves the row`() {
+        val s = newStorage()
+        s.chat("a", "A"); s.chat("b", "B")
+        s.insertMessages(listOf(msg("a", 0, 100), msg("b", 0, 200)))
+        s.boost("a", "nothing", 300)
+        assertEquals(listOf("a", "b"), s.conversations().map { it.chat })
+    }
+
+    @Test
+    fun `a deleted boost is not the last message`() {
+        val s = newStorage()
+        s.chat("a", "A")
+        s.mine("a", "m1", 100)
+        s.boost("a", "m1", 300)
+        val id = s.conversations().single()
+        assertEquals(300L, id.lastTimestamp)
+        s.insertMessages(listOf(msg("a", 0, 50)))
+        val db = s.javaClass.getDeclaredField("helper").also { it.isAccessible = true }.get(s) as android.database.sqlite.SQLiteOpenHelper
+        db.writableDatabase.execSQL("UPDATE message SET deleted = 1 WHERE type = 29")
+        val row = s.conversations().single()
+        assertEquals(100L, row.lastTimestamp)
+        assertEquals("Message deleted", row.previewLine)
     }
 
     @Test
@@ -44,7 +118,7 @@ class StorageConversationOrderTest {
         val s = newStorage()
         s.chat("z", "Zed"); s.chat("m", "Mia"); s.chat("a", "Ann")
         s.insertMessages(listOf(msg("z", 0, 100), msg("m", 29, 500)))
-        assertEquals(listOf("z", "a", "m"), s.conversations().map { it.chat })
+        assertEquals(listOf("m", "z", "a"), s.conversations().map { it.chat })
     }
 
     @Test
