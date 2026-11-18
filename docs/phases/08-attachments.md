@@ -2,6 +2,12 @@
 
 ## Status (2026-10-29)
 
+**Built, later (download reliability and hardening, see the last journal entry):** downloads are owned by
+the engine (`MediaPrefetcher`), not by the row: live messages prefetch, transient failures retry and show
+"Couldn't download yet - tap to retry", and one pure `AutoDownloadPolicy` gates every automatic fetch.
+Cache files are named by a hash of muid+key. **Open:** the default of Auto download media is still ON
+(`!= "0"`); no per-sender/per-chat rule; remote avatars are not covered (journal).
+
 **Built:** an attachment message (type 6, from anyone, in a restore, a
 catch-up or live) downloads, decrypts and shows itself the moment its
 row appears — images inline, a voice message with its own Play/Pause
@@ -188,7 +194,7 @@ actually observe a write from the other one. Marked `@Volatile`.
   directory: it is data the OS is explicitly allowed to reclaim, and
   every file in it is reconstructible (server plus key) rather than
   authoritative, which is exactly what the cache directory is for.
-- A file's own name is cached alongside it in a sidecar `<muid>.name`
+- A file's own name is cached alongside it in a sidecar `<hash>.name` (hash of muid+key, see the last journal entry)
   text file rather than a new storage column or table — the one place
   that needs it (`AttachmentView`, by way of `downloadAttachment`) is
   already keyed by `muid` for the content itself, and a one-line file
@@ -338,6 +344,66 @@ down and up — and it's not more code than a hand-rolled version of the
 same loop `detectDragGestures` already wraps, just without the
 "dragging" framing that doesn't quite fit "this is a press that also
 happens to track movement."
+
+**Received video in a tribe showed "unavailable", re-entering the chat then downloaded it.** Root cause:
+`AttachmentView` downloaded from one `LaunchedEffect` when its row composed (nothing else called
+`downloadAttachment`; a live message never started one). Any exception (offline, a 404/5xx before the
+file was there, a reset while backgrounded) became a red, non-interactive `Failed(e.message)` held in
+`remember`; nothing re-launched it. Leaving the chat disposed the composition and re-entering ran the
+effect again, so the transient failure was gone. `autoDownload` was also a one-shot read.
+
+*Fix.* `engine/MediaPrefetcher.kt`, owned by `Engine` (`Engine.media`, on the engine's own scope):
+at most 2 downloads at once, one job per cache key, a `StateFlow<Map<key, AttachmentState>>` the row
+collects. States: Waiting ("Waiting to download"), Loading (with a percent when the server announced a
+length; `MemesServer.download` has a progress callback), AwaitsDownload (tap), Retryable ("Couldn't
+download yet - tap to retry", the same card as the Download tile), Failed (permanent only: "Video/Image
+not available" or "Not available", plus a short cause, never a raw exception message), Loaded.
+`AttachmentFailure.classify` (pure): IOException family, memes 5xx/404/408/429, 401/403 after the one
+re-sign-in, and an unreadable reply are transient; untrusted host, unreadable token, no key, decrypt
+failure, other refusals/redirects and too-large are permanent. Transient failures retry after 2 s, 10 s,
+30 s (`RetryBackoff`), inside the engine job; then they wait for a tap, the connection returning
+(`networkChanged`) or a connect (`afterConnect`, which also runs when the app returns to the front
+through `ConnectionWatcher`/`resume`). A tap resets the attempts. Triggers: a row showing
+(`AttachmentView`) and `Engine.storeMessages` for a received attachment (not `fromMe`, not while a
+restore replays history, only if newer than 24 h so a catch-up page of old messages does not start a
+download storm). Both use the same gate.
+
+*Auto download setting* (`AutoDownloadPolicy.decide(kind, declaredSize, autoOn)`): off = nothing is fetched,
+cached copies still show; on = images up to 10 MB (`Engine.AUTO_DOWNLOAD_IMAGE_LIMIT`), video and voice
+up to 25 MB (`AUTO_DOWNLOAD_LIMIT`), PDFs and other files held for a tap (conservative decision; before,
+voice and files downloaded even with the setting off, and images had no cap). A tap is never
+automatic: it downloads up to 100 MB. `Engine.autoDownloadFlow` makes the setting state, so rows react.
+Default stays ON (product decision); `autoDownloadsMedia()` uses `!= "0"`, changing it to `== "1"` makes it
+off by default. YouScreen has helper text under the switch.
+
+*Why not WorkManager:* the memes sign-in signs a challenge with the account seed, which exists only while
+the engine is unlocked in this process. A Worker could not download while locked and would add a
+dependency with no capability. A foreground service/notification for downloads is out of scope.
+
+*Hardening.* `MemesServer`: redirects are never followed on any connection (`instanceFollowRedirects =
+false`; a 3xx is a `RefusedException`), the connection's host is asserted after connect; `download`
+refuses a `Content-Length` over the limit before reading, streams into `<cacheDir>/<uuid>.part` with the
+limit enforced while streaming, and the part is deleted on every path (decryption still reads the file
+into memory: RNCryptor here is a whole-buffer API). Cache files are named `sha256("muid\nkey")` hex (as iOS
+`MediaStore.cached`), with a `.name` sidecar, written through a temp file and rename
+(`AttachmentCache`); a message reusing another's muid with another key no longer reads its plaintext.
+Old muid-named files are ignored (re-download) and left to the OS cache cleanup. The sidecar is sanitized
+on read (separators, control characters, leading dots, 200 chars).
+
+*Audit.* Already good, kept: host check (`token.host != MEMES_HOST`) before any request, `isSafeMuid`,
+`verifiedKind`, manifest `usesCleartextTraffic=false`, release `network_security_config` (no cleartext,
+system CAs only); the debug config allows cleartext only to localhost/127.0.0.1/10.0.2.2/[::1], no user CA
+anywhere; no other source set has a manifest. Disk names: the share path (`FileProvider`) only exposes
+the hashed cache names and `OrgDownloads` (UUID folder, `OrgPageRules.filename` last path component);
+camera and QR files use fixed names under `outgoing/` (ours, not sender-controlled). `PageMedia` is a pure
+permission rule, no fetch. Automatic fetches driven by received content: attachments (now gated and
+capped, memes host only); **found, not fixed:** `Avatar` loads any `https://` sender-chosen photo URL
+through Coil on any host, with no size cap and regardless of the setting (it discloses the reader's IP
+to the sender's chosen host; restricting it needs a product decision about which hosts official apps
+use for photos). Push attachment handling (`MessageNotifier`) only reads the message type/preview, no fetch.
+
+*Not verified:* nothing here was compiled or run. `MediaPrefetcher` has no unit test (needs
+coroutines-test, not a dependency); the pure parts are in `AttachmentRulesTest`.
 
 ## Done
 

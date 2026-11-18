@@ -123,7 +123,11 @@ import com.sphinx.peel.ui.payments.ChatMoneyDialog
 import com.sphinx.peel.ui.payments.PaymentMessage
 import com.sphinx.peel.ui.payments.RequestMessage
 import com.sphinx.peel.engine.CallPresence
+import com.sphinx.peel.engine.AttachmentState
 import com.sphinx.peel.engine.DownloadedAttachment
+import com.sphinx.peel.engine.MediaPrefetcher
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.TimeZones
 import com.sphinx.peel.engine.TribeInfo
@@ -1719,80 +1723,64 @@ private fun NewMessagesDivider() {
     }
 }
 
-private sealed class AttachmentState {
-    data object Loading : AttachmentState()
-    /// An image or video not fetched unasked (Auto download media off, or a
-    /// video over the size cap): a tile with a download button instead.
-    data object AwaitsDownload : AttachmentState()
-    data class Failed(val message: String) : AttachmentState()
-    data class Loaded(val attachment: DownloadedAttachment) : AttachmentState()
-}
-
-/// One attachment: downloads and decrypts it (`Engine.downloadAttachment`)
-/// the moment its row appears, then shows it — an image inline (Coil,
-/// from the decrypted file on disk), anything else as a named row that
-/// opens in whatever app the person has for it. No tap-to-load gate:
-/// every attachment in a chat downloads as soon as it's shown, same as
-/// a small chat's worth of images costs little either way; a busier
-/// one may want that gate later.
+/// One attachment, shown from the engine's `MediaPrefetcher` state (`Engine.media`): the
+/// download itself (and its automatic retries) is the engine's, so it survives leaving this
+/// screen, and a transient failure shows a tap-to-retry card rather than an error. An image
+/// inline (Coil, from the decrypted file on disk), anything else as a named row that opens in
+/// whatever app the person has for it. What downloads unasked is `AutoDownloadPolicy`'s call
+/// (the Auto download media setting, as state: a row reacts when it changes).
 @Composable
 private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPlayer) {
-    var state by remember(row.id, row.uuid) { mutableStateOf<AttachmentState>(AttachmentState.Loading) }
-    val scope = rememberCoroutineScope()
     val declaredKind = remember(row.body) {
         attachmentKind(com.sphinx.peel.engine.AttachmentFields.decode(row.body)?.mediaType)
     }
-    val isPicture = declaredKind == AttachmentKind.IMAGE || declaredKind == AttachmentKind.VIDEO
-    val autoDownload = engine.autoDownloadsMedia()
-    // PeelCore's `AppModel.autoDownload`: with the setting off, images and
-    // videos only come from the cache; voice and the rest keep downloading.
-    // Videos and recordings over the cap are held for a tap.
-    LaunchedEffect(row.id, row.uuid, autoDownload) {
-        if (state is AttachmentState.Loaded) return@LaunchedEffect
-        val cachedOnly = !autoDownload && isPicture
-        val capped = declaredKind == AttachmentKind.VIDEO || declaredKind == AttachmentKind.AUDIO
-        state = try {
-            AttachmentState.Loaded(
-                engine.downloadAttachment(row, cachedOnly = cachedOnly, upTo = if (!cachedOnly && capped) Engine.AUTO_DOWNLOAD_LIMIT else null),
-            )
-        } catch (_: com.sphinx.peel.engine.AttachmentNotCached) {
-            AttachmentState.AwaitsDownload
-        } catch (_: com.sphinx.peel.engine.AttachmentHeld) {
-            AttachmentState.AwaitsDownload
-        } catch (e: Exception) {
-            if (cachedOnly) AttachmentState.AwaitsDownload else AttachmentState.Failed(e.message ?: "Could not load this attachment.")
-        }
-    }
-    val startDownload = {
-        state = AttachmentState.Loading
-        scope.launch {
-            state = try {
-                AttachmentState.Loaded(engine.downloadAttachment(row))
-            } catch (e: Exception) {
-                AttachmentState.Failed(e.message ?: "Could not load this attachment.")
-            }
-        }
-        Unit
-    }
+    val key = remember(row.id, row.uuid, row.body) { MediaPrefetcher.keyFor(row) }
+    val state by remember(key) { engine.media.states.map { it[key] }.distinctUntilChanged() }
+        .collectAsState(initial = null)
+    val autoDownload by engine.autoDownloadFlow.collectAsState()
+    LaunchedEffect(key, autoDownload) { engine.media.request(row) }
+    val startDownload = { engine.media.tap(row) }
     when (val current = state) {
+        null -> AttachmentPlaceholder {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Theme.colors.secondaryText)
+        }
         is AttachmentState.AwaitsDownload -> DownloadMediaTile(declaredKind, startDownload)
+        is AttachmentState.Retryable -> DownloadMediaTile(declaredKind, startDownload, "Couldn't download yet \u2013 tap to retry")
+        is AttachmentState.Waiting -> AttachmentPlaceholder {
+            Text("Waiting to download", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+        }
         is AttachmentState.Loading -> AttachmentPlaceholder {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Theme.colors.secondaryText)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                current.fraction?.let { "Downloading ${(it * 100).toInt()}%" } ?: "Downloading\u2026",
+                style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText,
+            )
         }
         is AttachmentState.Failed -> AttachmentPlaceholder(isError = true) {
             Icon(Icons.Filled.ErrorOutline, contentDescription = null, tint = Theme.colors.destructive, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text(current.message, style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
+            Column {
+                Text(
+                    when (declaredKind) {
+                        AttachmentKind.VIDEO -> "Video not available"
+                        AttachmentKind.IMAGE -> "Image not available"
+                        else -> "Not available"
+                    },
+                    style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive,
+                )
+                Text(current.cause, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+            }
         }
         is AttachmentState.Loaded -> AttachmentContent(current.attachment, audioPlayer)
     }
 }
 
-/// The stand-in for an image or video that was not downloaded unasked:
-/// a rounded dark card, a circled download arrow and "Download image" / "Download video".
+/// The stand-in for an attachment that was not downloaded unasked (or whose download needs
+/// a retry): a rounded dark card, a circled download arrow and "Download image" / "Download video".
 @Composable
-private fun DownloadMediaTile(kind: AttachmentKind, onClick: () -> Unit) {
-    val label = when (kind) {
+private fun DownloadMediaTile(kind: AttachmentKind, onClick: () -> Unit, labelOverride: String? = null) {
+    val label = labelOverride ?: when (kind) {
         AttachmentKind.VIDEO -> "Download video"
         AttachmentKind.IMAGE -> "Download image"
         else -> "Download"

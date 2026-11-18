@@ -356,6 +356,12 @@ private fun YouMain(
                         engine.setAutoDownloadsMedia(it)
                     })
                 }
+                Text(
+                    "Off: images, videos, voice messages and files wait for a tap.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Theme.colors.secondaryText,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                )
                 AccountDivider()
                 AccountRow(label = "Diagnostics", onClick = onOpenDiagnostics, chevron = true)
                 AccountDivider()

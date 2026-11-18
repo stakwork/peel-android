@@ -26,6 +26,7 @@ class MemesServer(private val host: String) {
     /// `GET /ask`: an id and a challenge to sign.
     suspend fun challenge(): Pair<String, String> = withContext(Dispatchers.IO) {
         val connection = (URL("https://$host/ask").openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = false
             connectTimeout = 10_000
             readTimeout = 10_000
         }
@@ -46,6 +47,7 @@ class MemesServer(private val host: String) {
         val connection = (URL("https://$host/verify?$query").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "multipart/form-data")
+            instanceFollowRedirects = false
             connectTimeout = 10_000
             readTimeout = 10_000
         }
@@ -55,30 +57,38 @@ class MemesServer(private val host: String) {
         Token(token, Jwt.expiryMs(token))
     }
 
-    /// `GET /file/<media token>`: the encrypted bytes and the file name
-    /// the server gives, refusing anything over `limit` bytes (the
-    /// whole point of the limit: never buffer more than that, not just
-    /// reject after the fact).
-    suspend fun download(mediaToken: String, token: Token, limit: Int): Pair<ByteArray, String?> =
-        withContext(Dispatchers.IO) {
-            val connection = (URL("https://$host/file/$mediaToken").openConnection() as HttpURLConnection).apply {
-                setRequestProperty("Authorization", "Bearer ${token.value}")
-                connectTimeout = 10_000
-                readTimeout = 60_000
-            }
-            val status = connection.responseCode
-            if (status != 200) {
-                connection.disconnect()
-                throw RefusedException(status, "the download")
-            }
-            val fileName = connection.getHeaderField("Content-Disposition")?.let(::fileNameFromDisposition)
-            val data = try {
-                readUpTo(connection.inputStream, limit)
-            } finally {
-                connection.disconnect()
-            }
-            data to fileName
+    /// `GET /file/<media token>`: streams the encrypted bytes into `into` (a
+    /// temp file the caller owns and deletes) and returns the file name the
+    /// server gives. Refuses a `Content-Length` over `limit` before reading
+    /// anything, and enforces `limit` while streaming, so a server that lies
+    /// about its length still never writes more than that. Redirects are
+    /// never followed (the bearer token must not go to another host).
+    /// `onProgress(read, total)` gets the bytes read so far and the
+    /// announced length (-1 when unknown).
+    suspend fun download(
+        mediaToken: String, token: Token, limit: Int, into: java.io.File, onProgress: ((Long, Long) -> Unit)? = null,
+    ): String? = withContext(Dispatchers.IO) {
+        val connection = (URL("https://$host/file/$mediaToken").openConnection() as HttpURLConnection).apply {
+            setRequestProperty("Authorization", "Bearer ${token.value}")
+            instanceFollowRedirects = false
+            connectTimeout = 10_000
+            readTimeout = 60_000
         }
+        try {
+            val status = connection.responseCode
+            if (status != 200) throw RefusedException(status, "the download")
+            requireSameHost(connection)
+            val total = connection.contentLengthLong
+            checkContentLength(total, limit)
+            val fileName = connection.getHeaderField("Content-Disposition")?.let(::fileNameFromDisposition)
+            connection.inputStream.use { input ->
+                java.io.FileOutputStream(into).use { out -> copyUpTo(input, out, limit, total, onProgress) }
+            }
+            fileName
+        } finally {
+            connection.disconnect()
+        }
+    }
 
     /// `POST /file`: the encrypted bytes, as a multipart body (one text
     /// field, then the file) — PeelCore's `upload`/`multipart`. Returns
@@ -106,6 +116,7 @@ class MemesServer(private val host: String) {
                 doOutput = true
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                 setRequestProperty("Authorization", "Bearer ${token.value}")
+                instanceFollowRedirects = false
                 connectTimeout = 10_000
                 readTimeout = 60_000
                 setFixedLengthStreamingMode(bodyBytes.size)
@@ -131,10 +142,16 @@ class MemesServer(private val host: String) {
     suspend fun preferences(token: Token): String? = withContext(Dispatchers.IO) {
         val connection = (URL("https://$host/preferences").openConnection() as HttpURLConnection).apply {
             setRequestProperty("Authorization", "Bearer ${token.value}")
+            instanceFollowRedirects = false
             connectTimeout = 10_000
             readTimeout = 10_000
         }
         val status = connection.responseCode
+        if (isRedirect(status)) {
+            connection.disconnect()
+            throw RefusedException(status, "the preferences file")
+        }
+        requireSameHost(connection)
         val body = try {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             stream?.bufferedReader()?.use { it.readText() } ?: ""
@@ -175,6 +192,7 @@ class MemesServer(private val host: String) {
             doOutput = true
             setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
             setRequestProperty("Authorization", "Bearer ${token.value}")
+            instanceFollowRedirects = false
             connectTimeout = 10_000
             readTimeout = 30_000
             setFixedLengthStreamingMode(bodyBytes.size)
@@ -199,26 +217,44 @@ class MemesServer(private val host: String) {
         val status = connection.responseCode
         try {
             if (status != 200) throw RefusedException(status, what)
+            requireSameHost(connection)
             return connection.inputStream.bufferedReader().use { it.readText() }
         } finally {
             connection.disconnect()
         }
     }
 
-    /// Reads at most `limit` bytes, throwing the moment a `limit + 1`th
-    /// one shows up — never buffers more than that trying to find out.
-    private fun readUpTo(stream: java.io.InputStream, limit: Int): ByteArray {
-        val buffer = java.io.ByteArrayOutputStream(minOf(limit, 1 shl 16))
-        val chunk = ByteArray(1 shl 16)
-        var total = 0
-        while (true) {
-            val read = stream.read(chunk)
-            if (read < 0) break
-            total += read
-            if (total > limit) throw TooLargeException(total)
-            buffer.write(chunk, 0, read)
+    private fun requireSameHost(connection: HttpURLConnection) {
+        if (!connection.url.host.equals(host, ignoreCase = true)) throw RefusedException(0, "a reply from another host")
+    }
+
+    companion object {
+        /// A 3xx: never followed, always refused.
+        fun isRedirect(status: Int): Boolean = status in 300..399
+
+        /// Refuses an announced length over `limit` before any of the body is read
+        /// (`-1`, unknown, passes: the streaming limit still applies).
+        fun checkContentLength(length: Long, limit: Int) {
+            if (length > limit) throw TooLargeException(length.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
         }
-        return buffer.toByteArray()
+
+        /// Copies at most `limit` bytes, throwing the moment a `limit + 1`th one
+        /// shows up — never writes more than that trying to find out.
+        fun copyUpTo(
+            stream: java.io.InputStream, out: java.io.OutputStream, limit: Int, total: Long = -1,
+            onProgress: ((Long, Long) -> Unit)? = null,
+        ) {
+            val chunk = ByteArray(1 shl 16)
+            var read = 0L
+            while (true) {
+                val n = stream.read(chunk)
+                if (n < 0) break
+                read += n
+                if (read > limit) throw TooLargeException(read.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+                out.write(chunk, 0, n)
+                onProgress?.invoke(read, total)
+            }
+        }
     }
 
     /// The `filename=` of a Content-Disposition header, made safe to

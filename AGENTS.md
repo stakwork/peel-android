@@ -43,6 +43,8 @@ sections for code that isn't written yet.
     `Invoice.swift`, `Sats.swift`); see `docs/money-parity.md`.
   - `ui/payments/` — the Payments tab, Receive/Send, the QR scanner (CameraX +
     ZXing) and the in-chat payment and request rows.
+  - `engine/MediaPrefetcher.kt`, `AttachmentRules.kt` — engine-owned attachment downloads (bounded, deduped, retried; `Engine.media`) and the
+    pure rules behind them (`AutoDownloadPolicy`, `AttachmentFailure`, `RetryBackoff`, `AttachmentCache` naming); `docs/phases/08-attachments.md`.
   - `engine/MessageMarkup.kt`, `Mentions.kt` — message markdown parser (pure, JVM-tested) and
     mention helpers; `ui/components/MessageText.kt` draws it (`docs/phases/18-markdown.md`).
   - `engine/ChatActions.kt` (`MuteLevel`, `ReadToggle`) and `engine/SendRetry.kt` (pure
