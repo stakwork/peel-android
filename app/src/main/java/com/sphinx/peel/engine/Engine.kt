@@ -164,6 +164,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// launched it — the restore screen's "Open Peel" leaves it running,
     /// same as PeelUI's `AppModel.attach` does with its own account tasks.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /// Downloads attachments for the whole engine (bounded, deduped, retried), so a download
+    /// outlives the chat screen and a live message does not wait for its row to be shown.
+    /// `ConversationScreen`'s `AttachmentView` collects its `states`.
+    val media: MediaPrefetcher = MediaPrefetcher(
+        scope,
+        fetch = { row, cachedOnly, upTo, progress -> downloadAttachment(row, cachedOnly, upTo, progress) },
+        autoOn = { autoDownloadsMedia() },
+    )
     private var started = false
     /// A restore is paging right now (set while [restoreBody] runs, cleared in its `finally`).
     @Volatile private var restoreRunning = false
@@ -655,6 +664,14 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (rows.isNotEmpty()) {
             // Messages and the contacts they reveal in one transaction.
             storage.insertMessages(rows, rows.mapNotNull { contactHint(it) }, marksNewContacts = !restoreProgressFlow.value.restoring)
+            // A received attachment starts downloading now (through the same auto-download gate a
+            // showing row uses), not when its row is first composed. Never while a restore replays
+            // history, and never for old messages a catch-up or history page brings in.
+            if (!restoreProgressFlow.value.restoring) {
+                val recent = System.currentTimeMillis() - PREFETCH_MAX_AGE_MS
+                rows.filter { !it.fromMe && it.type == ATTACHMENT_MESSAGE_TYPE && (it.timestamp ?: Long.MAX_VALUE) >= recent }
+                    .forEach { runCatching { media.request(it) } }
+            }
             // A key exchange (someone adding this account, or its answer) makes a contact the
             // core holds: ready, so the chat list shows them. Not while restoring, which
             // marks everyone once from its contacts run.
@@ -1229,6 +1246,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// "Auto download media" (PeelCore's `autoDownloadsMedia`): on unless turned off.
     fun autoDownloadsMedia(): Boolean = storage.value(Setting.AUTO_DOWNLOAD_MEDIA) != "0"
 
+    /// The setting as state, so a row on screen reacts when it changes here or on another device.
+    val autoDownloadFlow: StateFlow<Boolean> get() = autoDownloadMutable.asStateFlow()
+    private val autoDownloadMutable = MutableStateFlow(storage.value(Setting.AUTO_DOWNLOAD_MEDIA) != "0")
+
     fun setAutoDownloadsMedia(on: Boolean) = setPreference(PreferencesMerge.AUTO_DOWNLOAD_MEDIA, if (on) 1 else 0)
 
     /// The chat list's Recent view as the account's devices have it (`peel.chats_recent_view`); null until ever chosen or synced.
@@ -1242,6 +1263,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val oldDate = storage.value(slot.date)?.toLongOrNull() ?: 0L
         val date = PreferencesMerge.nextDate(System.currentTimeMillis() / 1000, oldDate)
         storage.apply(Storage.Commit(settings = mapOf(slot.value to slot.toStored(value), slot.date to date.toString())))
+        autoDownloadMutable.value = autoDownloadsMedia()
         syncPreferencesInBackground()
     }
 
@@ -1299,6 +1321,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                         storage.apply(
                             Storage.Commit(settings = mapOf(setting to value, dateSetting(spec) to outcome.local.date.toString())),
                         )
+                        autoDownloadMutable.value = autoDownloadsMedia()
                     }
                 }
                 PreferencesMerge.Outcome.Nothing -> {}
@@ -1353,7 +1376,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// holds a larger download back with `AttachmentHeld` (PeelCore's
     /// `autoDownloadLimit` for videos and recordings); a tap on the
     /// held tile downloads it with neither.
-    suspend fun downloadAttachment(row: MessageRow, cachedOnly: Boolean = false, upTo: Int? = null): DownloadedAttachment {
+    suspend fun downloadAttachment(
+        row: MessageRow, cachedOnly: Boolean = false, upTo: Int? = null, onProgress: ((Long, Long) -> Unit)? = null,
+    ): DownloadedAttachment {
         val fields = AttachmentFields.decode(row.body) ?: throw IllegalStateException("Not an attachment.")
         val mediaToken = fields.mediaToken ?: throw IllegalStateException("This attachment has nowhere to come from yet.")
         val token = MediaToken.parse(mediaToken)?.takeIf { MediaToken.isSafeMuid(it.muid) }
@@ -1366,27 +1391,34 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         if (token.host != MEMES_HOST) throw IllegalStateException("This attachment is on an untrusted host.")
         val declared = attachmentKind(fields.mediaType)
 
+        // Files are named by a hash of muid and key (`AttachmentCache`), so a message reusing
+        // someone else's muid with another key never reads that plaintext back.
         val cacheDir = storage.attachmentCacheDir()
-        val cacheFile = java.io.File(cacheDir, token.muid)
-        val nameFile = java.io.File(cacheDir, "${token.muid}.name")
+        val cacheFile = AttachmentCache.file(cacheDir, token.muid, key)
+        val nameFile = AttachmentCache.nameFile(cacheDir, token.muid, key)
         if (cacheFile.exists()) {
             val plain = cacheFile.readBytes()
-            val fileName = nameFile.takeIf { it.exists() }?.readText()?.takeIf { it.isNotEmpty() }
+            val fileName = AttachmentCache.sanitizedName(nameFile.takeIf { it.exists() }?.readText())
             return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), fileName, plain.size)
         }
 
         if (cachedOnly) throw AttachmentNotCached()
         val memes = MemesServer(MEMES_HOST)
         val limit = (upTo ?: ATTACHMENT_LIMIT) + 128 // Encryption adds a header, padding and a MAC.
-        val (sealed, fileName) = try {
-            withMemes(memes) { auth -> memes.download(mediaToken, auth, limit) }
-        } catch (e: MemesServer.TooLargeException) {
-            if (upTo != null) throw AttachmentHeld() else throw e
+        // The encrypted bytes stream to a temp file, never the heap, and the file never outlives this call.
+        val part = java.io.File(cacheDir, "${java.util.UUID.randomUUID()}.part")
+        try {
+            val fileName = try {
+                withMemes(memes) { auth -> memes.download(mediaToken, auth, limit, part, onProgress) }
+            } catch (e: MemesServer.TooLargeException) {
+                if (upTo != null) throw AttachmentHeld() else throw e
+            }
+            val plain = MediaCrypto.decrypt(part.readBytes(), key)
+            AttachmentCache.store(cacheDir, token.muid, key, plain, fileName)
+            return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), AttachmentCache.sanitizedName(fileName), plain.size)
+        } finally {
+            part.delete()
         }
-        val plain = MediaCrypto.decrypt(sealed, key)
-        cacheFile.writeBytes(plain)
-        if (fileName != null) nameFile.writeText(fileName)
-        return DownloadedAttachment(cacheFile, verifiedKind(plain, declared), fileName, plain.size)
     }
 
     /// Sends a file as an attachment: encrypts it with a fresh key,
@@ -1459,8 +1491,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // immediately too, the same file `downloadAttachment` writes
         // once a download names one.
         val cacheDir = storage.attachmentCacheDir()
-        java.io.File(cacheDir, muid).writeBytes(bytes)
-        java.io.File(cacheDir, "$muid.name").writeText(fileName)
+        AttachmentCache.store(cacheDir, muid, key, bytes, fileName)
         return row
     }
 
@@ -2127,6 +2158,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// drop is [onConnectionDropped]'s own job to retry, not a reason to
     /// kill the coroutine that called this.
     private suspend fun afterConnect() {
+        media.retryPending()
         cameOnlineHere = false
         caughtUp = false
         catchUpIndex = null
@@ -2191,6 +2223,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     fun networkChanged() {
         if (connectionStateFlow.value == ConnectionState.Connecting) return
         Diagnostics.recordForcedReconnect(DiagnosticEvent.ReconnectReason.pathChange)
+        media.retryPending()
         resume()
     }
 
@@ -2589,10 +2622,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     private fun removeAttachmentFiles(rows: List<com.sphinx.peel.storage.MessageRow>) {
         val dir = storage.attachmentCacheDir()
         for (row in rows) {
-            val muid = AttachmentFields.decode(row.body)?.mediaToken?.let { MediaToken.parse(it) }
+            val fields = AttachmentFields.decode(row.body)
+            val muid = fields?.mediaToken?.let { MediaToken.parse(it) }
                 ?.takeIf { MediaToken.isSafeMuid(it.muid) }?.muid ?: continue
-            runCatching { java.io.File(dir, muid).delete() }
-            runCatching { java.io.File(dir, "$muid.name").delete() }
+            val key = fields?.ownKey ?: continue
+            runCatching { AttachmentCache.remove(dir, muid, key) }
         }
     }
 
@@ -2930,9 +2964,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         /// own `attachmentLimit`.
         private const val ATTACHMENT_LIMIT = 100_000_000
 
+        /// A received attachment older than this is not prefetched when it arrives (history, not news).
+        private const val PREFETCH_MAX_AGE_MS = 24L * 3600 * 1000
+
         /// The largest video or recording downloaded unasked — PeelCore's
         /// `Engine.autoDownloadLimit`; bigger ones wait for a tap.
-        const val AUTO_DOWNLOAD_LIMIT = 25_000_000
+        const val AUTO_DOWNLOAD_LIMIT = AutoDownloadPolicy.VIDEO_AUDIO_LIMIT
+
+        /// The largest image downloaded unasked; bigger ones wait for a tap.
+        const val AUTO_DOWNLOAD_IMAGE_LIMIT = AutoDownloadPolicy.IMAGE_LIMIT
 
         /// The official apps always send a tribe message with at least
         /// this many msat (3 sats), whatever the tribe's own price —
