@@ -155,3 +155,13 @@ never move a row. No index exists here, so no migration. The preview reads
 sats" is there for a fromMe boost but the query never selects one). Tests:
 `ConversationPreviewTest`, `StorageConversationOrderTest`. Not run here (no
 build environment).
+
+## Note — any boost is the row's last message/preview (Tom's decision)
+
+Superseding the note above: every undeleted boost (type 29, either sender, any
+target) is a chat row's last message (`l`, sort) and preview (`p`); a deleted
+boost previews as "Message deleted". Unread still counts only boosts on our
+own messages. `ConversationPreview.line` takes `boostOnMine` (a correlated
+EXISTS in the query → `ConversationRow.previewBoostOnMine`) and reads "You
+boosted a message: N sats", "<alias> boosted your message: N sats", "<alias>
+boosted a message: N sats" ("Someone" without an alias).

@@ -25,9 +25,11 @@ object ConversationPreview {
         isTribe: Boolean,
         senderJson: String?,
         msat: Long? = null,
+        boostOnMine: Boolean = false,
     ): String? {
         if (type == null) return null
-        if (type == BOOST_MESSAGE_TYPE && !deleted) return boostLine(fromMe == true, msat, senderJson)
+        if (type == BOOST_MESSAGE_TYPE && deleted) return "Message deleted"
+        if (type == BOOST_MESSAGE_TYPE) return boostLine(fromMe == true, boostOnMine, msat, senderJson)
         val json = body?.let { runCatching { JSONObject(it) }.getOrNull() }
         val content = json?.optString("content")?.takeIf { it.isNotEmpty() }
         val mediaType = json?.optString("mediaType")?.takeIf { it.isNotEmpty() }
@@ -42,13 +44,13 @@ object ConversationPreview {
         return text
     }
 
-    /// Someone else's boost reaches a row only when it is on our message
-    /// (`Storage.conversations()`), so it reads "boosted your message".
-    private fun boostLine(fromMe: Boolean, msat: Long?, senderJson: String?): String {
+    /// Any boost reaches a row: "You boosted a message", "<alias> boosted
+    /// your message" or "<alias> boosted a message" (alias "Someone").
+    private fun boostLine(fromMe: Boolean, onMine: Boolean, msat: Long?, senderJson: String?): String {
         val amount = if (msat != null && msat > 0) ": ${Sats.format(msat)}" else ""
         if (fromMe) return "You boosted a message$amount"
         val name = senderJson?.let { runCatching { JSONObject(it).optString("alias") }.getOrNull() }?.trim()
-        return "${name?.takeIf { it.isNotEmpty() } ?: "Someone"} boosted your message$amount"
+        return "${name?.takeIf { it.isNotEmpty() } ?: "Someone"} boosted ${if (onMine) "your" else "a"} message$amount"
     }
 
     private fun text(type: Int, content: String?, mediaType: String?, deleted: Boolean): String {

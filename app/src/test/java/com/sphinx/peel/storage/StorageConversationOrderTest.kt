@@ -30,13 +30,13 @@ class StorageConversationOrderTest {
     }
 
     @Test
-    fun `a later boost or join does not reorder`() {
+    fun `a later join does not reorder, a boost does`() {
         val s = newStorage()
         s.chat("a", "A"); s.chat("b", "B")
         s.insertMessages(listOf(msg("a", 0, 100), msg("b", 0, 200), msg("a", 29, 300), msg("a", 1, 400)))
         val rows = s.conversations()
-        assertEquals(listOf("b", "a"), rows.map { it.chat })
-        assertEquals(100L, rows[1].lastTimestamp)
+        assertEquals(listOf("a", "b"), rows.map { it.chat })
+        assertEquals(300L, rows[0].lastTimestamp)
     }
 
     private fun Storage.mine(chat: String, uuid: String, timestamp: Long) {
@@ -71,17 +71,46 @@ class StorageConversationOrderTest {
     }
 
     @Test
-    fun `a boost on someone else's message or my own boost does not`() {
+    fun `a boost on someone else's message or my own boost is the preview but not unread`() {
         val s = newStorage()
         s.chat("a", "A")
         s.mine("a", "m1", 100)
         s.insertMessages(listOf(msg("a", 0, 150).copy(uuid = "theirs")))
         s.boost("a", "theirs", 300)
+        val other = s.conversations().single()
+        assertEquals(300L, other.lastTimestamp)
+        assertEquals(1L, other.unread) // only their own text; the boost adds none
+        assertEquals("Paul boosted a message: 5 sats", other.previewLine)
         s.boost("a", "m1", 400, fromMe = true)
+        val mine = s.conversations().single()
+        assertEquals(400L, mine.lastTimestamp)
+        assertEquals(1L, mine.unread)
+        assertEquals("You boosted a message: 5 sats", mine.previewLine)
+    }
+
+    @Test
+    fun `any boost moves the row`() {
+        val s = newStorage()
+        s.chat("a", "A"); s.chat("b", "B")
+        s.insertMessages(listOf(msg("a", 0, 100), msg("b", 0, 200)))
+        s.boost("a", "nothing", 300)
+        assertEquals(listOf("a", "b"), s.conversations().map { it.chat })
+    }
+
+    @Test
+    fun `a deleted boost is not the last message`() {
+        val s = newStorage()
+        s.chat("a", "A")
+        s.mine("a", "m1", 100)
+        s.boost("a", "m1", 300)
+        val id = s.conversations().single()
+        assertEquals(300L, id.lastTimestamp)
+        s.insertMessages(listOf(msg("a", 0, 50)))
+        val db = s.javaClass.getDeclaredField("helper").also { it.isAccessible = true }.get(s) as android.database.sqlite.SQLiteOpenHelper
+        db.writableDatabase.execSQL("UPDATE message SET deleted = 1 WHERE type = 29")
         val row = s.conversations().single()
-        assertEquals(150L, row.lastTimestamp)
-        assertEquals(0L, row.unread)
-        assertEquals("hi", row.previewLine)
+        assertEquals(100L, row.lastTimestamp)
+        assertEquals("Message deleted", row.previewLine)
     }
 
     @Test
@@ -89,7 +118,7 @@ class StorageConversationOrderTest {
         val s = newStorage()
         s.chat("z", "Zed"); s.chat("m", "Mia"); s.chat("a", "Ann")
         s.insertMessages(listOf(msg("z", 0, 100), msg("m", 29, 500)))
-        assertEquals(listOf("z", "a", "m"), s.conversations().map { it.chat })
+        assertEquals(listOf("m", "z", "a"), s.conversations().map { it.chat })
     }
 
     @Test

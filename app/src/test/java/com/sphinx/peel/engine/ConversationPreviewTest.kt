@@ -61,12 +61,15 @@ class ConversationPreviewTest {
     @Test
     fun `a boost reads as a sentence without a prefix`() {
         val sender = JSONObject().put("alias", "Paul").toString()
-        val boost = ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, false, true, sender, 5000)
-        assertEquals("Paul boosted your message: 5 sats", boost)
-        assertEquals("Someone boosted your message: 1 sat", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, false, false, null, 1000))
-        assertEquals("You boosted a message: 5 sats", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, true, true, sender, 5000))
-        assertEquals("Paul boosted your message", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", false, false, true, sender, null))
-        assertEquals("Message deleted", ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", true, false, true, sender, 5000))
+        fun boost(fromMe: Boolean, onMine: Boolean, from: String? = sender, msat: Long? = 5000, deleted: Boolean = false) =
+            ConversationPreview.line(BOOST_MESSAGE_TYPE, "{}", deleted, fromMe, true, from, msat, onMine)
+        assertEquals("You boosted a message: 5 sats", boost(fromMe = true, onMine = false))
+        assertEquals("Paul boosted your message: 5 sats", boost(fromMe = false, onMine = true))
+        assertEquals("Paul boosted a message: 5 sats", boost(fromMe = false, onMine = false))
+        assertEquals("Someone boosted a message: 1 sat", boost(false, false, null, 1000))
+        assertEquals("Someone boosted your message: 1 sat", boost(false, true, null, 1000))
+        assertEquals("Paul boosted your message", boost(false, true, msat = null))
+        assertEquals("Message deleted", boost(false, true, deleted = true))
     }
 
     @Test
