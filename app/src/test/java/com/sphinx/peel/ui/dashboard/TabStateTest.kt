@@ -32,7 +32,7 @@ class TabStateTest {
     /// unlock, the router hands it to the tab, and the tab shows that page, in front: not a page over Chats.
     @Test fun `after an invite signup Peel lands on the Tasks tab with that page`() {
         val kept = mutableListOf<OpenedApp>()
-        val router = PublicPageRouter(opened = { kept += OpenedApp(it, 1) })
+        val router = PublicPageRouter(opened = { link, _ -> kept += OpenedApp(link, 1) })
         router.open(acme, ready = false)
         val tabs = TabState(hasTasks = TasksTab.shows(kept))
         assertEquals(MainTab.CHATS, tabs.tab)

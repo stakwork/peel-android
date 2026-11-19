@@ -53,7 +53,7 @@ class PublicPageRouterTest {
     /// docs/phases/41-worker-onboarding.md); a link still waiting for the unlock is not, until it opens, nor is an org page.
     @Test fun eachPageOpenedIsTold() {
         val seen = mutableListOf<PublicAppLink>()
-        val router = PublicPageRouter(opened = { seen += it })
+        val router = PublicPageRouter(opened = { link, _ -> seen += link })
         router.open(a, ready = false)
         router.openOrg(board)
         assertEquals(emptyList<PublicAppLink>(), seen)
@@ -137,7 +137,7 @@ class PublicPageRouterTest {
 
     @Test fun aTasksLinkWaitingForSignupOpensInTheTab() {
         val seen = mutableListOf<PublicAppLink>()
-        val router = PublicPageRouter(opened = { seen += it })
+        val router = PublicPageRouter(opened = { link, _ -> seen += link })
         router.open(tasks, ready = false)
         assertNull(router.tasksPage)
         router.openWaitingLink()
@@ -159,6 +159,32 @@ class PublicPageRouterTest {
         // Another public app still opens over everything.
         router.open(b, ready = true)
         assertEquals(b, router.page)
+    }
+
+    /// Whether a worker's invite link named the page (docs/phases/49-invite-signs-in.md) goes with that link alone: kept with it while it
+    /// waits (through a lock), told once as it opens, never carried to another link, dropped on a reset. A plain open is never invited.
+    @Test fun theInviteMarkStaysWithItsLink() {
+        val seen = mutableListOf<Pair<PublicAppLink, Boolean>>()
+        val router = PublicPageRouter(opened = { link, invited -> seen += link to invited })
+        router.open(tasks, ready = false, invited = true)
+        router.locked()
+        router.openWaitingLink()
+        router.open(a, ready = true)
+        assertEquals(listOf(tasks to true, a to false), seen)
+
+        seen.clear()
+        router.open(tasks, ready = false, invited = true)
+        router.open(b, ready = false)
+        router.openWaitingLink()
+        router.openWaitingLink()
+        assertEquals(listOf(b to false), seen)
+
+        seen.clear()
+        router.open(tasks, ready = false, invited = true)
+        router.reset()
+        router.open(tasks, ready = false)
+        router.openWaitingLink()
+        assertEquals(listOf(tasks to false), seen)
     }
 
     @Test fun aLockOrResetDropsATasksPageNotYetTaken() {

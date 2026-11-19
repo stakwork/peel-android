@@ -197,27 +197,115 @@ class WalletHostTest {
         assertEquals(1, person.asks.size)
 
         connections.rows.remove(scope)
-        person.answer = { SignInKey.domain }
-        val picked = host().handle(signIn(), caller()).getJSONObject("result")
+        val picked = host().handle(signIn(challengeOf(claims(key = "domain"))), caller()).getJSONObject("result")
         assertEquals("pub-domain", picked.getString("key"))
         assertFalse(picked.has("address"))
     }
 
     @Test fun firstSignInSavesThenLaterOnesAreSilent() = runBlocking {
-        person.answer = { SignInKey.domain }
-        val first = host().handle(signIn(), caller()).getJSONObject("result")
+        val domain = challengeOf(claims(key = "domain"))
+        val first = host().handle(signIn(domain), caller()).getJSONObject("result")
         assertEquals("sig-domain", first.getString("sig"))
-        assertEquals(listOf(SignInKey.root, SignInKey.domain), person.asks.single().keys)
         val saved = connections.rows.getValue(scope)
         assertEquals(SignInKey.domain, saved.signIn)
         assertTrue(saved.methods.isEmpty())
         assertEquals("shop.example.com", saved.place)
         assertEquals("Moon Game", saved.title)
         // Later, with no tap and no sheet.
-        val later = host().handle(signIn(), caller(acted = false)).getJSONObject("result")
+        val later = host().handle(signIn(domain), caller(acted = false)).getJSONObject("result")
         assertEquals("pub-domain", later.getString("key"))
         assertEquals(1, person.asks.size)
         assertEquals(listOf("shop.example.com" to SignInKey.domain), person.notices)
+    }
+
+    /// The server asks for the account's key (strut's default): that alone is offered, even where Peel can sign per domain, so nobody new
+    /// to Peel has to choose, and the account's address goes with it (a new identity is never paid).
+    @Test fun aRootChallengeOffersTheAccountKeyAlone() = runBlocking {
+        val r = host().handle(signIn(), caller()).getJSONObject("result")
+        assertEquals(listOf(SignInKey.root), person.asks.single().keys)
+        assertEquals(SignInKey.root, signer.signed.single().second)
+        assertEquals("pub-root", r.getString("key"))
+        assertEquals(FakeSigner.ADDRESS, r.getString("address"))
+        // A domain key the sheet never offered is no answer.
+        connections.rows.remove(scope)
+        person.answer = { SignInKey.domain }
+        assertEquals("USER_REJECTED", host().handle(signIn(), caller()).code())
+        assertEquals(1, signer.signed.size)
+    }
+
+    // A worker's invite link's `a=`: the employer's Tasks page (docs/phases/49-invite-signs-in.md).
+    private val tasks = InviteLink.appOf("sphinx.chat://?action=i&d=abc&c=def&a=https%3A%2F%2Fshop.example.com%2F%3Fapp%3Dstrut%252Fworker%26solo%3D1%26public%3D1")!!
+
+    @Test fun theInviteGrantIsTheSheetsKeyAndPlace() {
+        assertTrue(WalletHost.grantInvitePage(tasks, connections, 7))
+        val grant = connections.rows.getValue(caller().scope.key)
+        assertEquals(scope, grant.key)
+        assertEquals(caller().place, grant.place)
+        assertEquals("/strut/worker", grant.app)
+        assertEquals(SignInKey.root, grant.signIn)
+        assertTrue(grant.methods.isEmpty())
+        assertEquals(7, grant.createdAt)
+    }
+
+    /// The invite's page signs in at once: no sheet, no tap, only the toast; the first sign-in names the connection as the sheet would have.
+    @Test fun theInvitesPageSignsInWithNoSheetAndNoTap() = runBlocking {
+        WalletHost.grantInvitePage(tasks, connections, 7)
+        assertEquals("shop.example.com", connections.rows.getValue(scope).title)
+        val r = host().handle(signIn(), caller(acted = false)).getJSONObject("result")
+        assertEquals("pub-root", r.getString("key"))
+        assertEquals(FakeSigner.ADDRESS, r.getString("address"))
+        assertTrue(person.asks.isEmpty())
+        assertEquals(listOf("shop.example.com" to SignInKey.root), person.notices)
+        val named = connections.rows.getValue(scope)
+        assertEquals("Moon Game", named.title)
+        assertEquals("/moon-game", named.app)
+        assertEquals(SignInKey.root, named.signIn)
+        assertEquals(7, named.createdAt)
+        // Named once: another app of the origin signing in later leaves it be.
+        host().handle(signIn().put("app", JSONObject().put("name", "sun-game").put("version", "v1").put("title", "Sun Game")), caller(acted = false))
+        assertEquals("Moon Game", connections.rows.getValue(scope).title)
+    }
+
+    /// A connection already at the origin keeps what it holds: its wallet grant gains the sign-in, and a sign-in the person chose stays theirs.
+    @Test fun theInviteGrantKeepsWhatIsHeld() {
+        val wallet = WalletConnection(scope, "/strut/worker", "Tasks", "shop.example.com", methods = listOf(WalletMethod.PAY_INVOICE), maxAmountMsat = 5000, createdAt = 3)
+        connections.save(wallet)
+        assertTrue(WalletHost.grantInvitePage(tasks, connections, 7))
+        assertEquals(wallet.copy(signIn = SignInKey.root), connections.rows.getValue(scope))
+
+        val chosen = WalletConnection(scope, "/moon-game", "Moon Game", "shop.example.com", signIn = SignInKey.domain, createdAt = 3)
+        connections.save(chosen)
+        assertFalse(WalletHost.grantInvitePage(tasks, connections, 7))
+        assertEquals(chosen, connections.rows.getValue(scope))
+
+        // An expired one is none: the grant replaces it.
+        connections.save(wallet.copy(expiresAt = 5))
+        assertTrue(WalletHost.grantInvitePage(tasks, connections, 7))
+        assertEquals(listOf<WalletMethod>(), connections.rows.getValue(scope).methods)
+        assertEquals(SignInKey.root, connections.rows.getValue(scope).signIn)
+    }
+
+    /// A page no invite named (a `peel://open` link to the same address, the Apps list) is granted nothing: its page asks after a tap.
+    @Test fun aPeelOpenLinkGetsNoGrant() = runBlocking {
+        val router = com.sphinx.peel.ui.page.PublicPageRouter(opened = { link, invited ->
+            if (invited) WalletHost.grantInvitePage(link, connections, 7)
+        })
+        router.open(PublicAppLink.parse("peel://open?url=https%3A%2F%2Fshop.example.com%2F%3Fapp%3Dstrut%252Fworker")!!, ready = true)
+        assertTrue(connections.rows.isEmpty())
+        assertEquals("RESTRICTED", host().handle(signIn(), caller(acted = false)).code())
+        assertTrue(signer.signed.isEmpty())
+        router.open(tasks, ready = true, invited = true)
+        assertEquals(SignInKey.root, connections.rows.getValue(scope).signIn)
+    }
+
+    /// The grant is for its origin alone: a challenge for another host is still refused, and a page on another origin still asks.
+    @Test fun theInviteGrantSignsNothingElse() = runBlocking {
+        WalletHost.grantInvitePage(tasks, connections, 7)
+        val evil = host().handle(signIn(EVIL_CHALLENGE, "https://evil.example.net"), caller(acted = false))
+        assertEquals("BAD_REQUEST", evil.code())
+        val elsewhere = WalletCaller(WalletScope.Origin("https://evil.example.net"), "evil.example.net", false, person)
+        assertEquals("RESTRICTED", host().handle(signIn(EVIL_CHALLENGE, "https://evil.example.net"), elsewhere).code())
+        assertTrue(signer.signed.isEmpty() && person.notices.isEmpty())
     }
 
     @Test fun aHeldRootKeyDoesNotSignADomainChallenge() = runBlocking {

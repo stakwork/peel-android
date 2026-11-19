@@ -18,12 +18,14 @@ import com.sphinx.peel.engine.TasksTab
 ///    is a linked box's page and the box is still linked (iOS `closeGoneOrgPage`, docs/phases/45-box-link.md).
 ///
 /// [opened] is told of each public page as it comes on screen, whichever way it came (a link, a worker's invite link, the Apps list):
-/// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/41-worker-onboarding.md; Android only).
+/// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/41-worker-onboarding.md; Android only). It is told
+/// too whether a worker's invite link named it (`invited`): that page signs the account in with no sheet (`WalletHost.grantInvitePage`,
+/// docs/phases/49-invite-signs-in.md). The mark is held only in memory, with the waiting link, and never logged.
 ///
 /// Android only: an employer's Tasks page (`TasksTab.isTasks`, strut's `strut/worker`) does not open over everything. It goes to
 /// [tasksPage] for `MainTabs`, which shows it in the Tasks tab with the tab bar kept (docs/phases/48-tasks-tab.md). It still replaces
 /// both pages over everything, as any `peel://` link does, so the tab is not left under one.
-class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
+class PublicPageRouter(private val opened: (link: PublicAppLink, invited: Boolean) -> Unit = { _, _ -> }) {
     /// The stranger's page on screen, if any (iOS `publicPage`).
     var page by mutableStateOf<PublicAppLink?>(null)
         private set
@@ -40,19 +42,32 @@ class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
     var waitingLink by mutableStateOf<PublicAppLink?>(null)
         private set
 
-    /// iOS `open(peelLink:)`; [ready]: the account is unlocked (`model.phase == .ready`).
-    fun open(link: PublicAppLink, ready: Boolean) {
-        if (ready) show(link) else waitingLink = link
+    /// Whether a worker's invite link named [waitingLink] (not a `peel://open` link).
+    private var waitingInvited = false
+
+    /// iOS `open(peelLink:)`; [ready]: the account is unlocked (`model.phase == .ready`). [invited]: a worker's invite link named it
+    /// (its `a=`), and nothing else.
+    fun open(link: PublicAppLink, ready: Boolean, invited: Boolean = false) {
+        if (ready) {
+            show(link, invited)
+        } else {
+            waitingLink = link
+            waitingInvited = invited
+        }
     }
 
     /// iOS `openWaitingLink()`: called when Peel unlocked.
     fun openWaitingLink() {
         val link = waitingLink ?: return
+        val invited = waitingInvited
         waitingLink = null
-        show(link)
+        waitingInvited = false
+        show(link, invited)
     }
 
-    private fun show(link: PublicAppLink) {
+    private fun show(link: PublicAppLink, invited: Boolean) {
+        // Told first: an invite's grant is written before the page is set, so before it loads.
+        opened(link, invited)
         orgPage = null
         if (TasksTab.isTasks(link)) {
             page = null
@@ -60,7 +75,6 @@ class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
         } else {
             page = link
         }
-        opened(link)
     }
 
     /// `MainTabs` has the Tasks page in its tab.
@@ -102,5 +116,6 @@ class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
         page = null
         tasksPage = null
         waitingLink = null
+        waitingInvited = false
     }
 }
