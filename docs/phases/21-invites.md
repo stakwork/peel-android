@@ -56,3 +56,4 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
 - Tests: `InviteLinkTest`, `ContactCodeTest`, `InviterFlowTest` (clear-first/restore, keep/delete matrix,
   publish order), `InviteRulesTest`, `StorageInviteTest` (status moves, used-by-code, v10→v11 upgrade).
   Native-core paths (`Signup.create`, `makeInvite`, `addContact`) are untested.
+- Onboarding back: `Step.CheckWords` now has the back arrow (and `OnboardingScreen` a `BackHandler` for the system back) to return to the same words; `ShowWords` still has no back, as on iOS.

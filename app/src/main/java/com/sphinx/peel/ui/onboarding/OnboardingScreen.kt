@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.onboarding
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -130,7 +131,24 @@ fun OnboardingScreen(
                 confirmation = ""
                 Step.SetPin
             }
+            // The account exists: back to the same words, never before them.
+            Step.CheckWords -> {
+                check = WordCheck()
+                Step.ShowWords
+            }
             else -> step
+        }
+    }
+
+    // The system back matches the on-screen back. ShowWords swallows it: the
+    // account exists and its words aren't checked yet, so leaving would lose
+    // the only screen that shows them (iOS hides Back there too).
+    BackHandler(enabled = step != Step.Welcome) {
+        when {
+            scanning -> scanning = false
+            working -> Unit
+            step == Step.ShowWords -> Unit
+            else -> back()
         }
     }
 
@@ -373,6 +391,7 @@ fun OnboardingScreen(
             actionEnabled = check.isFilled,
             stepNumber = 4,
             totalSteps = 4,
+            onBack = ::back,
             onAction = { checkWords() },
         ) {
             WordCheckBoxes(check = check, onSubmit = { if (check.isFilled) checkWords() })
@@ -444,7 +463,8 @@ private fun Welcome(problem: String?, onNewAccount: () -> Unit, onRestore: () ->
 /// PeelCore's PhoneControls.swift (`StepPage`) plus the step chrome
 /// `Onboarding.swift` draws around it (`progress`, the system back button
 /// — Android has no free system back button inside a single Composable
-/// screen the way SwiftUI's NavigationStack does, so this draws its own).
+/// screen the way SwiftUI's NavigationStack does, so this draws the on-screen
+/// back, and OnboardingScreen's BackHandler routes the system back to the same `back()`).
 @Composable
 private fun StepScaffold(
     title: String,
