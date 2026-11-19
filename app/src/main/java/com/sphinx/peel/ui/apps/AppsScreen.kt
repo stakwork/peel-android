@@ -61,6 +61,7 @@ import com.sphinx.peel.engine.OpenedApp
 import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
+import com.sphinx.peel.engine.TasksTab
 import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.dashboard.SidebarLayoutState
@@ -78,7 +79,8 @@ import com.sphinx.peel.ui.toast.ToastType
 /// this screen follows a connect or disconnect without a restart.
 /// Android only: the strangers' public apps opened here ("Apps you opened", `Storage.openedApps`, last opened first), so a worker
 /// opens a Stadeum's worker app again with one tap (docs/phases/41-worker-onboarding.md); long-press removes one, and Disconnect in
-/// You › Connected apps removes an origin's.
+/// You › Connected apps removes an origin's. Every one but an employer's Tasks page, which is the Tasks tab's
+/// (`TasksTab.others`, docs/phases/48-tasks-tab.md).
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit, onOpenPublic: (PublicAppLink) -> Unit, modifier: Modifier = Modifier) {
@@ -95,9 +97,10 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     val layout = layoutState.layout
     val openPage = LocalPageOpener.current
     val publicVersion by storage.publicAppsVersion.collectAsState()
-    // The connection titles move too (a first sign-in names the app).
+    // The connection titles move too (a first sign-in names the app). An employer's Tasks page is not listed: the Tasks tab holds
+    // those (docs/phases/48-tasks-tab.md).
     val connectionsVersion by storage.walletConnectionsVersion.collectAsState()
-    val opened = remember(publicVersion, connectionsVersion) { storage.openedApps() }
+    val opened = remember(publicVersion, connectionsVersion) { TasksTab.others(storage.openedApps()) }
     var refresh by remember { mutableStateOf(0) }
     var historyHome by remember { mutableStateOf<TalkHome?>(null) }
     val context2 = LocalContext.current

@@ -703,10 +703,14 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
 /// connection leaves with no sheet ([PhoneWalletSheets.toast]) over it. A tap in the page counts for the wallet for
 /// [StrutWallet.GESTURE_WINDOW_MS] and for a link out for [OrgNavigation.TAP_WINDOW_MS]. [sheets] is the person's side of the wallet, made here
 /// unless a test brings its own (closing the page, which a lock does, answers whatever it waits on as a no).
+///
+/// The Tasks tab (docs/phases/48-tasks-tab.md) holds a page too: [onClose] null is a page that is a tab (no Done, and Back at its first
+/// address is not the page's), and [shown] false is that page kept alive behind another tab (`KeptPage` does not place it): it is
+/// treated as a page not showing (paused, no prompt, no Back) and gives up the keyboard.
 @Composable
 fun OrgPageScreen(
-    page: PhonePage, wallet: WalletHost, onClose: () -> Unit, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null,
-    locations: SiteLocationStore? = null,
+    page: PhonePage, wallet: WalletHost, onClose: (() -> Unit)?, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null,
+    locations: SiteLocationStore? = null, shown: Boolean = true,
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -766,8 +770,19 @@ fun OrgPageScreen(
         }
         onDispose { controller.askSystem = { _, done -> done { false } } }
     }
-    // A page that is not showing is paused (WebView stops its location then) and gets no prompt ([OrgPageController.setVisible]).
+    // A page that is not showing is paused (WebView stops its location then) and gets no prompt ([OrgPageController.setVisible]):
+    // Peel not started, or (a tab's page) another tab in front.
+    // The stop is told at once, from the observer: a stopped activity draws no frames, so an effect would wait for the start.
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val shownNow by androidx.compose.runtime.rememberUpdatedState(shown)
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(controller, shown) {
+        controller.setVisible(shown && lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+        if (!shown) {
+            controller.web?.clearFocus()
+            keyboard?.hide()
+        }
+    }
     DisposableEffect(controller, lifecycleOwner) {
         val activity = context.findActivity()
         controller.systemRationale = { permission -> activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, permission) } ?: true }
@@ -779,18 +794,18 @@ fun OrgPageScreen(
                 )
             }
         }
-        controller.setVisible(lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+        controller.setVisible(shownNow && lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             when (event) {
                 androidx.lifecycle.Lifecycle.Event.ON_STOP -> controller.setVisible(false)
-                androidx.lifecycle.Lifecycle.Event.ON_START -> controller.setVisible(true)
+                androidx.lifecycle.Lifecycle.Event.ON_START -> controller.setVisible(shownNow)
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    BackHandler { if (controller.canGoBack) controller.goBack() else onClose() }
+    BackHandler(enabled = shown && (controller.canGoBack || onClose != null)) { if (controller.canGoBack) controller.goBack() else onClose?.invoke() }
     // The notifications the wallet host has for this page's scope go into its main frame (iOS `listenToWallet`).
     LaunchedEffect(controller) { wallet.notifications.collect { controller.wallet?.push(it) } }
     DisposableEffect(controller) {
@@ -808,14 +823,16 @@ fun OrgPageScreen(
 
     Column(modifier.fillMaxSize().background(Theme.colors.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Done", tint = Theme.colors.text) }
+            if (onClose != null) {
+                Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
+                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Done", tint = Theme.colors.text) }
+                }
             }
             if (controller.canGoBack) {
-                Spacer(Modifier.width(8.dp))
+                if (onClose != null) Spacer(Modifier.width(8.dp))
                 IconButton(onClick = { controller.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(if (onClose == null && !controller.canGoBack) 4.dp else 12.dp))
             Text(
                 page.title(controller.showsAnotherApp), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text,

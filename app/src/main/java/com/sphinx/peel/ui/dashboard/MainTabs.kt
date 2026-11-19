@@ -35,6 +35,10 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.runtime.collectAsState
+import com.sphinx.peel.engine.PublicPage
+import com.sphinx.peel.engine.TasksTab
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -86,10 +90,10 @@ data class DeepLink(val chat: String?, val payments: Boolean, val you: Boolean =
     }
 }
 
-private enum class MainTab { CHATS, PAYMENTS, YOU, SEARCH }
-
 /// The tab bar — PeelCore's `MainTabs.swift`: Chats, Payments, You, Search.
-/// Chats, You and Search are real; Payments is still a placeholder.
+/// Android only: Tasks first, for an account that has opened an employer's Tasks page, and the tab Peel opens on then
+/// (docs/phases/48-tasks-tab.md). With one employer the tab is that page, with the bar kept; with several, a list of them. The page
+/// stays alive behind the other tabs and anything opened over them ([KeptPage]).
 ///
 /// Also where the call this account is on lives — `PeelUI`'s own
 /// `CallStore`, trimmed to what this port needs (no watching calls across
@@ -104,7 +108,14 @@ fun MainTabs(
     deepLink: DeepLink? = null, onDeepLinkHandled: () -> Unit = {}, pages: com.sphinx.peel.ui.page.PublicPageRouter = remember { com.sphinx.peel.ui.page.PublicPageRouter() },
     onForgotten: () -> Unit,
 ) {
-    var tab by remember { mutableStateOf(MainTab.CHATS) }
+    // The Tasks tab's pages: the `public_app` rows of strut's `strut/worker`, read again as one is kept or forgotten (and as a
+    // sign-in names one: a row's title is its connection's).
+    val publicVersion by storage.publicAppsVersion.collectAsState()
+    val connectionsVersion by storage.walletConnectionsVersion.collectAsState()
+    val tasksPages = remember(publicVersion, connectionsVersion) { TasksTab.pages(storage.openedApps()) }
+    val hasTasks = tasksPages.isNotEmpty()
+    val tabs = remember { TabState(hasTasks) }
+    val tab = MainTab.shown(tabs.tab, hasTasks)
     // An open chat replaces the whole tab area, bar included — PeelCore's
     // `ConversationScreen` hides the tab bar the same way; Back returns to
     // whichever tab was open, not necessarily Chats.
@@ -126,10 +137,22 @@ fun MainTabs(
     // A tapped notification: open its chat (or Payments), once.
     LaunchedEffect(deepLink) {
         val link = deepLink ?: return@LaunchedEffect
-        if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tab = MainTab.PAYMENTS }
-        else if (link.you) { openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; tab = MainTab.YOU }
+        if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tabs.tab = MainTab.PAYMENTS }
+        else if (link.you) { openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; tabs.tab = MainTab.YOU }
         onDeepLinkHandled()
     }
+
+    // A Tasks page opened by a link (a worker's invite after signup, a `peel://open` link; `PublicPageRouter.tasksPage`): the
+    // Tasks tab in front with that page, not a page over Chats. Whatever was open over the tabs closes; a call goes on, on its banner.
+    val tasksLink = pages.tasksPage
+    LaunchedEffect(tasksLink) {
+        val link = tasksLink ?: return@LaunchedEffect
+        openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; focusMessage = null; focusThread = null
+        CallController.callScreenShown = false
+        tabs.openTasks(link)
+        pages.tasksTaken()
+    }
+    val tasksContent = TasksTab.content(tasksPages, tabs.chosen)
 
     // The call is `CallController`'s (application-scoped, `docs/phases/15-call-background.md`):
     // this only observes it, so rotation or a recreated Activity never ends a call. Whether the
@@ -287,14 +310,30 @@ fun MainTabs(
     if (talkHome != null) TalkScreen(talk, onClose = CallController::hangUpTalk) else Column(Modifier.fillMaxSize()) {
         CallController.notice?.let { CallNoticeBar(it, onDismiss = CallController::dismissNotice) }
         val phase = callPhase
-        if (callScreenShown && phase != null) {
-            CallScreen(phase, onHide = { CallController.callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)
-        } else {
-            if (phase != null) CallBanner(phase, onTap = { CallController.callScreenShown = true }, onLeave = ::leaveCall)
-            val chat = openChat
-            val route = openRoute
-            val inviteCode = openInvite
-            if (inviteCode != null && chat == null) {
+        val callInFront = callScreenShown && phase != null
+        if (!callInFront && phase != null) CallBanner(phase, onTap = { CallController.callScreenShown = true }, onLeave = ::leaveCall)
+        val chat = openChat
+        val route = openRoute
+        val inviteCode = openInvite
+        // Nothing over the tabs: the bar shows, with the tab in front.
+        val onTabs = !callInFront && chat == null && route == null && inviteCode == null
+        // One area for the call screen, an open chat or page, and the tab in front, so the Tasks page keeps its place in it (first,
+        // under the rest) whatever is open: it is placed only while it is the tab in front ([KeptPage]).
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            (tasksContent as? TasksTab.Content.Page)?.link?.let { link ->
+                // Not under a page over everything either (an org page here, a public page over the tabs): one page has the Back.
+                val inFront = onTabs && tab == MainTab.TASKS && shownPage == null && pages.page == null
+                KeptPage(shown = inFront) {
+                    val page = remember(link) { PublicPage(link) }
+                    // A page picked off the list has Done (and Back at its first address) to return to the list; the one employer's
+                    // page is the tab itself.
+                    val close = if (TasksTab.picked(tasksPages, tasksContent)) tabs::backToList else null
+                    com.sphinx.peel.ui.apps.OrgPageScreen(page, engine.walletHost, onClose = close, locations = storage, shown = inFront)
+                }
+            }
+            if (callInFront && phase != null) {
+                CallScreen(phase, onHide = { CallController.callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)
+            } else if (inviteCode != null && chat == null) {
                 com.sphinx.peel.ui.invites.InviteDetailScreen(engine, storage, inviteCode, onClose = { openInvite = null })
             } else if (route != null && chat == null) {
                 val back = { openRoute = null }
@@ -351,17 +390,22 @@ fun MainTabs(
                     onJoinCall = { joinChat, joinTitle, link, camera -> request(joinChat, joinTitle, link, camera) },
                 )
             } else {
-                Box(Modifier.weight(1f)) {
-                    when (tab) {
-                        MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }, onOpenInvite = { openInvite = it }) { openChat = it }
-                        MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
-                        MainTab.YOU -> YouScreen(engine, storage, secretStore, forget)
-                        MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
+                when (tab) {
+                    // The page itself is the kept one above; with several employers and none picked, the list.
+                    MainTab.TASKS -> if (tasksContent is TasksTab.Content.Pick) {
+                        TasksList(tasksContent.pages, onOpen = tabs::pick, onRemove = { storage.forgetPublicApp(it) })
                     }
+                    MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }, onOpenInvite = { openInvite = it }) { openChat = it }
+                    MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
+                    MainTab.YOU -> YouScreen(engine, storage, secretStore, forget)
+                    MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                 }
-                BottomBar(tab) { tab = it }
             }
         }
+        // Typing in the Tasks page: the keyboard has the bar's room (a task's form needs it).
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        val typing = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+        if (onTabs && !(tab == MainTab.TASKS && typing)) BottomBar(tab, hasTasks) { tabs.tab = it }
     }
     // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
     shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg, locations = storage) }
@@ -387,10 +431,10 @@ private fun CallNoticeBar(notice: CallNotice, onDismiss: () -> Unit) {
     }
 }
 
-/// Chats, Payments and You in one pill, Search its own circle beside it —
+/// Chats, Payments and You in one pill (Tasks first while the account has it), Search its own circle beside it —
 /// the shape the iPhone's native search-role tab gets for free.
 @Composable
-private fun BottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
+private fun BottomBar(selected: MainTab, hasTasks: Boolean, onSelect: (MainTab) -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -400,9 +444,16 @@ private fun BottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
             Modifier.weight(1f).clip(RoundedCornerShape(28.dp)).background(Theme.colors.fieldFill),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            TabIcon(Icons.AutoMirrored.Filled.Chat, "Chats", selected == MainTab.CHATS) { onSelect(MainTab.CHATS) }
-            TabIcon(Icons.Filled.Bolt, "Payments", selected == MainTab.PAYMENTS) { onSelect(MainTab.PAYMENTS) }
-            TabIcon(Icons.Filled.Person, "You", selected == MainTab.YOU) { onSelect(MainTab.YOU) }
+            MainTab.pill(hasTasks).forEach { tab ->
+                val (icon, label) = when (tab) {
+                    MainTab.TASKS -> Icons.Filled.TaskAlt to "Tasks"
+                    MainTab.CHATS -> Icons.AutoMirrored.Filled.Chat to "Chats"
+                    MainTab.PAYMENTS -> Icons.Filled.Bolt to "Payments"
+                    MainTab.YOU -> Icons.Filled.Person to "You"
+                    MainTab.SEARCH -> Icons.Filled.Search to "Search"
+                }
+                TabIcon(icon, label, selected == tab) { onSelect(tab) }
+            }
         }
         Box(
             Modifier
