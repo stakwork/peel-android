@@ -218,25 +218,25 @@ fun OnboardingScreen(
         }
     }
 
+    fun openPeel() {
+        problem = null
+        engine?.let {
+            // An unconfirmed signup registers again, with its stored invite, as it connects.
+            if (!it.isRegistered) it.resume()
+            onAccountReady(it)
+        }
+    }
+
     fun checkWords() {
-        val wrong = check.byPosition.filter { (position, answer) ->
-            Account.wordsIn(answer) != listOf(shownWords[position])
-        }.keys.sorted()
+        val wrong = Account.wrongPlaces(check.byPosition, shownWords)
         if (wrong.isEmpty()) {
             // PeelCore's own `confirmWords` writes this on success too
-            // (`Engine+Account.swift`) - a flag for "this account's own
-            // words have been written down", for a future screen (a
-            // settings "back up your words" reminder) to read. Declared
-            // on this port since Phase 1 (`Setting.kt`) but never once
-            // written until now.
+            // (`Engine+Account.swift`). Signup wrote "0"; You › Twelve words
+            // says "Not checked yet" until it is "1".
             storage.apply(Storage.Commit(settings = mapOf(Setting.WORDS_CONFIRMED to "1")))
-            engine?.let {
-                // An unconfirmed signup registers again, with its stored invite, as it connects.
-                if (!it.isRegistered) it.resume()
-                onAccountReady(it)
-            }
+            openPeel()
         } else {
-            problem = "Word${if (wrong.size > 1) "s" else ""} ${wrong.joinToString(", ") { "${it + 1}" }} ${if (wrong.size > 1) "don't" else "doesn't"} match."
+            problem = Account.wrongPlacesProblem(wrong)
             check = WordCheck()
         }
     }
@@ -371,6 +371,10 @@ fun OnboardingScreen(
             detail = "Anyone with these words controls your account.",
             problem = problem,
             actionLabel = "I've written them down",
+            // Not everyone knows what the words are for yet: Peel opens without them, and
+            // You › Twelve words shows them again and says "Not checked yet" until checked.
+            secondaryLabel = "Back up later",
+            onSecondary = ::openPeel,
             stepNumber = 4,
             totalSteps = 4,
             onAction = { step = Step.CheckWords },
@@ -378,6 +382,11 @@ fun OnboardingScreen(
             NumberedWords(places = shownWords.indices.toList()) { index ->
                 Text(shownWords[index], color = Theme.colors.text)
             }
+            Text(
+                "You can back them up later in You › Twelve words.",
+                color = Theme.colors.secondaryText,
+                style = MaterialTheme.typography.bodyMedium,
+            )
             if (unconfirmed) {
                 // Signed up, the server's answer not yet in (PeelCore's Onboarding says the same).
                 Text(SignupRules.NOT_CONFIRMED, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium)
@@ -389,6 +398,8 @@ fun OnboardingScreen(
             problem = problem,
             actionLabel = "Open Peel",
             actionEnabled = check.isFilled,
+            secondaryLabel = "Skip for now",
+            onSecondary = ::openPeel,
             stepNumber = 4,
             totalSteps = 4,
             onBack = ::back,
@@ -474,22 +485,32 @@ private fun StepScaffold(
     actionEnabled: Boolean = true,
     hideAction: Boolean = false,
     working: Boolean = false,
+    secondaryLabel: String? = null,
     stepNumber: Int? = null,
     totalSteps: Int? = null,
     onBack: (() -> Unit)? = null,
     onAction: () -> Unit = {},
+    onSecondary: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     Scaffold(
         bottomBar = {
             if (!hideAction) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 16.dp)) {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Button(
                         onClick = onAction,
                         enabled = actionEnabled && !working,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
                     ) { Text(actionLabel) }
+                    if (secondaryLabel != null) {
+                        OutlinedButton(onClick = onSecondary, enabled = !working, modifier = Modifier.fillMaxWidth()) {
+                            Text(secondaryLabel)
+                        }
+                    }
                 }
             }
         },

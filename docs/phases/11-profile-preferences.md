@@ -137,6 +137,8 @@ check words again. A real, previously invisible gap this round's own
 report or a test. Fixed: the `RESTORE` branch now writes both settings
 in the one commit.
 
+**Update (2026-11-19):** the check is skippable now (phase 47, `47-words-later.md`), so the "not checked" branch is built after all.
+
 **Update (2026-10-30), Profile rework to match iOS:** `YouScreen.kt`
 rebuilt after the iOS screenshots: centred "You" title, header without
 the pubkey, thousands-grouped balance ("5.179 sats", `YouOptions.groupedSats`),
