@@ -127,7 +127,7 @@ private enum class YouRoute { WORDS, CHANGE_PIN, DIAGNOSTICS, CONNECTED_APPS, SI
 fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
     var route by remember { mutableStateOf<YouRoute?>(null) }
     when (route) {
-        YouRoute.WORDS -> TwelveWordsScreen(secretStore, onBack = { route = null })
+        YouRoute.WORDS -> TwelveWordsScreen(secretStore, storage, onBack = { route = null })
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
         YouRoute.DIAGNOSTICS -> com.sphinx.peel.ui.diagnostics.DiagnosticsScreen(onBack = { route = null })
         YouRoute.CONNECTED_APPS -> ConnectedAppsScreen(storage, onBack = { route = null })
@@ -293,7 +293,12 @@ private fun YouMain(
         item { SectionHeader("Account") }
         item {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
-                AccountRow(label = "Twelve words", onClick = onOpenWords, chevron = true)
+                // Read again each time You shows (it leaves composition while Twelve words is open).
+                val wordsChecked = remember { Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED)) }
+                AccountRow(
+                    label = "Twelve words", value = if (wordsChecked) "" else "Not checked yet",
+                    onClick = onOpenWords, chevron = true,
+                )
                 AccountDivider()
                 AccountRow(label = "Change PIN", onClick = onOpenChangePin, chevron = true)
                 AccountDivider()
