@@ -36,6 +36,9 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.runtime.collectAsState
 import com.sphinx.peel.engine.PublicPage
 import com.sphinx.peel.engine.TasksTab
@@ -403,8 +406,8 @@ fun MainTabs(
             }
         }
         // Typing in the Tasks page: the keyboard has the bar's room (a task's form needs it).
-        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-        val typing = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+        @OptIn(ExperimentalLayoutApi::class)
+        val typing = WindowInsets.isImeVisible
         if (onTabs && !(tab == MainTab.TASKS && typing)) BottomBar(tab, hasTasks) { tabs.tab = it }
     }
     // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
