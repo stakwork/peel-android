@@ -56,7 +56,7 @@ this half depends on neither.
 - **The first sign-in right after a signup whose register was not confirmed** carries no address (none is known yet); a later
   sign-in does, silently, through the held connection. Whether strut takes an address from a later session is strut's side.
 - Not decided, so not built: Play Store distribution (Peel Android ships as an APK from GitHub releases; a worker without Peel
-  installs it first, and then has to tap the join link again: nothing carries the link across an install), deferring the words
+  installs it first; nothing carries the link across an install, so it rides on the clipboard: phase 46), deferring the words
   backup in onboarding, per-invite grants. iOS is out of scope.
 - `public_app` rows are not synced and not backed up: a restore on a new phone starts with none (they come back as apps are opened).
 - The `https://…/public/join#<invite>` page itself is strut's.

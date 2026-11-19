@@ -112,6 +112,20 @@ object InviteLink {
         return uri
     }
 
+    /// An invite link on the clipboard (docs/phases/46-invite-from-clipboard.md): strut's join page copies
+    /// `sphinx.chat://?action=i&d=…` as it downloads Peel, since nothing carries a tapped link across an install. Only a
+    /// whole link, held to [fromDeepLink]'s rule (`action=i`) and naming a `d=`; anything else someone copied is null, so
+    /// it never lands in the invite field.
+    fun fromClipboard(text: String?): String? {
+        val trimmed = text?.trim() ?: return null
+        if (trimmed.isEmpty() || trimmed.length > MAX_LENGTH || trimmed.any { it.isWhitespace() }) return null
+        val prefix = "$SCHEME://?"
+        if (!trimmed.startsWith(prefix, ignoreCase = true)) return null
+        val sections = trimmed.substring(prefix.length).split('&')
+        if (sections.count { it == "action=i" } != 1 || sections.none { it.startsWith("d=") && it.length > 2 }) return null
+        return fromDeepLink(SCHEME, "i", trimmed)
+    }
+
     /// The section of a worker's invite link that names the app to open (docs/phases/41-worker-onboarding.md).
     const val APP_SECTION = "a="
 
