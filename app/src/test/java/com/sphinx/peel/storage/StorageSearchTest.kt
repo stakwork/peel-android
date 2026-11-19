@@ -4,6 +4,7 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import com.sphinx.peel.engine.MessageQuery
 import org.json.JSONObject
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,7 +17,14 @@ import org.robolectric.RobolectricTestRunner
 class StorageSearchTest {
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
     private val account = "search-${System.nanoTime()}"
-    private val storage by lazy { Storage(context, account = account) }
+    private val lazyStorage = lazy { Storage(context, account = account) }
+    private val storage by lazyStorage
+
+    /// Closes the connection the test opened (an unclosed one trips Robolectric's CloseGuard).
+    @After
+    fun closeStorage() {
+        if (lazyStorage.isInitialized()) lazyStorage.value.close()
+    }
 
     /// The history page size (`Engine.HISTORY_PAGE_SIZE`, private there): a chat's older messages are past it.
     private val page = 100
