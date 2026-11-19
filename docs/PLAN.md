@@ -210,6 +210,7 @@ Google Play Services anywhere load-bearing. Android SDK, NDK (via
 | 46 | An invite carried across the install: strut's join page copies `sphinx.chat://?action=i&…` as it downloads Peel, and a Peel with no account reads it off the clipboard at its first focus, so a new worker goes from the download to signup to the worker app | built; JVM-tested; not run on a device | [phases/46-invite-from-clipboard.md](phases/46-invite-from-clipboard.md) |
 | 47 | The twelve words can wait: onboarding no longer shows them (invite, name, PIN, then Peel); You › Twelve words says "Not checked yet" and has "Check words" (iOS `WordsScreen`) | built; JVM-tested; not run on a device | [phases/47-words-later.md](phases/47-words-later.md) |
 | 48 | A Tasks tab for a worker's employers: first in the bar (and where Peel opens) once a `strut/worker` page was opened; one employer is that page in the tab with the bar kept, several a short list; the page kept alive behind the other tabs; a Tasks link (an invite after signup) lands there; Apps keeps every other public app | built; JVM/Robolectric-tested; not run on a device | [phases/48-tasks-tab.md](phases/48-tasks-tab.md) |
+| 49 | A worker's invite page signs them in: a root sign-in challenge offers the account's key alone (no picker); the page an invite link's `a=` names is granted sign-in as you as it opens (new account or one already here), so Tasks opens signed in with only a toast | built; JVM/Robolectric-tested; not run on a device | [phases/49-invite-signs-in.md](phases/49-invite-signs-in.md) |
 
 ## Open questions
 

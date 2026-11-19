@@ -513,16 +513,22 @@ class WalletHost(
             throw WalletRefusal(WalletError.NOT_IMPLEMENTED, "This app takes a new identity for it alone, which Peel cannot sign in as yet.")
         }
         val held = validConnection(caller.scope.key)
+        val shown = WalletApp(TextLine.clean(request.app.name, 80), TextLine.clean(request.app.version, 20), null, TextLine.clean(request.app.title, 80), null)
         // A challenge for the account's key takes either; one for the domain's, that alone.
         val heldKey = held?.signIn
-        if (heldKey != null && (challenge.visitorKey == SignInKey.root || heldKey == SignInKey.domain)) {
+        if (held != null && heldKey != null && (challenge.visitorKey == SignInKey.root || heldKey == SignInKey.domain)) {
+            // A grant made before any app of its origin said its name (an invite's page, [grantInvitePage]) is titled by its place
+            // until then: the first sign-in through it names it as the sheet would have.
+            if (held.title == held.place && shown.title != held.title) connections.save(held.copy(app = "/${shown.name}", title = shown.title))
             val signature = wallet.signVisitor(challenge, heldKey)
             caller.person.signedIn(host, heldKey)
             return signature.toJson()
         }
         if (!caller.personActed) throw WalletRefusal(WalletError.RESTRICTED, "Peel asks you to sign in only right after you click or tap in the app.")
-        val keys = if (challenge.visitorKey == SignInKey.domain) listOf(SignInKey.domain) else if (wallet.signsPerDomain) listOf(SignInKey.root, SignInKey.domain) else listOf(SignInKey.root)
-        val shown = WalletApp(TextLine.clean(request.app.name, 80), TextLine.clean(request.app.version, 20), null, TextLine.clean(request.app.title, 80), null)
+        // The server says which key it takes: the account's (strut's default, which pays out to the account's address) or one for its domain
+        // alone. Never both: someone new to Peel would have to understand the choice, and a new identity cannot be paid (strut answers
+        // `no_address` on withdraw).
+        val keys = listOf(challenge.visitorKey)
         val wanted = synchronized(lock) { asked[caller.scope.key] }?.let { a ->
             val r = a.request
             if (r != null && r.required.all { it in OFFERED } && (held == null || !covers(held, r))) a to r else null
@@ -803,6 +809,25 @@ class WalletHost(
 
         /// The host's own ops a stranger's public page may send (iOS `visitorOps`).
         val VISITOR_OPS = listOf("buy_credit", "buy_credit_status", "buy_credit_cancel", "sign_in")
+
+        /// The page a worker's invite link names (`a=`, [InviteLink.appOf]) signs the account in as you, with no sheet and no tap (only the
+        /// toast), from the first time Peel opens it (docs/phases/49-invite-signs-in.md): written into [connections] as Peel opens that page,
+        /// before it loads, for a new account and one already here alike. Called only for a link an invite carried, never for a `peel://open`
+        /// link or an open from the Apps list ([com.sphinx.peel.ui.page.PublicPageRouter]).
+        ///
+        /// Keyed and placed as that page's sheet-made grant is ([PublicPage.walletScope], [PublicPage.walletPlace]) so [signIn] finds it, at
+        /// exactly the link's origin; titled by its place until the app's first sign-in names it. A connection already there keeps its wallet
+        /// grant and gains the sign-in; one that already signs in (as the person chose) is left as it is. True when it wrote.
+        fun grantInvitePage(link: PublicAppLink, connections: WalletConnections, now: Long): Boolean {
+            val key = WalletScope.Origin(link.origin).key
+            val held = connections.connection(key)?.takeUnless { it.isExpired(now) }
+            if (held?.signIn != null) return false
+            connections.save(
+                held?.copy(signIn = SignInKey.root)
+                    ?: WalletConnection(key = key, app = "/${link.app ?: ""}", title = link.host, place = link.host, createdAt = now, signIn = SignInKey.root),
+            )
+            return true
+        }
 
         /// The connection a scope's credit purchases are kept under: no app's (no budget counts them, no page is notified), but read back by payment hash
         /// for `buy_credit_status` and a repeated `buy_credit`.

@@ -41,6 +41,8 @@ import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.InviteLink
 import com.sphinx.peel.engine.InviterFlow
 import com.sphinx.peel.engine.PublicAppLink
+import com.sphinx.peel.engine.StorageWalletConnections
+import com.sphinx.peel.engine.WalletHost
 import com.sphinx.peel.ui.page.PublicPageRouter
 import com.sphinx.peel.ui.apps.OrgPageScreen
 import com.sphinx.peel.engine.PublicPage
@@ -69,6 +71,10 @@ class MainActivity : FragmentActivity() {
     /// until `PeelApp` has taken it: opened at once when the account is unlocked, else once it unlocks.
     private var publicLink by mutableStateOf<PublicAppLink?>(null)
 
+    /// Whether a worker's invite link named [publicLink] (its `a=`), not a `peel://open` link: that page signs the account in with no sheet
+    /// (docs/phases/49-invite-signs-in.md). In memory only, like the link; never logged.
+    private var publicLinkInvited by mutableStateOf(false)
+
     private val askNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -96,7 +102,10 @@ class MainActivity : FragmentActivity() {
     private fun takePublicLink(intent: Intent?) {
         val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
         if (data.scheme?.lowercase() != "peel") return
-        PublicAppLink.parse(data.toString())?.let { publicLink = it }
+        PublicAppLink.parse(data.toString())?.let {
+            publicLink = it
+            publicLinkInvited = false
+        }
     }
 
     private fun takeInviteLink(intent: Intent?) {
@@ -112,8 +121,12 @@ class MainActivity : FragmentActivity() {
         inviteLink = link
         // A worker's invite link (`&a=`, docs/phases/41-worker-onboarding.md) also names a public app: it goes the way a
         // `peel://open` link does, so it opens once the account is unlocked: at once for an account already here (whose invite
-        // part is ignored, as before), after signup for a new one. A link with no valid `a=` is only the invite, as before.
-        InviteLink.appOf(link)?.let { publicLink = it }
+        // part is ignored, as before), after signup for a new one. A link with no valid `a=` is only the invite, as before. Either way
+        // its page signs the account in as you with no sheet (docs/phases/49-invite-signs-in.md).
+        InviteLink.appOf(link)?.let {
+            publicLink = it
+            publicLinkInvited = true
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -164,7 +177,7 @@ class MainActivity : FragmentActivity() {
                     val toast = rememberToastState()
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                         CompositionLocalProvider(LocalToast provides toast) {
-                            PeelApp(secretStore, storage, inviteLink, { inviteLink = null }, deepLink, { deepLink = null }, publicLink) { publicLink = null }
+                            PeelApp(secretStore, storage, inviteLink, { inviteLink = null }, deepLink, { deepLink = null }, publicLink, publicLinkInvited) { publicLink = null; publicLinkInvited = false }
                         }
                         ToastHost(toast, Modifier.align(Alignment.BottomCenter))
                     }
@@ -195,7 +208,7 @@ private sealed class Screen {
 private fun PeelApp(
     secretStore: SecretStore, storage: Storage, inviteLink: String?, onInviteLinkUsed: () -> Unit,
     deepLink: DeepLink?, onDeepLinkHandled: () -> Unit,
-    publicLink: PublicAppLink?, onPublicLinkTaken: () -> Unit,
+    publicLink: PublicAppLink?, publicLinkInvited: Boolean, onPublicLinkTaken: () -> Unit,
 ) {
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
@@ -208,12 +221,18 @@ private fun PeelApp(
 
     // A stranger's public app (`peel://open?url=…`, or a worker's invite link's `&a=`): opened when the account is unlocked,
     // kept until it is (also across a lock: only the open page closes then). Page and waiting link both go on sign-out or wipe.
-    // Each page opened is kept for the Apps list (docs/phases/41-worker-onboarding.md).
-    val router = remember { PublicPageRouter(opened = { storage.rememberPublicApp(it) }) }
+    // Each page opened is kept for the Apps list (docs/phases/41-worker-onboarding.md). The page a worker's invite link named signs
+    // the account in as you with no sheet: granted as it opens, before it loads (docs/phases/49-invite-signs-in.md).
+    val router = remember {
+        PublicPageRouter(opened = { link, invited ->
+            storage.rememberPublicApp(link)
+            if (invited) WalletHost.grantInvitePage(link, StorageWalletConnections(storage), System.currentTimeMillis() / 1000)
+        })
+    }
     val unlocked = screen is Screen.Home
     androidx.compose.runtime.LaunchedEffect(publicLink, unlocked) {
         publicLink?.let {
-            router.open(it, unlocked)
+            router.open(it, unlocked, invited = publicLinkInvited)
             onPublicLinkTaken()
         }
     }

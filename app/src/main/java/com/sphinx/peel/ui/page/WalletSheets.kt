@@ -141,7 +141,8 @@ fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, clock: () -> Long = DEFAU
             Text(WalletWords.sharedConnection(sheet), color = Theme.colors.secondaryText)
             sheet.signIn?.let { offer ->
                 SectionTitle("Sign in")
-                offer.keys.forEach { key ->
+                // One key (what the server asks for, WalletHost.signIn) is no choice: only what it means.
+                if (offer.keys.size > 1) offer.keys.forEach { key ->
                     Row(
                         Modifier.fillMaxWidth().selectable(selected = identity == key, onClick = { identity = key }, role = Role.RadioButton)
                             .heightIn(min = 44.dp),

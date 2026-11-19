@@ -75,6 +75,21 @@ class WalletSheetsUiTest {
         rule.onNodeWithText("It may").assertDoesNotExist()
     }
 
+    /// What WalletHost offers for strut's default challenge: the account's key alone, so no choice is drawn, only what it means.
+    @Test fun `one key is no choice`() {
+        val asYou = signInOnly.copy(signIn = SignInOffer("shop.example.com", listOf(SignInKey.root)))
+        val answers = mutableListOf<WalletConnectAnswer?>()
+        connect(asYou) { answers += it }
+        rule.onNodeWithText("Sign in to shop.example.com?").assertExists()
+        rule.onNodeWithText(WalletWords.signIn(SignInKey.root)).assertDoesNotExist()
+        rule.onNodeWithText(WalletWords.signIn(SignInKey.domain)).assertDoesNotExist()
+        rule.onNodeWithText(WalletWords.signInNote(SignInKey.root)).assertExists()
+        rule.mainClock.advanceTimeBy(800)
+        now = 800
+        yes("Sign in").performClick()
+        assertEquals(SignInKey.root, answers.single()?.signIn)
+    }
+
     @Test fun `the yes is off while the sheet rises and the gate holds a click until the clock agrees`() {
         val answers = mutableListOf<WalletConnectAnswer?>()
         // Frozen only for the assertions (a frozen clock with taps and scrolling can stall the test).
