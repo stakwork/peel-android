@@ -46,14 +46,10 @@ import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.Signup
 import com.sphinx.peel.engine.InviteLink
-import com.sphinx.peel.engine.SignupRules
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
-import com.sphinx.peel.ui.components.NumberedWords
 import com.sphinx.peel.ui.components.PinBoxes
-import com.sphinx.peel.ui.components.WordCheck
-import com.sphinx.peel.ui.components.WordCheckBoxes
 import com.sphinx.peel.ui.components.WordEntry
 import com.sphinx.peel.ui.theme.Theme
 
@@ -66,19 +62,18 @@ private sealed class Step {
     object EnterWords : Step()
     object SetPin : Step()
     object ConfirmPin : Step()
-    object ShowWords : Step()
-    object CheckWords : Step()
 }
 
-/// New account (invite, name, PIN, the twelve words) or restore (the words,
-/// PIN), as PeelCore's Onboarding.swift asks them. An invite is the only way
-/// to a new account: there is no sign-up on the default server. Once the PIN
-/// is confirmed, a restore builds the account's one `Engine` and calls
-/// `start()` — connecting, and paging through its contacts and messages in the
-/// background — and hands the engine to `onAccountReady` right away so the
-/// caller can show the restoring screen; a new account instead signs up with
-/// its invite (`Signup.create`: stores the invite, connects, registers) and
-/// continues on to show its words first.
+/// New account (invite, name, PIN) or restore (the words, PIN). An invite is
+/// the only way to a new account: there is no sign-up on the default server.
+/// Once the PIN is confirmed, a restore builds the account's one `Engine` and
+/// calls `start()` — connecting, and paging through its contacts and messages
+/// in the background — and hands the engine to `onAccountReady` right away so
+/// the caller can show the restoring screen; a new account instead signs up
+/// with its invite (`Signup.create`: stores the invite, connects, registers)
+/// and opens Peel. A new account never sees its twelve words here (unlike
+/// PeelCore's Onboarding.swift): You › Twelve words shows and checks them
+/// later, and says "Not checked yet" until then (phase 47).
 ///
 /// `inviteLink` is what a `sphinx.chat://` link the app was opened with held:
 /// it fills the invite step in (`onInviteLinkUsed` is called once it has).
@@ -97,16 +92,11 @@ fun OnboardingScreen(
     var pin by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     var mnemonic by remember { mutableStateOf("") }
-    var engine by remember { mutableStateOf<Engine?>(null) }
-    var shownWords by remember { mutableStateOf(listOf<String>()) }
-    var check by remember { mutableStateOf(WordCheck()) }
     var working by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
     var inviteText by remember { mutableStateOf("") }
     var invite by remember { mutableStateOf<com.sphinx.peel.engine.Invite?>(null) }
     var name by remember { mutableStateOf("") }
-    // The server has not confirmed the register (yet): said on the words screen.
-    var unconfirmed by remember { mutableStateOf(false) }
     var scanning by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -131,23 +121,15 @@ fun OnboardingScreen(
                 confirmation = ""
                 Step.SetPin
             }
-            // The account exists: back to the same words, never before them.
-            Step.CheckWords -> {
-                check = WordCheck()
-                Step.ShowWords
-            }
             else -> step
         }
     }
 
-    // The system back matches the on-screen back. ShowWords swallows it: the
-    // account exists and its words aren't checked yet, so leaving would lose
-    // the only screen that shows them (iOS hides Back there too).
+    // The system back matches the on-screen back.
     BackHandler(enabled = step != Step.Welcome) {
         when {
             scanning -> scanning = false
             working -> Unit
-            step == Step.ShowWords -> Unit
             else -> back()
         }
     }
@@ -171,12 +153,9 @@ fun OnboardingScreen(
                     Path.NEW_ACCOUNT -> {
                         val toJoin = invite ?: throw com.sphinx.peel.engine.InviteProblem.NOT_AN_INVITE
                         val created = Signup.create(secretStore, storage, toJoin, name, pin)
-                        engine = created.engine
-                        mnemonic = created.mnemonic
-                        unconfirmed = !created.confirmed
-                        shownWords = Account.wordsIn(created.mnemonic)
-                        check = WordCheck()
-                        step = Step.ShowWords
+                        // An unconfirmed signup registers again, with its stored invite, as it connects.
+                        if (!created.isRegistered) created.resume()
+                        onAccountReady(created)
                     }
                     Path.RESTORE -> {
                         val restored = withContext(Dispatchers.Default) {
@@ -218,29 +197,6 @@ fun OnboardingScreen(
         }
     }
 
-    fun openPeel() {
-        problem = null
-        engine?.let {
-            // An unconfirmed signup registers again, with its stored invite, as it connects.
-            if (!it.isRegistered) it.resume()
-            onAccountReady(it)
-        }
-    }
-
-    fun checkWords() {
-        val wrong = Account.wrongPlaces(check.byPosition, shownWords)
-        if (wrong.isEmpty()) {
-            // PeelCore's own `confirmWords` writes this on success too
-            // (`Engine+Account.swift`). Signup wrote "0"; You › Twelve words
-            // says "Not checked yet" until it is "1".
-            storage.apply(Storage.Commit(settings = mapOf(Setting.WORDS_CONFIRMED to "1")))
-            openPeel()
-        } else {
-            problem = Account.wrongPlacesProblem(wrong)
-            check = WordCheck()
-        }
-    }
-
     when (step) {
         Step.Welcome -> Welcome(
             problem = problem,
@@ -265,7 +221,7 @@ fun OnboardingScreen(
             actionEnabled = inviteText.isNotBlank() && !working,
             working = working,
             stepNumber = 1,
-            totalSteps = 4,
+            totalSteps = 3,
             onBack = ::back,
             onAction = {
                 // The core reads it (a native call): off the main thread.
@@ -295,7 +251,7 @@ fun OnboardingScreen(
             actionLabel = "Continue",
             actionEnabled = name.isNotBlank(),
             stepNumber = 2,
-            totalSteps = 4,
+            totalSteps = 3,
             onBack = ::back,
             onAction = { problem = null; step = Step.SetPin },
         ) {
@@ -333,7 +289,7 @@ fun OnboardingScreen(
             problem = problem,
             hideAction = true,
             stepNumber = if (path == Path.RESTORE) 2 else 3,
-            totalSteps = if (path == Path.RESTORE) 2 else 4,
+            totalSteps = if (path == Path.RESTORE) 2 else 3,
             onBack = ::back,
         ) {
             PinBoxes(
@@ -349,7 +305,7 @@ fun OnboardingScreen(
             hideAction = true,
             working = working,
             stepNumber = if (path == Path.RESTORE) 2 else 3,
-            totalSteps = if (path == Path.RESTORE) 2 else 4,
+            totalSteps = if (path == Path.RESTORE) 2 else 3,
             onBack = ::back,
         ) {
             PinBoxes(
@@ -365,47 +321,6 @@ fun OnboardingScreen(
                     CircularProgressIndicator(color = Theme.colors.accent)
                 }
             }
-        }
-        Step.ShowWords -> StepScaffold(
-            title = "Write down your twelve words",
-            detail = "Anyone with these words controls your account.",
-            problem = problem,
-            actionLabel = "I've written them down",
-            // Not everyone knows what the words are for yet: Peel opens without them, and
-            // You › Twelve words shows them again and says "Not checked yet" until checked.
-            secondaryLabel = "Back up later",
-            onSecondary = ::openPeel,
-            stepNumber = 4,
-            totalSteps = 4,
-            onAction = { step = Step.CheckWords },
-        ) {
-            NumberedWords(places = shownWords.indices.toList()) { index ->
-                Text(shownWords[index], color = Theme.colors.text)
-            }
-            Text(
-                "You can back them up later in You › Twelve words.",
-                color = Theme.colors.secondaryText,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            if (unconfirmed) {
-                // Signed up, the server's answer not yet in (PeelCore's Onboarding says the same).
-                Text(SignupRules.NOT_CONFIRMED, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-        Step.CheckWords -> StepScaffold(
-            title = "Check what you wrote",
-            detail = "Type these three words from your paper.",
-            problem = problem,
-            actionLabel = "Open Peel",
-            actionEnabled = check.isFilled,
-            secondaryLabel = "Skip for now",
-            onSecondary = ::openPeel,
-            stepNumber = 4,
-            totalSteps = 4,
-            onBack = ::back,
-            onAction = { checkWords() },
-        ) {
-            WordCheckBoxes(check = check, onSubmit = { if (check.isFilled) checkWords() })
         }
     }
 }
@@ -485,32 +400,22 @@ private fun StepScaffold(
     actionEnabled: Boolean = true,
     hideAction: Boolean = false,
     working: Boolean = false,
-    secondaryLabel: String? = null,
     stepNumber: Int? = null,
     totalSteps: Int? = null,
     onBack: (() -> Unit)? = null,
     onAction: () -> Unit = {},
-    onSecondary: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     Scaffold(
         bottomBar = {
             if (!hideAction) {
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 16.dp)) {
                     Button(
                         onClick = onAction,
                         enabled = actionEnabled && !working,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
                     ) { Text(actionLabel) }
-                    if (secondaryLabel != null) {
-                        OutlinedButton(onClick = onSecondary, enabled = !working, modifier = Modifier.fillMaxWidth()) {
-                            Text(secondaryLabel)
-                        }
-                    }
                 }
             }
         },
