@@ -32,26 +32,37 @@ data class VisitorChallenge(
     companion object {
         const val PREFIX = "strut-visitor."
         const val MAX_LENGTH = 2048
-        private val BASE64URL = Regex("[A-Za-z0-9_-]+")
 
         fun parse(text: String): VisitorChallenge? {
-            if (text.length > MAX_LENGTH || !text.startsWith(PREFIX)) return null
-            val parts = text.removePrefix(PREFIX).split('.')
-            if (parts.size != 2 || parts.any { it.isEmpty() || !BASE64URL.matches(it) }) return null
-            val json = try {
-                val bytes = java.util.Base64.getUrlDecoder().decode(parts[0])
-                val decoder = Charsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
-                JSONObject(decoder.decode(ByteBuffer.wrap(bytes)).toString())
-            } catch (e: Exception) {
-                return null
-            }
+            val json = StrutClaims.read(text, PREFIX, MAX_LENGTH) ?: return null
             val host = (json.opt("host") as? String)?.takeIf { it.isNotEmpty() } ?: return null
             val nonce = (json.opt("nonce") as? String)?.takeIf { it.isNotEmpty() } ?: return null
             val exp = WalletProtocol.integer(json.opt("exp")) ?: return null
             if (exp < 1) return null
             val key = SignInKey.fromWire(json.opt("visitorKey") as? String) ?: return null
             return VisitorChallenge(text, host, key, nonce, exp)
+        }
+    }
+}
+
+/// The claims of something strut signed, as a client reads them: `<prefix><base64url JSON>.<base64url HMAC>` (iOS `StrutClaims`).
+/// Read, never verified: the HMAC is strut's to check. A visitor challenge and a box's link challenge ([BoxChallenge]) are read
+/// through here.
+internal object StrutClaims {
+    private val BASE64URL = Regex("[A-Za-z0-9_-]+")
+
+    /// The JSON object, or null for anything else or past [maxLength] (UTF-16 units, as iOS counts).
+    fun read(text: String, prefix: String, maxLength: Int): JSONObject? {
+        if (text.length > maxLength || !text.startsWith(prefix)) return null
+        val parts = text.removePrefix(prefix).split('.')
+        if (parts.size != 2 || parts.any { it.isEmpty() || !BASE64URL.matches(it) }) return null
+        return try {
+            val bytes = java.util.Base64.getUrlDecoder().decode(parts[0])
+            val decoder = Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+            JSONObject(decoder.decode(ByteBuffer.wrap(bytes)).toString())
+        } catch (e: Exception) {
+            null
         }
     }
 }

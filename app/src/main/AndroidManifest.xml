@@ -79,6 +79,15 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="peel" android:host="open" />
             </intent-filter>
+            <!-- A strut box's link, peel://strut/link?url=<box>&challenge=<…> (its Connect's QR code or Open in
+                 Peel; docs/phases/45-box-link.md). Read strictly by BoxLinkOffer; opening one only asks "Link Peel
+                 to <host> as <name>?": nothing is signed or sent without the person's tap on Link. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="peel" android:host="strut" />
+            </intent-filter>
         </activity>
 
         <!-- FCM: onNewToken re-registers the token, onMessageReceived is the

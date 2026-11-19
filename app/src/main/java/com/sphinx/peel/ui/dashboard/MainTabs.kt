@@ -13,6 +13,8 @@ import com.sphinx.peel.call.CallController
 import com.sphinx.peel.call.CallNotice
 import androidx.compose.runtime.LaunchedEffect
 import com.sphinx.peel.engine.Stadeum
+import com.sphinx.peel.engine.Boxes
+import com.sphinx.peel.engine.BoxWords
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -68,9 +70,14 @@ import com.sphinx.peel.ui.payments.PaymentsScreen
 import com.sphinx.peel.ui.you.YouScreen
 
 /// What a tapped notification asks `MainTabs` to open: a chat, or Payments.
-/// Read from the intent extras `push/Notifications.openIntent` sets.
-data class DeepLink(val chat: String?, val payments: Boolean) {
+/// Read from the intent extras `push/Notifications.openIntent` sets. [you]: a
+/// box's `peel://strut/link` opened You, where its question and the boxes are
+/// (docs/phases/45-box-link.md).
+data class DeepLink(val chat: String?, val payments: Boolean, val you: Boolean = false) {
     companion object {
+        /// You, its own page (iOS `tab = .you; you = []`).
+        val YOU = DeepLink(chat = null, payments = false, you = true)
+
         fun from(intent: Intent?): DeepLink? {
             val chat = intent?.getStringExtra(com.sphinx.peel.push.Notifications.EXTRA_CHAT)?.takeIf { it.isNotEmpty() }
             val payments = intent?.getBooleanExtra(com.sphinx.peel.push.Notifications.EXTRA_OPEN_PAYMENTS, false) == true
@@ -120,6 +127,7 @@ fun MainTabs(
     LaunchedEffect(deepLink) {
         val link = deepLink ?: return@LaunchedEffect
         if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tab = MainTab.PAYMENTS }
+        else if (link.you) { openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; tab = MainTab.YOU }
         onDeepLinkHandled()
     }
 
@@ -214,6 +222,20 @@ fun MainTabs(
         )
     }
 
+    // A box's link waiting for the person's yes (`Boxes.model.asking`, iOS `MainTabs`' alert): nothing is signed without it. Its
+    // two buttons answer it; nothing else shuts it (no tap outside, no Back).
+    val boxes = Boxes.model
+    boxes.asking?.let { offer ->
+        AlertDialog(
+            onDismissRequest = {},
+            properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text(BoxWords.title(offer)) },
+            text = { Text(BoxWords.question(offer)) },
+            confirmButton = { TextButton(onClick = { boxes.accept() }) { Text("Link") } },
+            dismissButton = { TextButton(onClick = { boxes.decline() }) { Text("Cancel") } },
+        )
+    }
+
     // The call being joined is on another device of this account too: asked before anything connects (iOS wording).
     if (CallController.choosingDevice != null) {
         AlertDialog(
@@ -233,10 +255,12 @@ fun MainTabs(
     // An org's page over everything (iOS `router.orgPage`): a deliverable from the agent's DM, a workspace's app, a tapped Hive link or
     // a Talk card. Its workspace no longer in use (revoked, disconnected, renewed without it): the page and its token go.
     // The state is the router's (one holder of both pages, as iOS's `PhoneRouter`); a Talk card's page is the call screen's own (`talkOpener`).
+    // A linked box's page (its own strut UI as the member, docs/phases/45-box-link.md) is held the same way and goes when its box does
+    // (forgotten, or let go because the member removed the link there): iOS `closeGoneOrgPage`.
     val live = Stadeum.live
     val orgPage = pages.orgPage
-    val shownPage = orgPage?.takeIf { it.isLive(live) }
-    LaunchedEffect(live.map { it.id }, orgPage) { pages.workspacesChanged(live) }
+    val shownPage = orgPage?.takeIf { it.isLive(live) || boxes.shows(it) }
+    LaunchedEffect(live.map { it.id }, boxes.links.map { it.url }, orgPage) { pages.workspacesChanged(live, boxes::shows) }
     val talkOpener = remember { com.sphinx.peel.ui.talk.TalkOpener() }
     LaunchedEffect(live.map { it.id }) { talkOpener.workspacesChanged(live) }
     // The call screen gone: its sheet goes with it.
