@@ -53,6 +53,20 @@ object Account {
     /// Positions (0 to 11, in order) of the words a check asks back, chosen
     /// at random.
     fun wordsToCheck(): List<Int> = (0..11).shuffled().take(WORDS_CHECKED).sorted()
+
+    /// The places (0 to 11, in order) whose answer is not the word there.
+    fun wrongPlaces(answers: Map<Int, String>, words: List<String>): List<Int> =
+        answers.filter { (place, answer) -> wordsIn(answer) != listOf(words[place]) }.keys.sorted()
+
+    /// What a check with wrong places says, numbered from 1.
+    fun wrongPlacesProblem(wrong: List<Int>): String {
+        val many = wrong.size > 1
+        return "Word${if (many) "s" else ""} ${wrong.joinToString(", ") { "${it + 1}" }} ${if (many) "don't" else "doesn't"} match."
+    }
+
+    /// Whether `Setting.WORDS_CONFIRMED` says the words were checked. Signup writes "0", a passed check
+    /// "1"; a restore writes "1" (typing all twelve back is the check), and one restored before it did has none.
+    fun wordsChecked(setting: String?): Boolean = setting != "0"
 }
 
 private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }

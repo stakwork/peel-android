@@ -98,6 +98,8 @@ import com.sphinx.peel.ui.components.AgentTag
 import com.sphinx.peel.ui.components.PeelLogo
 import com.sphinx.peel.ui.components.PersonHue
 import com.sphinx.peel.ui.components.PinPrompt
+import com.sphinx.peel.ui.components.WordCheck
+import com.sphinx.peel.ui.components.WordCheckBoxes
 import com.sphinx.peel.ui.findActivity
 import com.sphinx.peel.ui.lock.BiometricUnlock
 import com.sphinx.peel.ui.theme.Theme
@@ -811,19 +813,16 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
     }
 }
 
-private enum class WordsStage { INTRO, PIN, WORDS }
+private enum class WordsStage { INTRO, PIN, WORDS, CHECK }
 
 /// The twelve words: an intro with "Show words", the PIN, then the words
 /// masked behind "Reveal", hidden again after 30 s (counted down on screen),
 /// on "Hide", or when this screen/app leaves the foreground — PeelCore's own
-/// `WordsScreen`, trimmed: no Face ID (this port has none yet), no "check
-/// words" flow (every account here already has `WORDS_CONFIRMED` by the
-/// time it exists — a fresh signup's own mandatory 3-word check, or a
-/// restore's own stronger "typed all twelve" proof — so the row this screen
-/// opens from never shows the "not checked" branch iOS's own version still
-/// has to handle).
+/// `WordsScreen`, without Face ID. A signup that skipped onboarding's check
+/// ("Back up later", "Skip for now") is "Not checked against your paper yet":
+/// "Check words" asks the PIN, then three of the words, as iOS does.
 @Composable
-private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
+private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack: () -> Unit) {
     val host = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
     val shownForSeconds = 30
     var stage by remember { mutableStateOf(WordsStage.INTRO) }
@@ -834,16 +833,43 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
     var visible by remember { mutableStateOf(false) }
     var revealedAt by remember { mutableStateOf(0L) }
     var remaining by remember { mutableStateOf(shownForSeconds) }
+    var checked by remember { mutableStateOf(Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED))) }
+    // After the PIN: three words asked back, not the twelve shown.
+    var checking by remember { mutableStateOf(false) }
+    var check by remember { mutableStateOf(WordCheck()) }
     val scope = rememberCoroutineScope()
     SecureWindow()
 
+    // A check that ends (passed, or left) goes back to the intro; shown words go back to the PIN.
     fun hide() {
         words = emptyList()
         visible = false
         pin = ""
         problem = null
         revealedAt = 0L
+        check = WordCheck()
+        stage = if (checking) WordsStage.INTRO else WordsStage.PIN
+        checking = false
+    }
+
+    fun start(toCheck: Boolean) {
+        checking = toCheck
+        pin = ""
+        problem = null
         stage = WordsStage.PIN
+    }
+
+    fun confirm() {
+        if (!check.isFilled) return
+        val wrong = Account.wrongPlaces(check.byPosition, words)
+        if (wrong.isEmpty()) {
+            storage.apply(Storage.Commit(settings = mapOf(Setting.WORDS_CONFIRMED to "1")))
+            checked = true
+            hide()
+        } else {
+            problem = Account.wrongPlacesProblem(wrong)
+            check = WordCheck()
+        }
     }
 
     // Leaving the screen, or the app leaving the foreground, both hide the
@@ -874,10 +900,21 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         when (stage) {
             WordsStage.INTRO -> {
-                RouteHeader("Twelve words", "Checked against your paper.", onBack)
+                RouteHeader(
+                    "Twelve words",
+                    if (checked) "Checked against your paper." else "Not checked against your paper yet.",
+                    onBack,
+                )
                 Spacer(Modifier.weight(1f))
+                if (!checked) {
+                    PillButton(
+                        "Check words", onClick = { start(toCheck = true) },
+                        container = Theme.colors.accent, content = Theme.colors.buttonText,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
                 PillButton(
-                    "Show words", onClick = { stage = WordsStage.PIN },
+                    "Show words", onClick = { start(toCheck = false) },
                     container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
                 )
                 Spacer(Modifier.height(24.dp))
@@ -891,7 +928,8 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                     )
                 }
                 PinPrompt(
-                    title = "Enter your PIN", detail = problem ?: "To show your twelve words.",
+                    title = "Enter your PIN",
+                    detail = problem ?: if (checking) "To check your twelve words." else "To show your twelve words.",
                     pin = pin, onPinChange = { pin = it }, working = working,
                     onComplete = {
                         working = true
@@ -903,8 +941,14 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                                 }
                                 visible = false
                                 problem = null
-                                stage = WordsStage.WORDS
-                                revealedAt = System.currentTimeMillis()
+                                if (checking) {
+                                    pin = ""
+                                    check = WordCheck()
+                                    stage = WordsStage.CHECK
+                                } else {
+                                    stage = WordsStage.WORDS
+                                    revealedAt = System.currentTimeMillis()
+                                }
                             } catch (e: SecretStoreFailure.LockedOut) {
                                 problem = "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}."
                                 pin = ""
@@ -920,6 +964,25 @@ private fun TwelveWordsScreen(secretStore: SecretStore, onBack: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 40.dp),
                 )
+            }
+            WordsStage.CHECK -> {
+                RouteHeader("Check what you wrote", "Type these three words from your paper.", onBack = { hide() })
+                Spacer(Modifier.height(20.dp))
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    WordCheckBoxes(check = check, onSubmit = ::confirm)
+                    problem?.let {
+                        Text(
+                            it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                PillButton(
+                    "Check", onClick = ::confirm, enabled = check.isFilled,
+                    container = Theme.colors.accent, content = Theme.colors.buttonText,
+                )
+                Spacer(Modifier.height(24.dp))
             }
             WordsStage.WORDS -> {
                 RouteHeader(
