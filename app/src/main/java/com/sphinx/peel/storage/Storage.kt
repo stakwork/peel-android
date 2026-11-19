@@ -2702,20 +2702,28 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
                 }
             }
             if (!created) return
-            db.execSQL("INSERT INTO messageText(rowid, content) SELECT id, content FROM message WHERE type IN (0, 6) AND content IS NOT NULL")
-            db.execSQL(
-                "CREATE TRIGGER messageText_ai AFTER INSERT ON message WHEN new.content IS NOT NULL BEGIN " +
-                    "INSERT INTO messageText(rowid, content) VALUES (new.id, new.content); END",
-            )
-            db.execSQL(
-                "CREATE TRIGGER messageText_ad AFTER DELETE ON message WHEN old.content IS NOT NULL BEGIN " +
-                    "INSERT INTO messageText(messageText, rowid, content) VALUES ('delete', old.id, old.content); END",
-            )
-            db.execSQL(
-                "CREATE TRIGGER messageText_au AFTER UPDATE OF content ON message BEGIN " +
-                    "INSERT INTO messageText(messageText, rowid, content) SELECT 'delete', old.id, old.content WHERE old.content IS NOT NULL; " +
-                    "INSERT INTO messageText(rowid, content) SELECT new.id, new.content WHERE new.content IS NOT NULL; END",
-            )
+            try {
+                db.execSQL("INSERT INTO messageText(rowid, content) SELECT id, content FROM message WHERE type IN (0, 6) AND content IS NOT NULL")
+                db.execSQL(
+                    "CREATE TRIGGER messageText_ai AFTER INSERT ON message WHEN new.content IS NOT NULL BEGIN " +
+                        "INSERT INTO messageText(rowid, content) VALUES (new.id, new.content); END",
+                )
+                db.execSQL(
+                    "CREATE TRIGGER messageText_ad AFTER DELETE ON message WHEN old.content IS NOT NULL BEGIN " +
+                        "INSERT INTO messageText(messageText, rowid, content) VALUES ('delete', old.id, old.content); END",
+                )
+                db.execSQL(
+                    "CREATE TRIGGER messageText_au AFTER UPDATE OF content ON message BEGIN " +
+                        "INSERT INTO messageText(messageText, rowid, content) SELECT 'delete', old.id, old.content WHERE old.content IS NOT NULL; " +
+                        "INSERT INTO messageText(rowid, content) SELECT new.id, new.content WHERE new.content IS NOT NULL; END",
+                )
+            } catch (e: android.database.SQLException) {
+                // A half-built index would break every later write: drop it and let search use LIKE.
+                db.execSQL("DROP TRIGGER IF EXISTS messageText_ai")
+                db.execSQL("DROP TRIGGER IF EXISTS messageText_ad")
+                db.execSQL("DROP TRIGGER IF EXISTS messageText_au")
+                db.execSQL("DROP TABLE IF EXISTS messageText")
+            }
         }
 
         companion object {

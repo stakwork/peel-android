@@ -105,9 +105,9 @@ class ChatSearch(val chat: String) {
     /// Whether the typed query is one nobody has searched yet; if so, Return is remembered to show the first
     /// match when [found] delivers them.
     fun waitForMatches(): Boolean {
-        val typed = typed
-        if (typed.isEmpty || typed == query) return false
-        returnAwaits = typed
+        val now = typed
+        if (now.isEmpty || now == query) return false
+        returnAwaits = now
         return true
     }
 

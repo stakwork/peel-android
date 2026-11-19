@@ -16,7 +16,7 @@ import org.robolectric.RobolectricTestRunner
 class StorageSearchTest {
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
     private val account = "search-${System.nanoTime()}"
-    private val storage = Storage(context, account = account)
+    private val storage by lazy { Storage(context, account = account) }
 
     /// The history page size (`Engine.HISTORY_PAGE_SIZE`, private there): a chat's older messages are past it.
     private val page = 100
