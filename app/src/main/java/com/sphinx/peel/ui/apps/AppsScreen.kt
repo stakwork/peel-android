@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,12 +63,10 @@ import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
 import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.storage.Storage
+import com.sphinx.peel.ui.dashboard.SidebarLayoutState
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.toast.LocalToast
 import com.sphinx.peel.ui.toast.ToastType
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 
 /// Apps, from the Dashboard's top rows — `AppsScreen.swift`: Talk to Jamie on
 /// each workspace, then the apps the Stadeum workspaces pinned as tabs, A–Z,
@@ -88,9 +87,12 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var source by remember { mutableStateOf<String?>(null) }
-    var read by remember { mutableStateOf<List<WorkspaceApp>>(emptyList()) }
-    var reading by remember { mutableStateOf(false) }
-    var unreadIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    // The read is Stadeum's, shared with the Dashboard's pinned apps.
+    val read = Stadeum.apps
+    val reading = Stadeum.readingApps
+    val unreadIds = Stadeum.unreadAppIds
+    val layoutState = remember(storage) { SidebarLayoutState.of(storage) }
+    val layout = layoutState.layout
     val openPage = LocalPageOpener.current
     val publicVersion by storage.publicAppsVersion.collectAsState()
     // The connection titles move too (a first sign-in names the app).
@@ -102,21 +104,7 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     val history = remember { com.sphinx.peel.engine.TalkHistoryStore(java.io.File(context2.filesDir, "talk_history")) }
 
     // Read again on opening, and when the workspaces (or Refresh) change.
-    LaunchedEffect(live.map { it.id }, refresh) {
-        if (live.isEmpty()) { read = emptyList(); return@LaunchedEffect }
-        reading = true
-        try {
-            val results = coroutineScope {
-                live.map { peer -> async { peer to runCatching { WorkspaceApp.pinned(peer) } } }.awaitAll()
-            }
-            // A workspace that did not answer keeps the apps it last listed.
-            val kept = read.filter { app -> results.any { (p, r) -> p.id == app.peer && r.isFailure } }
-            read = kept + results.flatMap { it.second.getOrNull().orEmpty() }
-            unreadIds = results.filter { it.second.isFailure }.map { it.first.id }
-        } finally {
-            reading = false
-        }
-    }
+    LaunchedEffect(live.map { it.id }, refresh) { Stadeum.readApps() }
 
     BackHandler(onBack = onBack)
     // Conversations: a screen over the list (iOS pushes `TalkHistoryScreen`); Back returns to the list.
@@ -188,7 +176,9 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
                     item { Spacer(Modifier.size(12.dp)) }
                 }
                 items(shown, key = { it.id }) { app ->
-                    AppRow(app, several, onOpen = {
+                    AppRow(app, several, pinned = layout.isPinned(app.id), onTogglePin = {
+                        layoutState.change(layout.withPinned(app.id, !layout.isPinned(app.id)))
+                    }, onOpen = {
                         // iOS opens a page when there is one and otherwise nothing, with no word said.
                         AppsOpenDecision.page(Stadeum.openings.opening(app))?.let(openPage)
                     }, onShare = { link ->
@@ -218,12 +208,16 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit) {
+internal fun AppRow(
+    app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit,
+    /// Pinned to the Dashboard's Apps row: a small accent pin at the end.
+    pinned: Boolean = false, onTogglePin: () -> Unit = {},
+) {
     var menu by remember { mutableStateOf(false) }
     val link = app.shareLink()
     Box {
         Row(
-            Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = { if (link != null) menu = true }).padding(vertical = 10.dp),
+            Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = { menu = true }).padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             WorkspaceAppIcon(app.icon, Theme.colors.secondaryText, Modifier.size(26.dp), 20.dp)
@@ -232,11 +226,17 @@ internal fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit,
                 app.about?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
                 app.caption(showsSource)?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText) }
             }
+            if (pinned) Icon(Icons.Filled.PushPin, "Pinned to Chats", Modifier.size(14.dp).align(Alignment.CenterVertically), tint = Theme.colors.accent)
         }
         DropdownMenu(menu, { menu = false }) {
+            DropdownMenuItem(
+                text = { Text(if (pinned) "Unpin from Chats" else "Pin to Chats") },
+                leadingIcon = { Icon(Icons.Filled.PushPin, null) },
+                onClick = { menu = false; onTogglePin() },
+            )
             // Copies a link to the app: nothing is sent, and it opens only for
             // someone with that workspace connected.
-            DropdownMenuItem(text = { Text("Share link") }, onClick = { menu = false; link?.let(onShare) })
+            if (link != null) DropdownMenuItem(text = { Text("Share link") }, onClick = { menu = false; onShare(link) })
         }
     }
 }

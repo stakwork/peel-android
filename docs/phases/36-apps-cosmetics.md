@@ -27,3 +27,11 @@ iOS read from `main`: `Sources/PeelUI/WorkspaceAppIcon.swift` (+ `WorkspaceAppIc
 clash, unreadable files, JSON round trip, date/speaker words).
 ### UNTESTED
 - `AppsScreen` (pull gesture, long-press menus, icon drawing), `TalkHistoryScreen`, the save on `TalkStore.hangUp` with a live room.
+
+## Pinned apps on the Dashboard
+Built, compiled and unit-tested (SidebarLayout and the rows under Robolectric); not run on a device. A port of the Mac sidebar's pins and the iPhone's "Pinned apps on Chats" (peel `ChatSections.Layout`): an app can be pinned under the Dashboard's Apps row, sharing the Swift apps' saved state.
+- `SidebarLayout` now holds `pinnedApps` (app keys `@<workspace>/<name>`, in pin order) and `appsOpen` (the fold, default true) in the same `Setting.SIDEBAR_LAYOUT` JSON, other fields carried through; `isPinned`, `withPinned` (the first pin reopens a closed fold, re-pin never duplicates) and `pinned(apps)` are `Layout`'s. `SidebarLayoutState.of(storage)` is the one observable holder, so Apps and the Dashboard see a pin at once.
+- `Stadeum.apps`, `readingApps`, `unreadAppIds` and `suspend readApps()` (keeps a workspace's last apps when it does not answer; reads one at a time) moved out of `AppsScreen`, which still reads on open, on a workspace change, on Refresh and on a pull.
+- Dashboard: `AppsRow` has a chevron ("Pinned apps", Expanded/Collapsed) only when a listed app is pinned; open, `PinnedAppRow` per pinned app A–Z (`· @workspace` with several), a tap opens it as Apps does, long-press says Unpin. Pinned apps are read when there are saved pins and Stadeum is live, without opening Apps. Searching shows every app that matches, whose menu says Pin to Chats or Unpin. Apps: the long-press menu always opens ("Pin to Chats"/"Unpin from Chats", then "Share link"), and a pinned row has an accent pin.
+- Tests: `SidebarLayoutTest` (Swift JSON round-trip, order, duplicates, unpin, fold), `PinnedAppsUiTest`, `AppsRowsUiTest` (menu, pin icon).
+- Not tested: `Stadeum.readApps` (needs a paired workspace), the Dashboard list itself.

@@ -135,11 +135,10 @@ private fun ChatListBody(
     var allTribes by remember { mutableStateOf(false) }
     var allDirect by remember { mutableStateOf(false) }
     // Separated / Recent and "Show all" in Recent: PeelCore's `sidebarLayout` (`combinedView`, `allRecent`), kept on the device.
-    var layout by remember { mutableStateOf(SidebarLayout.decode(storage.value(Setting.SIDEBAR_LAYOUT))) }
-    fun changeLayout(next: SidebarLayout) {
-        layout = next
-        storage.apply(Storage.Commit(settings = mapOf(Setting.SIDEBAR_LAYOUT to SidebarLayout.encode(next, storage.value(Setting.SIDEBAR_LAYOUT)))))
-    }
+    // Shared with Apps (which pins from its menu), so a pin shows here at once.
+    val layoutState = remember(storage) { SidebarLayoutState.of(storage) }
+    val layout = layoutState.layout
+    fun changeLayout(next: SidebarLayout) = layoutState.change(next)
     // Separated / Recent is the synced `peel.chats_recent_view`; until it was ever chosen, the layout's own `combinedView` stands.
     var recentView by remember { mutableStateOf(engine.chatsRecentView() ?: layout.combinedView) }
     val restoreProgress by engine.restoreProgress.collectAsState()
@@ -149,6 +148,35 @@ private fun ChatListBody(
     var openedApps by remember { mutableStateOf(false) }
     LaunchedEffect(publicApps) { openedApps = withContext(Dispatchers.Default) { storage.openedApps().isNotEmpty() } }
     val showsApps = Stadeum.showsApps(openedApps)
+    // The apps under the Apps row, A–Z (the Mac's sidebar): the pinned ones while the fold is open, or, searching, every app that
+    // matches. Read by `Stadeum.readApps`, shared with Apps; only the workspaces in use.
+    val openPage = com.sphinx.peel.ui.apps.LocalPageOpener.current
+    val live = Stadeum.live
+    val liveIds = live.map { it.id }
+    val listedApps = com.sphinx.peel.engine.WorkspaceApp.byTitle(
+        com.sphinx.peel.engine.AppsOpenDecision.visible(Stadeum.apps, liveIds.toSet()),
+    )
+    val hasPins = live.isNotEmpty() && layout.pinned(listedApps).isNotEmpty()
+    val searchingApps = query.isNotBlank()
+    val underApps = when {
+        live.isEmpty() -> emptyList()
+        searchingApps -> listedApps.filter { it.matches(query) }
+        layout.appsOpen -> layout.pinned(listedApps)
+        else -> emptyList()
+    }
+    val appsSeveral = listedApps.mapNotNull { it.peer }.toSet().size > 1
+    @Composable
+    fun pinnedRow(app: com.sphinx.peel.engine.WorkspaceApp) {
+        val pinned = layout.isPinned(app.id)
+        PinnedAppRow(app, appsSeveral, pinned, onOpen = {
+            // As Apps does: a page when there is one, otherwise nothing.
+            com.sphinx.peel.engine.AppsOpenDecision.page(Stadeum.openings.opening(app))?.let(openPage)
+        }, onTogglePin = { changeLayout(layout.withPinned(app.id, !pinned)) })
+    }
+    // Pins show without opening Apps first: read when there are saved pins (or a search wants the apps) and Stadeum is live.
+    LaunchedEffect(liveIds, layout.pinnedApps.isNotEmpty(), searchingApps) {
+        if (live.isNotEmpty() && (layout.pinnedApps.isNotEmpty() || (searchingApps && Stadeum.apps.isEmpty()))) Stadeum.readApps()
+    }
 
     // No reactive query layer yet (no Room, no Flow-backed DB) to push a
     // row the moment a live message lands — re-reads on every restore
@@ -190,7 +218,7 @@ private fun ChatListBody(
     val searching = sections.searching
     val recent = recentView && !searching
     val noMatches = searching && sections.unread.isEmpty() && sections.tribes.isEmpty() &&
-        sections.direct.isEmpty() && agentConversation == null
+        sections.direct.isEmpty() && agentConversation == null && underApps.isEmpty()
 
     Box(modifier) {
         if (conversations.isEmpty() && !searching) {
@@ -207,11 +235,19 @@ private fun ChatListBody(
                 // appears as soon as You › Stadeum pairs), or (Android) with
                 // a public app opened here.
                 if (!searching) {
-                    if (showsApps) item { NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) } }
+                    if (showsApps) item(key = "apps-row") {
+                        AppsRow(fold = if (hasPins) layout.appsOpen else null, onToggleFold = { changeLayout(layout.copy(appsOpen = !layout.appsOpen)) }) {
+                            onOpenRoute(DashboardRoute.APPS)
+                        }
+                    }
+                    items(underApps, key = { "pinned-${it.id}" }) { app -> pinnedRow(app) }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
                     item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }
                 }
+
+                // Searching shows every app that matches, as the Mac's sidebar does.
+                if (searching) items(underApps, key = { "found-${it.id}" }) { app -> pinnedRow(app) }
 
                 if (sections.unread.isNotEmpty()) {
                     item { SectionHeader("Unread", expanded = true, onToggle = null) }
