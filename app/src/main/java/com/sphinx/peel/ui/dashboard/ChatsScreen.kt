@@ -143,10 +143,11 @@ private fun ChatListBody(
     var recentView by remember { mutableStateOf(engine.chatsRecentView() ?: layout.combinedView) }
     val restoreProgress by engine.restoreProgress.collectAsState()
     val liveCalls = rememberLiveCallCounts(engine, storage)
-    // A stranger's public app opened here (a worker's, from a Stadeum's invite link) shows Apps too: read again as one is kept or forgotten.
+    // A stranger's public app opened here shows Apps too: read again as one is kept or forgotten. Not an employer's Tasks page, which
+    // the Tasks tab holds and Apps does not list (docs/phases/48-tasks-tab.md): with only those, no Apps row.
     val publicApps by storage.publicAppsVersion.collectAsState()
     var openedApps by remember { mutableStateOf(false) }
-    LaunchedEffect(publicApps) { openedApps = withContext(Dispatchers.Default) { storage.openedApps().isNotEmpty() } }
+    LaunchedEffect(publicApps) { openedApps = withContext(Dispatchers.Default) { com.sphinx.peel.engine.TasksTab.others(storage.openedApps()).isNotEmpty() } }
     val showsApps = Stadeum.showsApps(openedApps)
     // The apps under the Apps row, A–Z (the Mac's sidebar): the pinned ones while the fold is open, or, searching, every app that
     // matches. Read by `Stadeum.readApps`, shared with Apps; only the workspaces in use.

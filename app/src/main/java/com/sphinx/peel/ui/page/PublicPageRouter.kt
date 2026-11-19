@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.OrgPageRequest
 import com.sphinx.peel.engine.PublicAppLink
+import com.sphinx.peel.engine.TasksTab
 
 /// The two pages Peel can show over everything, and where a `peel://open?url=…` link goes (iOS `PhoneRouter`: `orgPage`, `publicPage`,
 /// `waitingLink`, `open(peelLink:)`, `openWaitingLink()`, `reset()`, and the lock in `PeelPhoneApp`). iOS's rules, no more:
@@ -18,9 +19,17 @@ import com.sphinx.peel.engine.PublicAppLink
 ///
 /// [opened] is told of each public page as it comes on screen, whichever way it came (a link, a worker's invite link, the Apps list):
 /// the account keeps it for the Apps list (`Storage.rememberPublicApp`, docs/phases/41-worker-onboarding.md; Android only).
+///
+/// Android only: an employer's Tasks page (`TasksTab.isTasks`, strut's `strut/worker`) does not open over everything. It goes to
+/// [tasksPage] for `MainTabs`, which shows it in the Tasks tab with the tab bar kept (docs/phases/48-tasks-tab.md). It still replaces
+/// both pages over everything, as any `peel://` link does, so the tab is not left under one.
 class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
     /// The stranger's page on screen, if any (iOS `publicPage`).
     var page by mutableStateOf<PublicAppLink?>(null)
+        private set
+
+    /// A Tasks page to show in the Tasks tab, until `MainTabs` takes it ([tasksTaken]).
+    var tasksPage by mutableStateOf<PublicAppLink?>(null)
         private set
 
     /// An org's page on screen, if any (iOS `orgPage`): a workspace's app, a deliverable, a tapped Hive link.
@@ -33,22 +42,30 @@ class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
 
     /// iOS `open(peelLink:)`; [ready]: the account is unlocked (`model.phase == .ready`).
     fun open(link: PublicAppLink, ready: Boolean) {
-        if (ready) {
-            orgPage = null
-            page = link
-            opened(link)
-        } else {
-            waitingLink = link
-        }
+        if (ready) show(link) else waitingLink = link
     }
 
     /// iOS `openWaitingLink()`: called when Peel unlocked.
     fun openWaitingLink() {
         val link = waitingLink ?: return
         waitingLink = null
+        show(link)
+    }
+
+    private fun show(link: PublicAppLink) {
         orgPage = null
-        page = link
+        if (TasksTab.isTasks(link)) {
+            page = null
+            tasksPage = link
+        } else {
+            page = link
+        }
         opened(link)
+    }
+
+    /// `MainTabs` has the Tasks page in its tab.
+    fun tasksTaken() {
+        tasksPage = null
     }
 
     /// iOS `router.orgPage = request`.
@@ -71,16 +88,19 @@ class PublicPageRouter(private val opened: (PublicAppLink) -> Unit = {}) {
         orgPage = null
     }
 
-    /// The account locked (or failed to open): both pages close; a waiting link stays for the next unlock.
+    /// The account locked (or failed to open): both pages close (the Tasks tab's goes with the tabs); a waiting link stays for the
+    /// next unlock.
     fun locked() {
         orgPage = null
         page = null
+        tasksPage = null
     }
 
     /// The app is back at onboarding (signed out or wiped): no page, no waiting link.
     fun reset() {
         orgPage = null
         page = null
+        tasksPage = null
         waitingLink = null
     }
 }

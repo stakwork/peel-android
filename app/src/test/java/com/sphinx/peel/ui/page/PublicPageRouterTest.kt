@@ -131,4 +131,43 @@ class PublicPageRouterTest {
         router.workspacesChanged(listOf(acme.copy(id = "other")))
         assertNull(router.orgPage)
     }
+
+    // The Tasks tab (docs/phases/48-tasks-tab.md): an employer's Tasks page goes to the tab, never over everything.
+    private val tasks = PublicAppLink.of("https://acme.example.com/?app=strut%2Fworker&solo=1&public=1")!!
+
+    @Test fun aTasksLinkWaitingForSignupOpensInTheTab() {
+        val seen = mutableListOf<PublicAppLink>()
+        val router = PublicPageRouter(opened = { seen += it })
+        router.open(tasks, ready = false)
+        assertNull(router.tasksPage)
+        router.openWaitingLink()
+        assertEquals(tasks, router.tasksPage)
+        assertNull("not a page over Chats", router.page)
+        assertEquals("kept, so the tab shows", listOf(tasks), seen)
+        router.tasksTaken()
+        assertNull(router.tasksPage)
+    }
+
+    @Test fun aTasksLinkClosesThePagesOverEverything() {
+        val router = PublicPageRouter()
+        router.open(a, ready = true)
+        router.openOrg(board)
+        router.open(tasks, ready = true)
+        assertNull(router.page)
+        assertNull(router.orgPage)
+        assertEquals(tasks, router.tasksPage)
+        // Another public app still opens over everything.
+        router.open(b, ready = true)
+        assertEquals(b, router.page)
+    }
+
+    @Test fun aLockOrResetDropsATasksPageNotYetTaken() {
+        val router = PublicPageRouter()
+        router.open(tasks, ready = true)
+        router.locked()
+        assertNull(router.tasksPage)
+        router.open(tasks, ready = true)
+        router.reset()
+        assertNull(router.tasksPage)
+    }
 }
