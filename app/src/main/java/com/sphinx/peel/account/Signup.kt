@@ -17,15 +17,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 /// A new account made from an invite: the only way into the app for someone without
 /// words to restore. Ported from PeelCore's `Account.signup` (Account.swift).
 object Signup {
-    /// A new account, with the words the person must write down.
-    class Created(
-        val engine: Engine,
-        val mnemonic: String,
-        /// False when the server has not confirmed the register (yet): the account is kept and
-        /// registers again on each connect; say so ([SignupRules.NOT_CONFIRMED]).
-        val confirmed: Boolean,
-    )
-
     /// Why a signup ended with no account; the message is for the person.
     class Failed(message: String) : Exception(message)
 
@@ -38,7 +29,12 @@ object Signup {
     /// written (the name, the server — kept for every later connect —, the invite) BEFORE
     /// anything connects, so an app killed mid-way still registers with the invite when it opens;
     /// then the engine connects. The profile is removed again only if no register can have
-    /// reached the server ([SignupRules.keepAccount]).
+    /// reached the server ([SignupRules.keepAccount]). The words are not returned: the person
+    /// sees them later in You › Twelve words (`WORDS_CONFIRMED` "0" says "Not checked yet").
+    ///
+    /// The engine returned may not be registered yet (`isRegistered` false): the server has not
+    /// confirmed the register, the account is kept, and it registers again on each connect; the
+    /// connection line says so ([SignupRules.NOT_CONFIRMED]).
     suspend fun create(
         secretStore: SecretStore,
         storage: Storage,
@@ -46,7 +42,7 @@ object Signup {
         alias: String,
         pin: String,
         network: String = "bitcoin",
-    ): Created = withContext(Dispatchers.Default) {
+    ): Engine = withContext(Dispatchers.Default) {
         val address = try {
             ServerAddress.named(invite.server ?: throw InviteProblem.NO_SERVER)
         } catch (e: IllegalArgumentException) {
@@ -82,13 +78,13 @@ object Signup {
         val outcome = withTimeoutOrNull(CONNECT_WAIT_MS) {
             engine.connectionState.first { it is ConnectionState.Connected || it is ConnectionState.Failed }
         }
-        if (outcome is ConnectionState.Connected) return@withContext Created(engine, mnemonic, confirmed = true)
+        if (outcome is ConnectionState.Connected) return@withContext engine
 
         if (SignupRules.keepAccount(engine.isRegistered, engine.inviteMayBeRedeemed)) {
             // Kept unconfirmed: a register may have landed. Disconnected, as PeelCore does; it is made
             // again, with the stored invite, as the account connects next.
             runCatching { engine.disconnect() }
-            return@withContext Created(engine, mnemonic, confirmed = engine.isRegistered)
+            return@withContext engine
         }
         val reason = (outcome as? ConnectionState.Failed)?.message ?: "The server did not answer in time."
         discard(secretStore, storage, engine)

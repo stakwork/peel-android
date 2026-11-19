@@ -1,6 +1,7 @@
 # Phase 47 — The twelve words can wait
 
-Status (2026-11-19): **built; JVM tests written (`AccountTest`); not run on a device or emulator.**
+Status (2026-11-19): **built; JVM tests written (`AccountTest`); not run on a device or emulator.** Later the same day,
+onboarding stopped showing the words at all (Update below).
 
 ## Why
 
@@ -21,11 +22,21 @@ Many people signing up (a worker from an invite, phase 41) don't know what recov
   "Words 4, 12 don't match.". Only "0" reads as not checked: an account restored before restores wrote "1" has no value, and typed
   all twelve.
 
+## Update (2026-11-19): no words at signup
+
+Evan: a new account doesn't need the twelve words at all for now; revisit once an account holds enough to lose (its app balance
+past some amount). Onboarding's "Write down your twelve words" and "Check what you wrote" steps are gone: a new account is invite,
+name, PIN (3 steps), then Peel opens (`OnboardingScreen.kt`: an unconfirmed signup resumes, then `onAccountReady`, as
+`openPeel` did). `Signup.create` returns the `Engine` (`Signup.Created` held the words for that screen only); an unconfirmed
+register still says `SignupRules.NOT_CONFIRMED`, on the connection line instead of the words screen. You › Twelve words is
+unchanged: "Not checked yet", Check words, Show words. Restore is unchanged.
+
 ## Not built
 
-- No reminder beyond the You row (iOS has none either).
-- iPhone and Mac onboarding still require the check (`peel`'s `Onboarding.swift`, `OnboardingView.swift`).
+- No reminder beyond the You row (iOS has none either), and none tied to the balance yet.
+- iPhone and Mac onboarding still show the words and require the check (`peel`'s `Onboarding.swift`, `OnboardingView.swift`).
 
 ## UNTESTED (needs a device)
 
-- The two buttons on a real signup, the row and the check in You, and the check after the app is backgrounded mid-way.
+- A real signup going straight from the PIN to Peel, the row and the check in You, and the check after the app is backgrounded
+  mid-way.
