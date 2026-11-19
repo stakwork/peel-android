@@ -16,6 +16,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.withLock
 
 /// Where a device's Hive pairing is kept (iOS `SecretItem`, `Profile.hive`):
 /// a Keystore-wrapped file per account on a phone (`KeystoreHiveStore`).
@@ -347,6 +350,37 @@ object Stadeum {
     val model = StadeumModel()
 
     val live: List<HivePeer> get() = model.live
+
+    /// The workspaces' pinned apps as last read (`readApps`), shared by Apps and the Dashboard's pinned apps; not yet filtered to the
+    /// workspaces in use (`AppsOpenDecision.visible`). Observable.
+    var apps: List<WorkspaceApp> by mutableStateOf(emptyList()); private set
+    /// A read is under way.
+    var readingApps: Boolean by mutableStateOf(false); private set
+    /// The workspaces that did not answer the last read.
+    var unreadAppIds: List<String> by mutableStateOf(emptyList()); private set
+    private val appsReading = kotlinx.coroutines.sync.Mutex()
+
+    /// Reads each live workspace's pinned apps on its own strut, together. A workspace that did not answer keeps the apps it last
+    /// listed. Reads one at a time (a second waits for the first), and a read cancelled with its screen lets go cleanly.
+    suspend fun readApps(fetch: suspend (HivePeer) -> List<WorkspaceApp> = { WorkspaceApp.pinned(it) }) {
+        appsReading.withLock {
+            val peers = live
+            if (peers.isEmpty()) { apps = emptyList(); unreadAppIds = emptyList(); return }
+            readingApps = true
+            try {
+                val results = coroutineScope {
+                    peers.map { peer -> async { peer to runCatching { fetch(peer) } } }.awaitAll()
+                }
+                results.forEach { (_, r) -> (r.exceptionOrNull() as? CancellationException)?.let { throw it } }
+                val kept = apps.filter { app -> results.any { (p, r) -> p.id == app.peer && r.isFailure } }
+                apps = kept + results.flatMap { it.second.getOrNull().orEmpty() }
+                unreadAppIds = results.filter { it.second.isFailure }.map { it.first.id }
+            } finally {
+                readingApps = false
+            }
+        }
+    }
+
     val openings: Openings get() = model.openings
 
     /// A development workspace to talk to Jamie on; none is configured here (Android has no dev setting).
