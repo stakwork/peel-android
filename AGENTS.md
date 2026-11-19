@@ -114,6 +114,10 @@ sections for code that isn't written yet.
   - `engine/BoxLink.kt` (`PeelLink`, `BoxChallenge`, `BoxLinkOffer`, `BoxLink`, `BoxClient`/`BoxHttp`), `engine/Boxes.kt` (`BoxesModel`, `Boxes.model`, `BoxWords`), `account/BoxStore.kt` (`KeystoreBoxStore`), `Engine.signBoxLink` — Peel linked to a strut box
     (`docs/phases/45-box-link.md`, port of peel#574): `peel://strut/link`, the box list beside Hive's pairing (never in it), renewal, You › Boxes; a box's page is the one page host's.
   - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
+  - `engine/MessageQuery.kt`, `ChatSearch.kt`, `Storage.searchMessages` (+ `Storage` v19: `message.content`, FTS5 `messageText`, `LIKE` fallback),
+    `ui/dashboard/ChatSearchBar.kt` — in-chat message search (`docs/phases/05-conversation.md` "In-chat search", port of peel#576): `MessageQuery`
+    (words, "phrases", `from:`; `ftsMatch`, `snippet`), `ChatSearch` (observable state: status, stepping, `historyNote` while history still syncs,
+    Return waiting for matches); the bar and the results sheet; the chat's 3-dots menu starts it. Not compiled or run when written.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

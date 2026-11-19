@@ -33,6 +33,7 @@ import com.sphinx.peel.engine.InviteRecord
 import com.sphinx.peel.engine.InviteRules
 import com.sphinx.peel.engine.InvoiceRecord
 import com.sphinx.peel.engine.Mentions
+import com.sphinx.peel.engine.MessageQuery
 import com.sphinx.peel.engine.PaymentRecord
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +50,9 @@ import org.json.JSONObject
 /// know a message's type by its number at all.
 private const val attachmentMessageType = 6
 private const val deleteMessageType = 17
+
+/// The message types whose `content` is searchable (iOS types 0 and 6): text and an attachment's caption.
+private const val textMessageType = 0
 
 /// The messages of ours that carry sats and are tracked until the server says how it went
 /// (PeelCore's `MessageType.moneySends`: direct payment 5, boost 29, purchase 7, purchase deny 9).
@@ -222,6 +226,14 @@ private fun extractThreadUuid(body: String?): String? =
 /// A message's own text, from `body`'s `content` field.
 private fun messageContent(body: String?): String =
     body?.let { runCatching { JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
+
+/// What the search index holds for a message: its text, for the types that have any a person would look for
+/// (text, an attachment's caption); null for the rest and for an empty one.
+private fun searchContent(type: Int, body: String?): String? =
+    if (type == textMessageType || type == attachmentMessageType) messageContent(body).takeIf { it.isNotEmpty() } else null
+
+/// A `LIKE` pattern's own characters made literal (the query's `ESCAPE '\'`).
+private fun escapeLike(text: String): String = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 /// A row's own claimed sender alias, from its raw `sender` JSON — used
 /// only by `Storage.applyDeletes`'s own authorization check (matching a
@@ -739,6 +751,47 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
 
     fun messages(chat: String): List<MessageRow> = readMessages("chat = ?", arrayOf(chat), "timestamp ASC, id ASC")
 
+    /// A chat's messages matching [query], newest first (`timestamp DESC, id DESC`), at most [limit], deleted
+    /// ones never, thread messages included — the whole stored history, not a page of it (iOS `searchMessages`).
+    /// Every term must be in the message's text or caption, in any order: through the FTS5 index `messageText`
+    /// (v19) when this device's SQLite could build it, else (or if it fails) a `LIKE` over `content`, which
+    /// matches the same words but is case-insensitive for ASCII only and blind to accents. `from:` keeps the
+    /// messages whose sender's alias contains the name (case-insensitive; our own are ours, a direct
+    /// message's other side is the contact's alias) — decided here, in Kotlin, since a sender is stored as JSON.
+    fun searchMessages(query: MessageQuery, chat: String, limit: Int = 1000): List<MessageRow> {
+        if (query.isEmpty || limit <= 0) return emptyList()
+        val db = helper.readableDatabase
+        val order = "timestamp DESC, id DESC"
+        val base = "chat = ? AND deleted = 0 AND content IS NOT NULL"
+        // A `from:` filter runs after the query, so the limit then does too.
+        val sqlLimit = if (query.from == null) limit.toString() else null
+        var rows: List<MessageRow>? = null
+        if (query.terms.isNotEmpty() && hasMessageIndex(db)) {
+            rows = try {
+                readMessages(
+                    "$base AND id IN (SELECT rowid FROM messageText WHERE messageText MATCH ?)",
+                    arrayOf(chat, query.ftsMatch), order, sqlLimit,
+                )
+            } catch (e: android.database.SQLException) {
+                null
+            }
+        }
+        val found: List<MessageRow> = rows ?: run {
+            val like = query.terms.joinToString("") { " AND content LIKE ? ESCAPE '\\'" }
+            readMessages(base + like, arrayOf(chat) + query.terms.map { "%" + escapeLike(it) + "%" }, order, sqlLimit)
+        }
+        val name = query.from ?: return found
+        val mine = value(Setting.ALIAS)
+        val theirs = db.rawQuery("SELECT alias FROM contact WHERE pubkey = ?", arrayOf(chat)).use { if (it.moveToFirst()) it.getString(0) else null }
+        return found.filter { row ->
+            val alias = aliasOf(row.sender) ?: if (row.fromMe) mine else theirs
+            alias != null && alias.contains(name, ignoreCase = true)
+        }.take(limit)
+    }
+
+    private fun hasMessageIndex(db: SQLiteDatabase): Boolean =
+        db.rawQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messageText'", null).use { it.moveToFirst() }
+
     /// The newest `limit` messages that mention this account's own tribe
     /// alias, newest first — PeelCore's `Storage.mentions()`. There is no
     /// `mentionsMe` column here: a SQL prefilter (someone else's, not deleted,
@@ -768,7 +821,7 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
         ).filter { row -> Mentions.mentions(messageContent(row.body), aliases) }
     }
 
-    private fun readMessages(selection: String, args: Array<String>, orderBy: String): List<MessageRow> {
+    private fun readMessages(selection: String, args: Array<String>, orderBy: String, limit: String? = null): List<MessageRow> {
         val rows = mutableListOf<MessageRow>()
         helper.readableDatabase.query(
             "message",
@@ -776,7 +829,7 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
                 "id", "uuid", "serverIndex", "type", "chat", "fromMe", "sender", "body", "msat", "timestamp", "tag",
                 "paymentHash", "status", "replyUuid", "threadUuid", "deleted", "firstSentAt", "autoResentAt",
             ),
-            selection, args, null, null, orderBy,
+            selection, args, null, null, orderBy, limit,
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 rows.add(
@@ -844,6 +897,8 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
                     // only ever sets `body`).
                     put("replyUuid", extractReplyUuid(row.body))
                     put("threadUuid", extractThreadUuid(row.body))
+                    // What the search index reads (`messageText`, v19); its triggers keep the index in step.
+                    put("content", if (row.deleted) null else searchContent(row.type, row.body))
                     // A control message in a direct message is a line, never unread (iOS `isControl`; not in a tribe).
                     put("isControl", if (ControlMessages.control(row.type, row.deleted, row.body) != null && !isTribe(db, row.chat)) 1 else 0)
                 }
@@ -968,7 +1023,7 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
                     }
                     if (!allowed) return@use
                     db.execSQL(
-                        "UPDATE message SET deleted = 1, body = NULL WHERE id = ?",
+                        "UPDATE message SET deleted = 1, body = NULL, content = NULL WHERE id = ?",
                         arrayOf(target.getLong(0)),
                     )
                 }
@@ -2218,7 +2273,7 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
 
     companion object {
         /// The schema version the app's database is at (a seam: tests assert it rather than a number of their own).
-        const val VERSION = 18
+        const val VERSION = 19
     }
 
     fun deleteAccount() {
@@ -2253,6 +2308,7 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
             v16(db)
             v17(db)
             v18(db)
+            v19(db)
         }
 
         // Append only, same rule PeelCore's migrator follows: a new version
@@ -2276,6 +2332,7 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
             if (oldVersion < 16) v16(db)
             if (oldVersion < 17) v17(db)
             if (oldVersion < 18) v18(db)
+            if (oldVersion < 19) v19(db)
         }
 
         private fun v1(db: SQLiteDatabase) {
@@ -2615,6 +2672,49 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
         private fun v18(db: SQLiteDatabase) {
             db.execSQL(
                 "CREATE TABLE site_location (origin TEXT PRIMARY KEY NOT NULL, allowed INTEGER NOT NULL, precise INTEGER NOT NULL, decidedAt INTEGER NOT NULL)",
+            )
+        }
+
+        // In-chat search (iOS `messageText`, peel#576; docs/phases/05-conversation.md "In-chat search"). iOS indexes a `message.content`
+        // column; here the text is inside `body`'s JSON, so v19 adds the column (set when stored, here backfilled from `body` as v6 did
+        // for replyUuid) for text and attachment captions (types 0 and 6). Then an FTS5 external-content table over it, trigram tokenizer
+        // (`remove_diacritics` needs SQLite 3.45), backfilled and kept in step by triggers. If this device's SQLite has no FTS5 or no
+        // trigram tokenizer the table is simply not made and `Storage.searchMessages` uses `LIKE`.
+        private fun v19(db: SQLiteDatabase) {
+            db.execSQL("ALTER TABLE message ADD COLUMN content TEXT")
+            db.query("message", arrayOf("id", "type", "body"), "type IN (0, 6) AND deleted = 0 AND body IS NOT NULL", null, null, null, null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val content = searchContent(cursor.getInt(1), cursor.getString(2)) ?: continue
+                    db.execSQL("UPDATE message SET content = ? WHERE id = ?", arrayOf<Any>(content, cursor.getLong(0)))
+                }
+            }
+            val version = db.rawQuery("SELECT sqlite_version()", null).use { if (it.moveToFirst()) it.getString(0) else "" }
+            val parts = version.split('.').mapNotNull { it.toIntOrNull() }
+            val modern = parts.size >= 2 && (parts[0] > 3 || (parts[0] == 3 && parts[1] >= 45))
+            var created = false
+            for (tokenizer in if (modern) listOf("trigram remove_diacritics 1", "trigram") else listOf("trigram")) {
+                try {
+                    db.execSQL("CREATE VIRTUAL TABLE messageText USING fts5(content, content='message', content_rowid='id', tokenize='$tokenizer')")
+                    created = true
+                    break
+                } catch (e: android.database.SQLException) {
+                    // No FTS5, or no such tokenizer: try the next, else search falls back to LIKE.
+                }
+            }
+            if (!created) return
+            db.execSQL("INSERT INTO messageText(rowid, content) SELECT id, content FROM message WHERE type IN (0, 6) AND content IS NOT NULL")
+            db.execSQL(
+                "CREATE TRIGGER messageText_ai AFTER INSERT ON message WHEN new.content IS NOT NULL BEGIN " +
+                    "INSERT INTO messageText(rowid, content) VALUES (new.id, new.content); END",
+            )
+            db.execSQL(
+                "CREATE TRIGGER messageText_ad AFTER DELETE ON message WHEN old.content IS NOT NULL BEGIN " +
+                    "INSERT INTO messageText(messageText, rowid, content) VALUES ('delete', old.id, old.content); END",
+            )
+            db.execSQL(
+                "CREATE TRIGGER messageText_au AFTER UPDATE OF content ON message BEGIN " +
+                    "INSERT INTO messageText(messageText, rowid, content) SELECT 'delete', old.id, old.content WHERE old.content IS NOT NULL; " +
+                    "INSERT INTO messageText(rowid, content) SELECT new.id, new.content WHERE new.content IS NOT NULL; END",
             )
         }
 
