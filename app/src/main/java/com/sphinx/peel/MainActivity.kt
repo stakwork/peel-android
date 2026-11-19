@@ -103,12 +103,39 @@ class MainActivity : FragmentActivity() {
         val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
         // Only an invite link, and only ever held in memory: never logged or stored.
         val link = InviteLink.fromDeepLink(data.scheme, data.getQueryParameter("action"), data.toString()) ?: return
+        // A tapped link wins: the clipboard is not read for an invite after one.
+        clipboardInviteChecked = true
+        takeInvite(link)
+    }
+
+    private fun takeInvite(link: String) {
         inviteLink = link
         // A worker's invite link (`&a=`, docs/phases/41-worker-onboarding.md) also names a public app: it goes the way a
         // `peel://open` link does, so it opens once the account is unlocked: at once for an account already here (whose invite
         // part is ignored, as before), after signup for a new one. A link with no valid `a=` is only the invite, as before.
         InviteLink.appOf(link)?.let { publicLink = it }
     }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) takeClipboardInvite()
+    }
+
+    /// The invite strut's join page copied as it downloaded Peel (docs/phases/46-invite-from-clipboard.md): nothing carries a
+    /// tapped link across an install, so a Peel with no account and no invite in hand looks on the clipboard, once a process,
+    /// at its first focus (Android lets only the focused app read it). A whole `sphinx.chat://?action=i&…` link alone is
+    /// taken, as a tapped one is (its `a=` included), and cleared from the clipboard; it is never logged or stored.
+    private fun takeClipboardInvite() {
+        if (clipboardInviteChecked || inviteLink != null) return
+        clipboardInviteChecked = true
+        if (secretStore.hasMnemonic) return
+        val text = ClipboardUtil.readText(this) ?: return
+        val link = InviteLink.fromClipboard(text) ?: return
+        takeInvite(link)
+        ClipboardUtil.clearIfUnchanged(this, text)
+    }
+
+    private lateinit var secretStore: FileSecretStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,7 +153,7 @@ class MainActivity : FragmentActivity() {
         }
         deepLink = DeepLink.from(intent)
         if (savedInstanceState == null) takeBoxLink(intent)
-        val secretStore = FileSecretStore(applicationContext)
+        secretStore = FileSecretStore(applicationContext)
         val storage = Storage(applicationContext)
         setContent {
             PeelTheme {
@@ -374,3 +401,7 @@ private fun InviterNotice(engine: Engine) {
 
 /// Whether this process has already noted its cold-launch lock (`Diagnostics.recordLock`).
 private var coldLockNoted = false
+
+/// Whether this process has looked on the clipboard for an invite (`MainActivity.takeClipboardInvite`): once, not again
+/// on a rotation or at every return to the app.
+private var clipboardInviteChecked = false

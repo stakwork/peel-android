@@ -133,4 +133,23 @@ class InviteLinkTest {
         InviteLink.parse(withApp, InviteReader { seen = it; InviteFields("c0de", "lsp.example:8883", info, null) })
         assertEquals(withApp, seen)
     }
+
+    @Test
+    fun `an invite link on the clipboard is taken whole with its app, and nothing else someone copied is`() {
+        val app = "https%3A%2F%2Fs.example%2F%3Fapp%3Dstrut%252Fworker%26solo%3D1%26public%3D1"
+        val copied = "sphinx.chat://?action=i&d=abc&c=BBBB&a=$app"
+        assertEquals(copied, InviteLink.fromClipboard(copied))
+        assertEquals("trimmed", copied, InviteLink.fromClipboard("  $copied\n"))
+        assertEquals("https://s.example/?app=strut%2Fworker&solo=1&public=1", InviteLink.appOf(InviteLink.fromClipboard(copied)!!)?.url)
+        assertEquals("SPHINX.CHAT://?action=i&d=abc", InviteLink.fromClipboard("SPHINX.CHAT://?action=i&d=abc"))
+        for (other in listOf(
+            null, "", "   ", "hello", "d=abc", "action=i&d=abc",
+            "https://s.example/public/join#action=i&d=abc",
+            "sphinx.chat://?action=tribeV2&pubkey=x",
+            "sphinx.chat://?action=i", "sphinx.chat://?action=i&d=", "sphinx.chat://?d=abc",
+            "sphinx.chat://?action=i&action=i&d=abc",
+            "sphinx.chat://?action=i&d=abc and more words",
+            "sphinx.chat://?action=i&d=" + "a".repeat(InviteLink.MAX_LENGTH),
+        )) assertNull(other, InviteLink.fromClipboard(other))
+    }
 }
