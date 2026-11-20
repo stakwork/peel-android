@@ -17,6 +17,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.sphinx.peel.ui.payments.QrCodeImage
+import com.sphinx.peel.ui.toast.LocalToast
+import com.sphinx.peel.ui.toast.ToastType
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
@@ -145,6 +153,54 @@ fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForg
 
 private val CardShape = RoundedCornerShape(24.dp)
 
+/// "Your contact info" (the Mac app's Account › Profile card): a QR and a copy
+/// button for the full `<pubkey>_<lsp>_<scid>`; never a bare pubkey.
+@Composable
+private fun ContactInfoCard(contactInfo: String?) {
+    val clipboard = LocalClipboardManager.current
+    val toast = LocalToast.current
+    Box(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).padding(16.dp)) {
+        if (contactInfo == null) {
+            Column {
+                Text("Your contact info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                Spacer(Modifier.height(4.dp))
+                Text("Not ready yet", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+            }
+            return@Box
+        }
+        val qr: @Composable () -> Unit = { QrCodeImage(contactInfo, 120.dp, "QR code of your contact info") }
+        val text: @Composable (Modifier) -> Unit = { modifier ->
+            Column(modifier) {
+                Text("Your contact info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = {
+                    clipboard.setText(AnnotatedString(contactInfo))
+                    toast.show("Copied", ToastType.Success)
+                }) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Copy contact info")
+                }
+            }
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < 320.dp) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    qr()
+                    Spacer(Modifier.height(12.dp))
+                    text(Modifier.fillMaxWidth())
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    qr()
+                    Spacer(Modifier.width(16.dp))
+                    text(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun YouMain(
     engine: Engine,
@@ -258,6 +314,11 @@ private fun YouMain(
                     color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
                 )
             }
+        }
+
+        item {
+            ContactInfoCard(YouOptions.contactInfoToShare(storage.value(Setting.CONTACT_INFO)))
+            Spacer(Modifier.height(24.dp))
         }
 
         item { SectionHeader("Agent") }

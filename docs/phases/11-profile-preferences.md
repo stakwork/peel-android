@@ -388,3 +388,10 @@ PIN:**
   thing worth porting at full fidelity even while everything else
   about a feature gets deliberately trimmed — the cost of skipping it
   isn't paid locally, which is what makes it easy to underweight.
+
+## Your contact info card (You tab)
+
+Built: a card under the profile header showing a QR and "Copy contact info" for the full stored
+`Setting.CONTACT_INFO` (`<pubkey>_<lsp_pubkey>_<scid>`, as the Mac/iOS Account › Profile card); "Not ready yet" until it is
+stored. `YouOptions.contactInfoToShare` is the pure, JVM-tested readiness check (a bare pubkey is never shown). UNTESTED on a
+device. Known separate issue: contact Details on iPhone shares a bare public key Peel itself rejects (not fixed here).
