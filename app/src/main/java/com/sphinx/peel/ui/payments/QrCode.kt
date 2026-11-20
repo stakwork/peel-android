@@ -52,7 +52,33 @@ object QrCode {
     } catch (e: com.google.zxing.FormatException) {
         null
     }
+
+    /// Like [decode], but also where the code is: its corners from the three
+    /// finder patterns ZXing reports ([ScanGeometry.corners]). Null when there
+    /// is no code; a code ZXing read but gave too few points for is still a hit,
+    /// with no corners.
+    fun detect(luminance: ByteArray, width: Int, height: Int): QrHit? {
+        val bitmap = BinaryBitmap(HybridBinarizer(PlanarYUVLuminanceSource(luminance, width, height, 0, 0, width, height, false)))
+        val result = try {
+            QRCodeReader().decode(bitmap)
+        } catch (e: com.google.zxing.ReaderException) {
+            return null
+        }
+        val points = result.resultPoints.orEmpty()
+        if (points.size < 3) return QrHit(result.text, emptyList())
+        // The code's size in modules sets how far the finder centres sit inside its edge.
+        val modules = runCatching { com.google.zxing.qrcode.detector.Detector(bitmap.blackMatrix).detect().bits.width }.getOrNull()
+        val corners = ScanGeometry.corners(
+            ScanPoint(points[0].x, points[0].y), ScanPoint(points[1].x, points[1].y), ScanPoint(points[2].x, points[2].y), modules,
+        )
+        return QrHit(result.text, corners)
+    }
 }
+
+/// A QR code read from a camera frame: its text, and where it sits in the frame.
+/// [corners] are the code's outer corners (top-left, top-right, bottom-right,
+/// bottom-left) in the frame's own pixel coordinates, before any rotation.
+class QrHit(val text: String, val corners: List<ScanPoint>)
 
 /// A QR code of `text`, upper-cased by the caller when it is an invoice
 /// (the denser alphanumeric mode).
