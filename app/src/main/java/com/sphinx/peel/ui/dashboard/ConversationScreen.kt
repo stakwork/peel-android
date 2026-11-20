@@ -1,6 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
 import com.sphinx.peel.engine.AgentMessages
+import com.sphinx.peel.engine.ChatSearch
 import com.sphinx.peel.engine.TEXT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AgentExtras
 import com.sphinx.peel.engine.ControlPlan
@@ -11,6 +12,7 @@ import com.sphinx.peel.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.material3.OutlinedButton
@@ -54,6 +56,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
@@ -197,6 +200,11 @@ fun ConversationScreen(
     // Cleared once the scroll has happened, so the 3s reload never repeats it.
     var pendingFocus by remember(chat) { mutableStateOf(focusMessageUuid) }
     val highlight = remember(chat) { MessageHighlight() }
+    // In-chat search (docs/phases/05-conversation.md, "In-chat search"): non-null while the chat is in search mode. Keyed on the chat, so it
+    // is gone when the chat changes; the composer's draft is a separate state and is kept. `searchJump` is a match to show, taken by the
+    // effect below once the thread summaries are known.
+    var search by remember(chat) { mutableStateOf<ChatSearch?>(null) }
+    var searchJump by remember(chat) { mutableStateOf<MessageRow?>(null) }
     var error by remember(chat) { mutableStateOf<String?>(null) }
     var showDetails by remember(chat) { mutableStateOf(false) }
     var moneyAction by remember(chat) { mutableStateOf<ChatMoneyAction?>(null) }
@@ -453,6 +461,9 @@ fun ConversationScreen(
         return
     }
 
+    // System back closes the search before it leaves the chat (not inside a thread or the details, which return above).
+    BackHandler(enabled = search != null) { search = null }
+
     val detailsConversation = conversation
     if (showDetails && detailsConversation != null) {
         com.sphinx.peel.ui.details.ChatDetailsScreen(engine, storage, detailsConversation, onBack = { showDetails = false }, onLeftTribe = onBack, onRemovedContact = onContactRemoved)
@@ -522,6 +533,23 @@ fun ConversationScreen(
                 }
                 Spacer(Modifier.weight(1f))
             }
+            var chatMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { chatMenuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More", tint = Theme.colors.text)
+                }
+                DropdownMenu(expanded = chatMenuOpen, onDismissRequest = { chatMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Search") },
+                        onClick = {
+                            chatMenuOpen = false
+                            // Already searching: focus the field again.
+                            val open = search
+                            if (open == null) search = ChatSearch(chat) else open.requestFocus()
+                        },
+                    )
+                }
+            }
             // Only when this account has a call server at all (`callServer()`'s
             // own doc comment: null on a local test server, never configured) -
             // on an account with none, calling is off, not merely unreachable.
@@ -543,6 +571,15 @@ fun ConversationScreen(
                     }
                 }
             }
+        }
+
+        search?.let { open ->
+            ChatSearchBar(
+                search = open, storage = storage, engine = engine,
+                display = { senderDisplay(it, myAlias, myPhotoUrl, isTribe) },
+                onJump = { searchJump = it },
+                onClose = { search = null },
+            )
         }
 
         // A tribe's pinned message, when it is among the messages loaded here.
@@ -651,6 +688,18 @@ fun ConversationScreen(
                 pendingFocus = null
             }
         }
+        // A search match to show: this screen holds the chat's whole stored history (`storage.messages`), so an old match is already
+        // here. A tribe's thread summarised behind its root opens that thread on the match; anything else scrolls to it and flashes
+        // (the same focus a Mentions row uses).
+        val jump = searchJump
+        LaunchedEffect(jump) {
+            if (jump == null) return@LaunchedEffect
+            searchJump = null
+            val uuid = jump.uuid ?: return@LaunchedEffect
+            val root = jump.threadUuid
+            if (isTribe && root != null && threads.containsKey(root)) openThreadRoot = root
+            pendingFocus = uuid
+        }
         KeepAtBottomOnKeyboard(listState, displayedMessages.size - 1)
         LazyColumn(
             state = listState,
@@ -714,7 +763,8 @@ fun ConversationScreen(
             )
         }
 
-        Composer(
+        // Hidden while searching; `draft` is kept and the composer comes back with it.
+        if (search == null) Composer(
             text = draft,
             onTextChange = { draft = it },
             members = mentionMembers,

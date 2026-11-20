@@ -119,6 +119,10 @@ sections for code that isn't written yet.
   - `engine/TasksTab.kt` (which opened public apps are an employer's Tasks page, one page or the list), `ui/dashboard/TasksTab.kt` (`MainTab`, `TabState`, `KeptPage`, `TasksList`), `PublicPageRouter.tasksPage` — the Tasks tab
     (`docs/phases/48-tasks-tab.md`): first in the bar once a `strut/worker` page was opened, its page kept alive (composed, not placed) behind the other tabs; Apps lists the other public apps.
   - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
+  - `engine/MessageQuery.kt`, `ChatSearch.kt`, `Storage.searchMessages` (+ `Storage` v19: `message.content`, FTS5 `messageText`, `LIKE` fallback),
+    `ui/dashboard/ChatSearchBar.kt` — in-chat message search (`docs/phases/05-conversation.md` "In-chat search", port of peel#576): `MessageQuery`
+    (words, "phrases", `from:`; `ftsMatch`, `snippet`), `ChatSearch` (observable state: status, stepping, `historyNote` while history still syncs,
+    Return waiting for matches); the bar and the results sheet; the chat's 3-dots menu starts it. Not compiled or run when written.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.
