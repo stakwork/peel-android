@@ -125,6 +125,45 @@ which honors it, matching PeelCore's own `Date.FormatStyle`.
   which is shared by an entire tribe's membership and would merge every
   member's messages into one run.
 
+## In-chat search
+
+**Status: written, NOT compiled and NOT run.** There is no Android toolchain in the environment this was written in: nothing was
+built, type-checked, unit-tested or tried on a device. Read it as a reviewed draft; the first Gradle build and test run is still to
+come, and the tests below have never passed.
+
+**What was built** (port of `peel` PR #576, which was not readable here; the spec was its quoted essentials):
+
+- The chat header got a 3-dots menu (there was none) with **Search**. It puts the chat in search mode; choosing it again refocuses the
+  field. The bar sits under the header: field (auto-focus, keyboard Search = next older match, the first when none is picked), count
+  ("x of N", "N matches", "No matches", "Could not search", a spinner while searching with nothing yet, "3 or more characters" for
+  only-short words), up = newer / down = older (disabled at the ends), a results-list button (disabled with no matches) and close.
+  Typing is debounced 200 ms. The composer is hidden while searching; `draft` is a separate state so it is kept. System back closes the
+  search first. The state is `remember(chat)`, so it is gone when the chat changes; the bar is not drawn in a thread.
+- `engine/MessageQuery.kt` (pure): terms, phrases, `from:`, `minimum = 3`/`hasShortTerms`, `ftsMatch` (every term a quoted FTS string),
+  `snippet`, plus `highlights` for marking terms. `engine/ChatSearch.kt` (observable holder): status, `historyNote` ("Still loading older
+  messages"), stepping, `found`, `waitForMatches`/Return. Both JVM-tested (`MessageQueryTest`, `ChatSearchTest`).
+- `Storage` v19 and `Storage.searchMessages(query, chat, limit)`: newest first, deleted excluded, thread messages included, limit 1000.
+  **Difference from iOS:** iOS indexes a `message.content` column; here the text lives inside `body`'s JSON, so v19 adds a `content`
+  column (text and attachment-caption types 0 and 6, set in `insertMessages`, cleared when a delete applies, backfilled from `body` like v6
+  did), then the FTS5 external-content table `messageText` (`tokenize='trigram remove_diacritics 1'`, plain `'trigram'` below SQLite 3.45),
+  backfilled, with insert/delete/update triggers (delete uses the `'delete'` command form). If the device's SQLite has no FTS5 or no trigram
+  tokenizer, v19 makes no table and `searchMessages` uses `LIKE` (case-insensitive for ASCII only, blind to accents); a failing FTS query
+  falls back the same way. Whether Android's bundled SQLite has trigram on any given API level was not checked here. `from:` is decided
+  in Kotlin against the sender JSON's alias (contains, case-insensitive; our own messages use our alias, a DM's incoming ones with no
+  sender use the contact's alias), not a SQL `LIKE`, so there is nothing to escape; the 1000 limit then applies after it.
+- `ui/dashboard/ChatSearchBar.kt`: the bar and the "Search results" modal bottom sheet (sender, avatar, thread icon, relative date, a
+  2-line snippet with terms marked, the current row tinted, `historyNote` at the end). A picked row is stored, the sheet is hidden, and only
+  then is the match jumped to, so the sheet never stands over a thread.
+- Jumping: `ConversationScreen` already holds a chat's whole stored history (`storage.messages(chat)`, no pagination), so an old match is
+  already in the list; a jump sets the existing `pendingFocus` (the Mentions/Threads scroll-to-centre and flash). A match in a tribe thread
+  that is summarised behind its root opens the thread view on it (closing it returns to the chat to keep stepping).
+- `runSearch` (in the bar's effect): off the main thread, reads `engine.restoreProgress.value.restoring` as "history still syncing", drops
+  the result if the text changed or the bar closed, and reports an exception as `found([], query, failed = true)`.
+
+**Not verified / open:** everything above is uncompiled and unrun. The storage test uses 100 as the page size because
+`Engine.HISTORY_PAGE_SIZE` is private. The Robolectric SQLite may lack FTS5/trigram, in which case the storage tests exercise the `LIKE` path.
+No UI test was written. The v19 migration on an existing database, and FTS5 availability on real devices, are untried.
+
 ## Journal
 
 **A sent message needed its own storage path, not `storeMessages`.**

@@ -144,12 +144,60 @@ class InviteLinkTest {
         assertEquals("SPHINX.CHAT://?action=i&d=abc", InviteLink.fromClipboard("SPHINX.CHAT://?action=i&d=abc"))
         for (other in listOf(
             null, "", "   ", "hello", "d=abc", "action=i&d=abc",
-            "https://s.example/public/join#action=i&d=abc",
             "sphinx.chat://?action=tribeV2&pubkey=x",
             "sphinx.chat://?action=i", "sphinx.chat://?action=i&d=", "sphinx.chat://?d=abc",
             "sphinx.chat://?action=i&action=i&d=abc",
             "sphinx.chat://?action=i&d=abc and more words",
             "sphinx.chat://?action=i&d=" + "a".repeat(InviteLink.MAX_LENGTH),
         )) assertNull(other, InviteLink.fromClipboard(other))
+    }
+
+    // docs/phases/51-pasted-invite.md: the link a worker is sent is strut's join page, the invite after its `#`.
+    private val tasks = "https%3A%2F%2Fs.example%2F%3Fapp%3Dstrut%252Fworker%26solo%3D1%26public%3D1%26input%3Dinvite%253Dstrut-invite.eyJ9.sig%2526type%253Dbook-scan-page"
+    private val joinLink = "https://s.example/public/join#action=i&d=abc&c=BBBB&a=$tasks"
+
+    @Test
+    fun `strut's join link copied from a message is taken from the clipboard as the link the page opens Peel with`() {
+        val asTapped = "sphinx.chat://?action=i&d=abc&c=BBBB&a=$tasks"
+        assertEquals(asTapped, InviteLink.fromClipboard(joinLink))
+        assertEquals(asTapped, InviteLink.fromClipboard("\n$joinLink "))
+        // The page's own `?lang=`, an upper-case scheme, and a `sphinx.chat://?` after the `#` (the page drops it too).
+        assertEquals(asTapped, InviteLink.fromClipboard("https://s.example/public/join?lang=es#action=i&d=abc&c=BBBB&a=$tasks"))
+        assertEquals(asTapped, InviteLink.fromClipboard("HTTPS://s.example/public/join#action=i&d=abc&c=BBBB&a=$tasks"))
+        assertEquals(asTapped, InviteLink.fromClipboard("https://s.example/public/join#sphinx.chat://?action=i&d=abc&c=BBBB&a=$tasks"))
+        assertEquals(
+            "https://s.example/?app=strut%2Fworker&solo=1&public=1&input=invite%3Dstrut-invite.eyJ9.sig%26type%3Dbook-scan-page",
+            InviteLink.appOf(InviteLink.fromClipboard(joinLink)!!)?.url,
+        )
+        for (other in listOf(
+            "http://s.example/public/join#action=i&d=abc",
+            "https://s.example/public/joinx#action=i&d=abc",
+            "https://s.example/join#action=i&d=abc",
+            "https://s.example/public/join/#action=i&d=abc",
+            "https://u:p@s.example/public/join#action=i&d=abc",
+            "https://s.example/public/join",
+            "https://s.example/public/join#",
+            "https://s.example/public/join#action=tribeV2&pubkey=x",
+            "https://s.example/public/join#action=i&d=",
+            "https://s.example/public/join#action=i&d=abc and more",
+            "peel://open?url=https%3A%2F%2Fs.example%2Fpublic%2Fjoin#action=i&d=abc",
+        )) assertNull(other, InviteLink.fromClipboard(other))
+    }
+
+    @Test
+    fun `an invite pasted or scanned in names its app wherever its sections start`() {
+        val want = "https://s.example/?app=strut%2Fworker&solo=1&public=1&input=invite%3Dstrut-invite.eyJ9.sig%26type%3Dbook-scan-page"
+        // Strut's join link, as copied from the message it came in: the invite is after `#`.
+        assertEquals(want, InviteLink.appOf(joinLink)?.url)
+        assertEquals(want, InviteLink.appOf("https://s.example/public/join?lang=es#action=i&d=abc&a=$tasks")?.url)
+        // The link the page opens Peel with, and the bare sections the core also reads.
+        assertEquals(want, InviteLink.appOf("sphinx.chat://?action=i&d=abc&a=$tasks")?.url)
+        assertEquals(want, InviteLink.appOf("d=abc&c=BBBB&a=$tasks")?.url)
+        // A join link with no `a=` opens nothing; the invite is read as before.
+        assertNull(InviteLink.appOf("https://s.example/public/join#action=i&d=abc"))
+        // Whatever form it came in, the core is handed the text whole (it finds `d=`/`c=` by prefix and passes over the rest).
+        var seen = ""
+        InviteLink.parse(joinLink, InviteReader { seen = it; InviteFields("c0de", "lsp.example:8883", info, null) })
+        assertEquals(joinLink, seen)
     }
 }

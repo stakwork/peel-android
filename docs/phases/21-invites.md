@@ -18,7 +18,11 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
   server (`Setting.SERVER_PINNED`; restores keep resolving the config default). The register wait is 30 s
   for an invite (10 s otherwise). `inviteMayBeRedeemed` is set just before the register publish.
   `afterConnect` runs `addInviterIfPending` (clear first, restore on not-connected; `InviterFlow`), then a
-  background `fetchPaymentHistory` so the invite's credit shows in the balance.
+  background `fetchPaymentHistory` so the invite's credit shows in the balance. Both run right after the
+  history catch-up, BEFORE `afterConnect` waits for the read markers and mutes (`readsJob`): a new account
+  has neither, so those two asks each run out their 30 s, and until 2026-11-19 the inviter ("Stakwork
+  Support" on a worker's invite) showed up about a minute after signup (45–58 s measured on
+  strut.stadeum.stakwork.ai). iOS never waits on those asks.
 - **Key exchange**: `Engine.addContact` (`engine/Invites.kt`) calls the core's `addContact` (5 sat) and
   publishes in PeelCore's `publishPlan` order (`PublishPlan`, `run(ordered = true)`: settle/register
   first, a new key's messages after 750 ms, messages after the async pay once the server took it or 10 s).

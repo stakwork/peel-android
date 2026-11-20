@@ -102,6 +102,16 @@ android {
         unitTests {
             // Compose UI tests under Robolectric need the merged manifest and resources.
             isIncludeAndroidResources = true
+            // Print each failing test and its stack trace in the log (CI shows only "There were failing tests" otherwise).
+            all { test ->
+                test.testLogging {
+                    events("failed")
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    showStackTraces = true
+                    showCauses = true
+                    showStandardStreams = false
+                }
+            }
         }
     }
 

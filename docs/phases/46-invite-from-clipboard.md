@@ -19,6 +19,8 @@ They had to go back to the browser and tap the link again. Evan, 2026-11-19: sig
   Android 12+ says "Peel pasted from your clipboard".
 - **Only a whole invite link is taken** (`InviteLink.fromClipboard`): `sphinx.chat://?` (any case), exactly one `action=i`, a
   non-empty `d=`, no whitespace, at most `MAX_LENGTH`. Anything else someone copied is left alone and never lands in the field.
+  Since phase 51, strut's join link itself (`https://<strut>/public/join#action=i&…`, copied from the message it came in) is
+  taken too, as the `sphinx.chat://?` link the page would have opened Peel with.
 - **Taken as a tapped link is** (`takeInvite`): the invite step opens filled in, and its `a=` waits to open the worker app after
   signup (phase 41). The clipboard is then cleared if it still holds that text. Never logged or stored.
 

@@ -113,17 +113,33 @@ object InviteLink {
     }
 
     /// An invite link on the clipboard (docs/phases/46-invite-from-clipboard.md): strut's join page copies
-    /// `sphinx.chat://?action=i&d=…` as it downloads Peel, since nothing carries a tapped link across an install. Only a
-    /// whole link, held to [fromDeepLink]'s rule (`action=i`) and naming a `d=`; anything else someone copied is null, so
-    /// it never lands in the invite field.
+    /// `sphinx.chat://?action=i&d=…` as it downloads Peel, since nothing carries a tapped link across an install; a worker
+    /// may instead have copied the join link itself from the message it came in (`https://<strut>/public/join#action=i&…`,
+    /// [fromJoinLink]), which is taken as the same `sphinx.chat://?` link (docs/phases/51-pasted-invite.md). Only a whole
+    /// link, held to [fromDeepLink]'s rule (`action=i`) and naming a `d=`; anything else someone copied is null, so it never
+    /// lands in the invite field.
     fun fromClipboard(text: String?): String? {
         val trimmed = text?.trim() ?: return null
         if (trimmed.isEmpty() || trimmed.length > MAX_LENGTH || trimmed.any { it.isWhitespace() }) return null
         val prefix = "$SCHEME://?"
-        if (!trimmed.startsWith(prefix, ignoreCase = true)) return null
-        val sections = trimmed.substring(prefix.length).split('&')
+        val link = if (trimmed.startsWith(prefix, ignoreCase = true)) trimmed else fromJoinLink(trimmed) ?: return null
+        val sections = link.substring(prefix.length).split('&')
         if (sections.count { it == "action=i" } != 1 || sections.none { it.startsWith("d=") && it.length > 2 }) return null
-        return fromDeepLink(SCHEME, "i", trimmed)
+        return fromDeepLink(SCHEME, "i", link)
+    }
+
+    /// Strut's join page path (stakwork/strut `src/public-join.ts`): the invite rides after its `#`.
+    private const val JOIN_PATH = "/public/join"
+
+    /// The invite in strut's join link, `https://<strut>/public/join[?lang=…]#action=i&d=…&c=…&a=…`, as the
+    /// `sphinx.chat://?action=i&…` link the page itself opens Peel with; null for any other text. https only, no user info, the
+    /// path exactly the join page's; the part after `#` is taken as the page takes it (a `sphinx.chat://?` before it dropped).
+    fun fromJoinLink(text: String): String? {
+        val hash = text.indexOf('#').takeIf { it >= 0 } ?: return null
+        val page = runCatching { java.net.URI(text.substring(0, hash)) }.getOrNull() ?: return null
+        if (page.scheme?.lowercase() != "https" || page.host.isNullOrEmpty() || page.rawUserInfo != null || page.rawPath != JOIN_PATH) return null
+        val invite = text.substring(hash + 1).let { if (it.startsWith("$SCHEME://?", ignoreCase = true)) it.substring(SCHEME.length + 4) else it }
+        return "$SCHEME://?$invite"
     }
 
     /// The section of a worker's invite link that names the app to open (docs/phases/41-worker-onboarding.md).
@@ -133,8 +149,11 @@ object InviteLink {
     /// (docs/phases/41-worker-onboarding.md). It lives only in the link: the core finds `d=`/`c=`/`t=` by prefix and passes
     /// over it, so the link still goes to the core whole, and the mixer never sees it. Held to a `peel://open?url=` link's rules
     /// ([PublicAppLink.of]); null when there is no `a=`, more than one, or it fails them, and the invite is read as before.
+    /// The sections are read as the core reads them, from whatever follows the first `?` or `#` (strut's join link carries the
+    /// invite after `#`; docs/phases/51-pasted-invite.md), or the whole text when it has neither (a bare `d=…&a=…`).
     fun appOf(link: String): PublicAppLink? {
-        val sections = link.substringAfter('?', "").split('&').filter { it.startsWith(APP_SECTION) }
+        val start = link.indexOfFirst { it == '?' || it == '#' }
+        val sections = link.substring(start + 1).split('&').filter { it.startsWith(APP_SECTION) }
         val encoded = sections.singleOrNull()?.removePrefix(APP_SECTION) ?: return null
         return percentDecode(encoded)?.let(PublicAppLink::of)
     }

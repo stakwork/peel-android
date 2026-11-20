@@ -2233,12 +2233,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             Diagnostics.recordCoreFailure(DiagnosticEvent.CoreFailureSite.catchUp, "afterConnect", it.message ?: it.javaClass.simpleName)
             Log.w("PeelEngine", "catch-up after connect failed", it)
         }
-        // Local unread is settled (reads synced, history caught up): reset the mixer's badge if it is 0.
-        // Reads must have synced too (failures are only logged by the job).
-        runCatching { readsJob?.join() }
-        runCatching { maybeReadAll() }
         // PeelCore's `cameOnline`: whoever sent the invite this account signed up with is
-        // added now, as its first contact. Never fails the catch-up it follows.
+        // added now, as its first contact. Never fails the catch-up it follows. Before the reads
+        // wait below, as on iOS (which never waits on reads): a new account has no read markers or
+        // mutes, so both asks run out their 30 s, and the inviter used to show a minute late.
         runCatching { addInviterIfPending() }.onFailure { Log.w("PeelEngine", "adding the inviter failed", it) }
         if (registeredWithInvite) {
             registeredWithInvite = false
@@ -2246,6 +2244,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             // the balance. Best effort, in the background: the inviter above does not wait on it.
             scope.launch { runCatching { fetchPaymentHistory() }.onFailure { Log.w("PeelEngine", "balance refresh failed", it) } }
         }
+        // Local unread is settled (reads synced, history caught up): reset the mixer's badge if it is 0.
+        // Reads must have synced too (failures are only logged by the job).
+        runCatching { readsJob?.join() }
+        runCatching { maybeReadAll() }
         cameOnlineHere = true
         // The open chat's own sends, now that this connection can answer
         // (a foreground or a reconnect with a chat on screen).
