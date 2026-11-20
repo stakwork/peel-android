@@ -257,23 +257,14 @@ class OrgPageTest {
         assertNull(OrgPageRequest.opening(app, listOf(HivePeer("acme", "not a url", "t", null))))
     }
 
-    @Test fun `the title is the apps own else the workspace and another app is the workspace`() {
-        assertEquals("Board", page("https://a.io/?app=x&solo=1", title = "Board").title(showingAnotherApp = false))
-        assertEquals("Acme", page("https://a.io/?app=x&solo=1", title = "Board").title(showingAnotherApp = true))
-        assertEquals("Acme", page("https://a.io/?app=x&solo=1", title = "").title(false))
-        assertEquals("Acme", page("https://a.io/?app=x&solo=1", title = null).title(false))
-    }
-
-    @Test fun `a page shows another app only when its address names a different one`() {
+    @Test fun `a page knows the app its address shows`() {
         val request = page("https://acme.sphinx.chat/lab/?app=x&solo=1")
-        assertFalse(request.showsAnotherApp(null))
-        assertFalse(request.showsAnotherApp(request.url))
-        // The same app at another view is the same app.
-        assertFalse(request.showsAnotherApp("https://acme.sphinx.chat/lab/?app=x&input=v%3D2&solo=1"))
-        assertTrue(request.showsAnotherApp("https://acme.sphinx.chat/lab/?app=board&solo=1"))
-        // A file is no app.
-        assertFalse(request.showsAnotherApp("https://acme.sphinx.chat/lab/jobs/j/files/a.md"))
         assertEquals(StrutAppHandle("x"), request.shownApp(request.url))
+        // The same app at another view is the same app.
+        assertEquals(StrutAppHandle("x"), request.shownApp("https://acme.sphinx.chat/lab/?app=x&input=v%3D2&solo=1"))
+        assertEquals(StrutAppHandle("board"), request.shownApp("https://acme.sphinx.chat/lab/?app=board&solo=1"))
+        // A file is no app.
+        assertNull(request.shownApp("https://acme.sphinx.chat/lab/jobs/j/files/a.md"))
         assertNull(request.shownApp("https://evil.example/lab/?app=x"))
     }
 

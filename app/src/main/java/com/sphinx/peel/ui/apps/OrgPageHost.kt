@@ -75,7 +75,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
@@ -133,8 +132,6 @@ class OrgPageController(
     var shared by mutableStateOf<SharedFile?>(null)
     /// A download that failed.
     var notice by mutableStateOf<String?>(null)
-    /// The page shows an app other than the one it opened with: a link in it opened that one here.
-    var showsAnotherApp by mutableStateOf(false)
     /// The app wallet's handler on this page, when the host has one to give ([OrgWalletBridge]).
     var wallet: OrgWalletBridge? = null
     /// Whether this device's web view could take the wallet's bridge; a public page tells the person when it could not.
@@ -281,7 +278,6 @@ class OrgPageController(
         val web = web ?: return
         canGoBack = web.canGoBack()
         web.url?.let { lastUrl = it }
-        showsAnotherApp = page.showsAnotherApp(web.url)
     }
 
     fun load(request: OrgRequest) {
@@ -834,11 +830,8 @@ fun OrgPageScreen(
                 if (onClose != null) Spacer(Modifier.width(8.dp))
                 IconButton(onClick = { controller.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
             }
-            Spacer(Modifier.width(if (onClose == null && !controller.canGoBack) 4.dp else 12.dp))
-            Text(
-                page.title(controller.showsAnotherApp), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text,
-            )
+            // No title: Close, Back and Reload are the whole bar.
+            Spacer(Modifier.weight(1f))
             IconButton(onClick = { controller.reload() }) { Icon(Icons.Filled.Refresh, stringResource(R.string.misc_apps_reload), tint = Theme.colors.secondaryText) }
         }
         if (!controller.walletOffered && page.walletScope.visitorHost != null) {

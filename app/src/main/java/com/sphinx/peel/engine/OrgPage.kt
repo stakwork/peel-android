@@ -305,7 +305,8 @@ class OrgPageRequest(
     val peer: String,
     /// The org as the person reads it.
     val workspace: String,
-    /// The app's or artifact's own title, when it has one: what a page shows before the workspace.
+    /// The app's or artifact's own title, when it has one. Nothing on the phone shows it: the page's bar has no title
+    /// (docs/phases/29-org-page-host.md, "Title").
     val title: String? = null,
 ) : PhonePage {
     val id: UUID = UUID.randomUUID()
@@ -375,11 +376,6 @@ class OrgPageRequest(
     /// An org's page: the org is what Peel trusts, whichever of its apps strut's UI names (`WalletScope.Org`).
     override val walletScope: WalletScope get() = WalletScope.Org(peer)
     override val walletPlace: String get() = workspace
-
-    /// The title the page shows: the app's or artifact's own, else the workspace. Another app a link opened here is named by
-    /// its workspace: its title is not known here (iOS `OrgPageSheet` navigation title).
-    override fun title(showingAnotherApp: Boolean): String =
-        if (showingAnotherApp) workspace else title?.takeIf { it.isNotEmpty() } ?: workspace
 
     /// Whether the workspace the page is on is still live: when it is not, the page closes and the token goes (iOS `MainTabs`).
     fun isLive(live: List<HivePeer>): Boolean = live.any { it.id == peer }

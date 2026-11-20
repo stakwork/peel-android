@@ -113,7 +113,9 @@ class TasksTabUiTest {
     @Test fun `the one employer's page is the tab, with no Done, and Back at its first address is not the page's`() {
         rule.setContent { PeelTheme { OrgPageScreen(PublicPage(acme), host, onClose = null) } }
         rule.onNodeWithContentDescription("Done").assertDoesNotExist()
-        rule.onNodeWithText("acme.invalid").assertExists()
+        // Reload and no title: not the host.
+        rule.onNodeWithContentDescription("Reload").assertExists()
+        rule.onNodeWithText("acme.invalid").assertDoesNotExist()
         assertFalse(rule.activity.onBackPressedDispatcher.hasEnabledCallbacks())
     }
 

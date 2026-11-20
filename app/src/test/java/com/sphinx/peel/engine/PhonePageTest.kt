@@ -58,9 +58,6 @@ class PhonePageTest {
         assertNull(public.appLink(any, from = public.url))
         assertNull(public.request(StrutAppLink(StrutAppHandle("board"), null)))
         assertNull(public.shownApp(any))
-        assertFalse(public.showsAnotherApp(any))
-        assertEquals("shop.example.com", public.title(showingAnotherApp = false))
-        assertEquals("shop.example.com", public.title(showingAnotherApp = true))
     }
 
     @Test fun `a public page is a visitor scope by its origin`() {
@@ -90,9 +87,6 @@ class PhonePageTest {
         assertTrue(org.script!!.contains("strut/apiKey"))
         assertTrue(org.isUIPage("https://acme.sphinx.chat/lab/?app=y"))
         assertFalse(org.isUIPage("https://acme.sphinx.chat/lab/jobs/j/files/a.md"))
-        assertEquals("Board", org.title(false))
-        assertEquals("Acme", org.title(true))
-        assertTrue(org.showsAnotherApp("https://acme.sphinx.chat/lab/?app=board&solo=1"))
     }
 
     // MARK: One policy for both

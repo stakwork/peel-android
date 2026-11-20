@@ -393,13 +393,6 @@ class OrgPageHostTest {
         assertEquals("Bearer tok", shadowOf(web).lastAdditionalHttpHeaders["Authorization"])
     }
 
-    @Test fun `the title and another app follow the address`() {
-        web.loadUrl("https://acme.sphinx.chat/lab/?app=board&solo=1")
-        controller.sync()
-        assertTrue(controller.showsAnotherApp)
-        assertEquals("Acme", strut.title(controller.showsAnotherApp))
-    }
-
     @Test fun `closing the page removes its downloads`() {
         val folder = controller.downloads.newFolder()!!
         assertTrue(folder.exists())

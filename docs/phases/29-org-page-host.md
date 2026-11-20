@@ -27,7 +27,7 @@ the person's token for that workspace, which is handed over twice and never in a
   server's `Content-Disposition`/path, iOS's `suggestedFilename`).
 - **`engine/OrgDownloads.kt`**: one folder per download under `cacheDir/org-downloads/`, redirects followed by hand and only
   inside what the page serves, a failed download removes its folder, `cleanUp()` removes all. Tested against a local JDK server.
-- **`ui/apps/OrgPageHost.kt`**: `OrgPageScreen` (Done, Back when the page can go back, Reload, the title, linear progress,
+- **`ui/apps/OrgPageHost.kt`**: `OrgPageScreen` (Done, Back when the page can go back, Reload, linear progress,
   failure screen with Try again, the notice dialog), `OrgPageController` (iOS `OrgPageController`), `OrgPageClient` and
   `OrgPageChromeClient` (iOS `OrgWebView.Coordinator`), `makeOrgWebView`. `AppsScreen` opens it instead of the old `AppPageScreen`.
 - **`res/xml/file_paths.xml`**: `org_downloads` (`cache-path` `org-downloads/`) for handing a download to the share sheet.
@@ -62,7 +62,11 @@ the person's token for that workspace, which is handed over twice and never in a
   ignored) shows the failure screen with `OrgPageRules.failure`'s words (the load error's own description for the latter, as iOS's
   `localizedDescription`); `onPageFinished` clears it only when the load did not itself fail; Try again = `OrgPageRequest.retry`.
 - **Process death**: `onRenderProcessGone` destroys the web view and a new one is made (`key(generation)`) loading `request(at: lastUrl) ?: request`.
-- **Title**: the app's/artifact's own title else the workspace (`title(showingAnotherApp)`); another app a link opened shows the workspace.
+- **Title**: none (2026-11-20, a difference from iOS, whose sheet still has one). The bar is Close (a sheet's), Back when the web view
+  can go back, and Reload, for an org's page and a public page alike, the Tasks tab included. Evan: "we want a back and a refresh and
+  that's it". `PhonePage.title(showingAnotherApp)` and `showsAnotherApp` went with it. It was the app's/artifact's own title else
+  the workspace, the workspace while another app a link opened showed, and a public page's host. `OrgPageRequest.title` and the
+  `title` that `Openings.opening` and `ArtifactOpening` pass along are still set but no longer read.
 - **Closing when its workspace is no longer live**: `AppsScreen` reads `Stadeum.live` (Compose state); the page shown is
   `page?.takeIf { it.isLive(live) }`, an effect drops `page` (and with it the token), and `OrgPageScreen`'s dispose closes the web view,
   its profile and its downloads (iOS `MainTabs` `.onChange(of: model.stadeum.live)`).

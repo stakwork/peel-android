@@ -25,7 +25,8 @@ first-time experience matters most.
   sign-in names one (`publicAppsVersion`, `walletConnectionsVersion`).
 - **One employer: the tab is the page.** The same page host every public page uses (`OrgPageScreen` over `PublicPage`, phase 30),
   inside the tab, with the bar under it. No Done (it is a tab); Back steps back in the page, and at its first address is not the
-  page's (Peel goes to the background, as from any tab). Title, Back and Reload are the host's toolbar, as everywhere else.
+  page's (Peel goes to the background, as from any tab). Back and Reload are the host's toolbar, as everywhere else (no title since
+  2026-11-20: phase 29, "Title").
 - **Kept alive behind the other tabs** (`KeptPage`): the page stays composed while another tab, a chat, Threads, Apps, an invite or
   the call screen is in front, and is only not placed. Compose neither draws nor routes touches to a child it does not place
   (`AndroidViewsHandler` draws nothing itself and passes no touch on: checked in Compose UI 1.11.4), and the web view stays attached
@@ -58,7 +59,6 @@ first-time experience matters most.
 - A lock closes the page (the tabs go); the next unlock opens it again, fresh, as every page does.
 - The one employer's page has no way to remove its row in Peel but Disconnect in You › Connected apps (only if it signed in).
 - Tapping Tasks again on a page picked from the list does not return to the list (Back and Done do).
-- The page's title is the host (`PublicPage.title`), not the connection's title the list shows.
 - System Back from Chats, Payments or You does not go to Tasks first; it leaves Peel, as before.
 - iOS is out of scope: iPhone keeps the Tasks page under Apps (and keeps no `public_app` rows at all).
 

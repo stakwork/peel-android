@@ -205,7 +205,7 @@ class BoxLinkTest {
         val page = box.home
         assertEquals("https://box.example.com/lab/", page.url)
         assertEquals("box:https://box.example.com/lab", page.peer)
-        assertEquals("box.example.com", page.title(false))
+        assertEquals("box.example.com", page.workspace)
         assertEquals(mapOf("Authorization" to "Bearer ${box.token}"), page.request.headers)
         assertFalse(page.url.contains(box.token))
         assertTrue(page.script.contains(box.token) && page.script.contains("strut/apiKey"))
