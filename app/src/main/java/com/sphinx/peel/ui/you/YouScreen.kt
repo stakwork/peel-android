@@ -176,10 +176,10 @@ private fun ContactInfoCard(contactInfo: String?) {
                 OutlinedButton(onClick = {
                     clipboard.setText(AnnotatedString(contactInfo))
                     toast.show("Copied", ToastType.Success)
-                }) {
-                    Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Copy contact info")
+                }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Copy contact info", fontSize = 14.sp, maxLines = 1, softWrap = false)
                 }
             }
         }
