@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.AnchoredDraggableState
@@ -77,26 +79,30 @@ fun ChatRowActions(
     val toggle = conversation.readToggle
     val level = MuteLevel.of(conversation.muteLevel)
 
-    fun attempt(what: String, action: suspend () -> Unit) {
+    val couldNotMarkRead = stringResource(R.string.dash_could_not_mark_read)
+    val couldNotMarkUnread = stringResource(R.string.dash_could_not_mark_unread)
+    val couldNotChangeNotifications = stringResource(R.string.dash_could_not_change_notifications)
+
+    fun attempt(failure: String, action: suspend () -> Unit) {
         scope.launch {
             try {
                 action()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                toast.show("Could not $what. ${e.message ?: ""}".trim(), ToastType.Warning)
+                toast.show("$failure ${e.message ?: ""}".trim(), ToastType.Warning)
             }
             onChanged()
         }
     }
 
     fun runToggle(t: ReadToggle) = when (t) {
-        ReadToggle.MARK_READ -> attempt("mark as read") { engine.markRead(conversation.chat) }
-        ReadToggle.MARK_UNREAD -> attempt("mark as unread") { engine.markUnread(conversation.chat) }
+        ReadToggle.MARK_READ -> attempt(couldNotMarkRead) { engine.markRead(conversation.chat) }
+        ReadToggle.MARK_UNREAD -> attempt(couldNotMarkUnread) { engine.markUnread(conversation.chat) }
     }
 
     fun setLevel(next: MuteLevel) {
-        if (next != level) attempt("change notifications") { engine.setMute(conversation.chat, next) }
+        if (next != level) attempt(couldNotChangeNotifications) { engine.setMute(conversation.chat, next) }
     }
 
     val density = LocalDensity.current
@@ -136,7 +142,7 @@ fun ChatRowActions(
             val muted = level == MuteLevel.MUTED
             SwipeActionButton(
                 icon = if (muted) Icons.Filled.Notifications else Icons.Filled.NotificationsOff,
-                label = if (muted) "Unmute" else "Mute",
+                label = if (muted) stringResource(R.string.dash_unmute) else stringResource(R.string.dash_mute),
                 color = Theme.colors.secondaryText,
                 width = revealWidth,
             ) {
@@ -177,7 +183,7 @@ fun ChatRowActions(
                 )
             }
             Text(
-                "Notify me about",
+                stringResource(R.string.dash_notify_about),
                 style = MaterialTheme.typography.labelSmall,
                 color = Theme.colors.secondaryText,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
@@ -185,7 +191,7 @@ fun ChatRowActions(
             for (choice in MuteLevel.choices(conversation.isTribe)) {
                 DropdownMenuItem(
                     text = { Text(choice.title) },
-                    trailingIcon = if (choice == level) ({ Icon(Icons.Filled.Check, contentDescription = "Selected") }) else null,
+                    trailingIcon = if (choice == level) ({ Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.dash_selected)) }) else null,
                     onClick = { menuOpen = false; setLevel(choice) },
                 )
             }

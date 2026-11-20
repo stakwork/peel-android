@@ -1,6 +1,9 @@
 package com.sphinx.peel.ui.apps
 
 import android.content.ClipData
+import com.sphinx.peel.ui.str
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.compose.BackHandler
@@ -131,16 +134,16 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(12.dp))
-            Text("Apps", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+            Text(stringResource(R.string.misc_apps_title), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
             if (sources.size > 1) {
                 var open by remember { mutableStateOf(false) }
                 Box {
-                    IconButton(onClick = { open = true }) { Icon(Icons.Filled.FilterList, "Filter by source", tint = if (shownSource == null) Theme.colors.secondaryText else Theme.colors.accent) }
+                    IconButton(onClick = { open = true }) { Icon(Icons.Filled.FilterList, stringResource(R.string.misc_apps_filter), tint = if (shownSource == null) Theme.colors.secondaryText else Theme.colors.accent) }
                     DropdownMenu(open, { open = false }) {
-                        DropdownMenuItem(text = { Text("All") }, onClick = { source = null; open = false })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.misc_apps_all)) }, onClick = { source = null; open = false })
                         sources.forEach { s -> DropdownMenuItem(text = { Text(s) }, onClick = { source = s; open = false }) }
                     }
                 }
@@ -149,13 +152,13 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
             // only the public apps opened here, which nothing reads).
             if (live.isNotEmpty()) {
                 IconButton(onClick = { refresh++ }, enabled = !reading) {
-                    Icon(Icons.Filled.Refresh, "Refresh", tint = Theme.colors.secondaryText)
+                    Icon(Icons.Filled.Refresh, stringResource(R.string.misc_apps_refresh), tint = Theme.colors.secondaryText)
                 }
             }
         }
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), singleLine = true,
-            placeholder = { Text("Search apps") },
+            placeholder = { Text(stringResource(R.string.misc_apps_search)) },
         )
         // Pulling reads again, as Refresh does, and waits for the read (`reading`).
         PullToRefreshBox(
@@ -165,14 +168,14 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
         ) {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
                 if (homes.isNotEmpty()) {
-                    item { Text("Talk to Jamie", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
+                    item { Text(stringResource(R.string.misc_apps_talk_header), Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
                     items(homes, key = { "talk-${it.id}" }) { home ->
                         TalkRow(home, onClick = { onTalk(home) }, onHistory = { historyHome = home })
                     }
                     item { Spacer(Modifier.size(12.dp)) }
                 }
                 if (openedShown.isNotEmpty()) {
-                    item { Text("Apps you opened", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
+                    item { Text(stringResource(R.string.misc_apps_opened_header), Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
                     items(openedShown, key = { "opened-${it.link.seller} ${it.link.app ?: ""}" }) { app ->
                         OpenedAppRow(app, onOpen = { onOpenPublic(app.link) }, onRemove = { storage.forgetPublicApp(app.link) })
                     }
@@ -186,7 +189,7 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
                         AppsOpenDecision.page(Stadeum.openings.opening(app))?.let(openPage)
                     }, onShare = { link ->
                         copy(context, link)
-                        toast.show("Link copied", ToastType.Success)
+                        toast.show(context.str(R.string.misc_apps_link_copied), ToastType.Success)
                     })
                 }
                 if (unread.isNotEmpty() && apps.isNotEmpty() && !reading) {
@@ -197,13 +200,13 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
             }
             when {
                 openedShown.isNotEmpty() -> {}
-                apps.isNotEmpty() && shown.isEmpty() -> Centered("No results", "Nothing matches \u201c${query.trim()}\u201d.")
-                opened.isNotEmpty() && shown.isEmpty() && query.isNotBlank() -> Centered("No results", "Nothing matches \u201c${query.trim()}\u201d.")
+                apps.isNotEmpty() && shown.isEmpty() -> Centered(stringResource(R.string.misc_apps_no_results), stringResource(R.string.misc_apps_nothing_matches, query.trim()))
+                opened.isNotEmpty() && shown.isEmpty() && query.isNotBlank() -> Centered(stringResource(R.string.misc_apps_no_results), stringResource(R.string.misc_apps_nothing_matches, query.trim()))
                 apps.isEmpty() && homes.isNotEmpty() -> if (reading) Spinner()
-                apps.isEmpty() && live.isEmpty() -> Centered("No Stadeum here yet", AppsOpenDecision.CONNECT_STADEUM)
+                apps.isEmpty() && live.isEmpty() -> Centered(stringResource(R.string.misc_apps_no_stadeum), AppsOpenDecision.CONNECT_STADEUM)
                 apps.isEmpty() && reading -> Spinner()
-                apps.isEmpty() && unread.isNotEmpty() -> Centered("Couldn't read the apps", AppsOpenDecision.didNotAnswer(unread))
-                apps.isEmpty() -> Centered("No apps yet", AppsOpenDecision.NO_APPS)
+                apps.isEmpty() && unread.isNotEmpty() -> Centered(stringResource(R.string.misc_apps_unreadable), AppsOpenDecision.didNotAnswer(unread))
+                apps.isEmpty() -> Centered(stringResource(R.string.misc_apps_none_yet), AppsOpenDecision.NO_APPS)
             }
         }
     }
@@ -229,17 +232,17 @@ internal fun AppRow(
                 app.about?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
                 app.caption(showsSource)?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText) }
             }
-            if (pinned) Icon(Icons.Filled.PushPin, "Pinned to Chats", Modifier.size(14.dp).align(Alignment.CenterVertically), tint = Theme.colors.accent)
+            if (pinned) Icon(Icons.Filled.PushPin, stringResource(R.string.misc_apps_pinned), Modifier.size(14.dp).align(Alignment.CenterVertically), tint = Theme.colors.accent)
         }
         DropdownMenu(menu, { menu = false }) {
             DropdownMenuItem(
-                text = { Text(if (pinned) "Unpin from Chats" else "Pin to Chats") },
+                text = { Text(if (pinned) stringResource(R.string.misc_apps_unpin) else stringResource(R.string.misc_apps_pin)) },
                 leadingIcon = { Icon(Icons.Filled.PushPin, null) },
                 onClick = { menu = false; onTogglePin() },
             )
             // Copies a link to the app: nothing is sent, and it opens only for
             // someone with that workspace connected.
-            if (link != null) DropdownMenuItem(text = { Text("Share link") }, onClick = { menu = false; onShare(link) })
+            if (link != null) DropdownMenuItem(text = { Text(stringResource(R.string.misc_apps_share_link)) }, onClick = { menu = false; onShare(link) })
         }
     }
 }
@@ -263,7 +266,7 @@ private fun OpenedAppRow(app: OpenedApp, onOpen: () -> Unit, onRemove: () -> Uni
         }
         DropdownMenu(menu, { menu = false }) {
             // Only off this list: a sign-in it holds stays in You › Connected apps.
-            DropdownMenuItem(text = { Text("Remove from Apps") }, onClick = { menu = false; onRemove() })
+            DropdownMenuItem(text = { Text(stringResource(R.string.misc_apps_remove)) }, onClick = { menu = false; onRemove() })
         }
     }
 }
@@ -283,11 +286,11 @@ internal fun TalkRow(home: TalkHome, onClick: () -> Unit, onHistory: () -> Unit)
             Text(home.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
             Text(if (home.id == TalkHome.DEVELOPMENT) home.url else "@${home.id}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
         }
-        Icon(Icons.Filled.Mic, "Talk to Jamie on ${home.name}", tint = Theme.colors.accent)
+        Icon(Icons.Filled.Mic, stringResource(R.string.misc_apps_talk_on, home.name), tint = Theme.colors.accent)
     }
     DropdownMenu(menu, { menu = false }) {
-        DropdownMenuItem(text = { Text("New conversation") }, leadingIcon = { Icon(Icons.Filled.Mic, null) }, onClick = { menu = false; onClick() })
-        DropdownMenuItem(text = { Text("History") }, leadingIcon = { Icon(Icons.Filled.History, null) }, onClick = { menu = false; onHistory() })
+        DropdownMenuItem(text = { Text(stringResource(R.string.misc_apps_new_conversation)) }, leadingIcon = { Icon(Icons.Filled.Mic, null) }, onClick = { menu = false; onClick() })
+        DropdownMenuItem(text = { Text(stringResource(R.string.misc_apps_history)) }, leadingIcon = { Icon(Icons.Filled.History, null) }, onClick = { menu = false; onHistory() })
     }
     }
 }

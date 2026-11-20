@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -103,7 +105,7 @@ internal fun KeptPage(shown: Boolean, modifier: Modifier = Modifier, content: @C
 internal fun TasksList(pages: List<OpenedApp>, onOpen: (PublicAppLink) -> Unit, onRemove: (PublicAppLink) -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize()) {
         Text(
-            "Tasks", Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            stringResource(R.string.dash_tasks), Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
             style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text,
         )
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp)) {
@@ -131,7 +133,7 @@ private fun TasksRow(app: OpenedApp, onOpen: () -> Unit, onRemove: () -> Unit) {
             }
         }
         DropdownMenu(menu, { menu = false }) {
-            DropdownMenuItem(text = { Text("Remove from Tasks") }, onClick = { menu = false; onRemove() })
+            DropdownMenuItem(text = { Text(stringResource(R.string.dash_remove_from_tasks)) }, onClick = { menu = false; onRemove() })
         }
     }
 }

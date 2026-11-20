@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.payments
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -76,15 +78,15 @@ fun PaymentMessage(row: MessageRow, name: String) {
         Spacer(Modifier.width(8.dp))
         Column(Modifier.alpha(if (row.status == "PENDING") 0.6f else 1f)) {
             val headline = when {
-                row.deleted -> "This payment has been deleted"
-                msat > 0 -> if (row.fromMe) "You sent ${Sats.format(msat)}" else "$name sent you ${Sats.format(msat)}"
-                else -> if (row.fromMe) "You sent a payment" else "$name sent a payment with no sats"
+                row.deleted -> stringResource(R.string.pay_deleted)
+                msat > 0 -> if (row.fromMe) stringResource(R.string.pay_you_sent, Sats.format(msat)) else stringResource(R.string.pay_they_sent_you, name, Sats.format(msat))
+                else -> if (row.fromMe) stringResource(R.string.pay_you_sent_payment) else stringResource(R.string.pay_they_sent_no_sats, name)
             }
             Text(headline, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
             if (!row.deleted && note != null) Text(note, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text)
             if (row.fromMe && !row.deleted) when (row.status) {
-                "PENDING" -> Text("Payment waiting to go", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
-                "FAILED" -> Text("Payment not sent", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
+                "PENDING" -> Text(stringResource(R.string.pay_waiting_to_go), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                "FAILED" -> Text(stringResource(R.string.pay_not_sent), style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
             }
         }
     }
@@ -105,6 +107,7 @@ fun RequestMessage(row: MessageRow, name: String, engine: Engine, storage: Stora
     var record by remember(invoice?.paymentHash) { mutableStateOf<InvoiceRecord?>(null) }
     var working by remember(row.id) { mutableStateOf(false) }
     var confirming by remember(row.id) { mutableStateOf(false) }
+    val couldNotPay = stringResource(R.string.pay_err_pay)
 
     // Where it stands: our own request is the incoming record (paid by the
     // server's history or the payer's type-3 message); one asked of us is
@@ -124,9 +127,9 @@ fun RequestMessage(row: MessageRow, name: String, engine: Engine, storage: Stora
                 withContext(Dispatchers.Default) { engine.payRequest(row, confirmed) }
                 record = invoice?.let { storage.invoice(it.paymentHash, incoming = false) }
             } catch (e: PaymentRefused) {
-                if (e.confirmMsat != null) confirming = true else onError(e.message ?: "Could not pay.")
+                if (e.confirmMsat != null) confirming = true else onError(e.message ?: couldNotPay)
             } catch (e: Exception) {
-                onError(e.message ?: "Could not pay.")
+                onError(e.message ?: couldNotPay)
             } finally {
                 working = false
             }
@@ -140,33 +143,37 @@ fun RequestMessage(row: MessageRow, name: String, engine: Engine, storage: Stora
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Bolt, null, Modifier.size(14.dp), tint = Theme.colors.secondaryText)
             Spacer(Modifier.width(6.dp))
-            Text(if (row.fromMe) "You requested" else "$name requested", style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
+            Text(if (row.fromMe) stringResource(R.string.pay_you_requested) else stringResource(R.string.pay_name_requested, name), style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
             if (record?.status == InvoiceRecord.Status.PAID) {
                 Spacer(Modifier.width(8.dp))
                 Icon(Icons.Filled.Check, null, Modifier.size(14.dp), tint = Theme.colors.confirmed)
-                Text("Paid", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                Text(stringResource(R.string.pay_status_paid), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
             }
         }
         if (invoice == null) {
-            Text("Can't read this invoice, so it can't be paid.", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+            Text(stringResource(R.string.pay_cant_read), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
         } else {
             Text(Sats.format(invoice.amountMsat), style = MaterialTheme.typography.titleLarge, color = Theme.colors.text)
             if (invoice.memo.isNotEmpty()) Text(invoice.memo, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text)
             val paysRequester = invoice.payee == row.chat
             if (!row.fromMe && !paysRequester) {
-                Text("This invoice pays ${invoice.payee.take(12)}, not $name.", style = MaterialTheme.typography.bodySmall, color = Theme.colors.attention)
+                Text(stringResource(R.string.pay_invoice_pays_other, invoice.payee.take(12), name), style = MaterialTheme.typography.bodySmall, color = Theme.colors.attention)
             }
             val status = record?.status
             val expired = invoice.isExpired()
             Text(
                 when {
-                    status == InvoiceRecord.Status.UNDERPAID -> "Partly paid. This invoice can't take the rest."
-                    status == InvoiceRecord.Status.PAID -> (if (row.fromMe) "Paid" else "You paid") +
-                        (record?.paidAt?.let { " · " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) } ?: "")
-                    status == InvoiceRecord.Status.PENDING || status == InvoiceRecord.Status.UNSETTLED -> "Paying…"
-                    expired -> "Expired" + (invoice.expiresAtMs?.let { " at " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) } ?: "")
-                    row.fromMe -> "Waiting to be paid" + (invoice.expiresAtMs?.let { " · expires " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) } ?: "")
-                    else -> "Not paid yet"
+                    status == InvoiceRecord.Status.UNDERPAID -> stringResource(R.string.pay_partly_paid_short)
+                    status == InvoiceRecord.Status.PAID -> {
+                        val who = stringResource(if (row.fromMe) R.string.pay_status_paid else R.string.pay_status_you_paid)
+                        record?.paidAt?.let { stringResource(R.string.pay_with_time, who, DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it))) } ?: who
+                    }
+                    status == InvoiceRecord.Status.PENDING || status == InvoiceRecord.Status.UNSETTLED -> stringResource(R.string.pay_paying)
+                    expired -> invoice.expiresAtMs?.let { stringResource(R.string.pay_status_expired_at, DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it))) }
+                        ?: stringResource(R.string.pay_status_expired)
+                    row.fromMe -> invoice.expiresAtMs?.let { stringResource(R.string.pay_waiting_expires, DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it))) }
+                        ?: stringResource(R.string.pay_waiting)
+                    else -> stringResource(R.string.pay_not_paid_yet)
                 },
                 style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
             )
@@ -179,11 +186,11 @@ fun RequestMessage(row: MessageRow, name: String, engine: Engine, storage: Stora
                     },
                     enabled = !working,
                     colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
-                ) { Text(if (working) "Paying…" else "Pay ${Sats.format(invoice.amountMsat)}") }
+                ) { Text(if (working) stringResource(R.string.pay_paying) else stringResource(R.string.pay_pay_amount, Sats.format(invoice.amountMsat))) }
             }
             if (confirming) ConfirmPaymentDialog(invoice.amountMsat, onConfirm = { confirming = false; pay(invoice.amountMsat) }, onDismiss = { confirming = false })
         }
-        if (row.fromMe && row.status == "FAILED") Text("Not delivered", style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
+        if (row.fromMe && row.status == "FAILED") Text(stringResource(R.string.pay_not_delivered), style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive)
     }
 }
 
@@ -207,6 +214,7 @@ fun ChatMoneyDialog(
     val scope = rememberCoroutineScope()
     val msat = Sats.msat(amountText)
     val send = action == ChatMoneyAction.SEND
+    val couldNotSend = stringResource(R.string.pay_err_send_that)
 
     fun go(confirmed: Long?) {
         working = true; problem = null
@@ -219,7 +227,7 @@ fun ChatMoneyDialog(
             } catch (e: PaymentRefused) {
                 if (e.confirmMsat != null) confirming = true else problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not send that."
+                problem = e.message ?: couldNotSend
             } finally {
                 working = false
             }
@@ -228,26 +236,26 @@ fun ChatMoneyDialog(
 
     AlertDialog(
         onDismissRequest = { if (!working) onDismiss() },
-        title = { Text(if (send) "Send sats to $name" else "Request sats from $name") },
+        title = { Text(if (send) stringResource(R.string.pay_send_sats_to, name) else stringResource(R.string.pay_request_sats_from, name)) },
         text = {
             Column {
                 OutlinedTextField(
                     value = amountText, onValueChange = { amountText = it.filter { c -> c.isDigit() || c == ',' } },
-                    label = { Text("Amount (sats)") }, singleLine = true,
+                    label = { Text(stringResource(R.string.pay_amount_sats)) }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = note, onValueChange = { note = it }, label = { Text(if (send) "Note (optional)" else "Memo (optional)") },
+                    value = note, onValueChange = { note = it }, label = { Text(stringResource(if (send) R.string.pay_note_optional else R.string.pay_memo_optional)) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
             }
         },
         confirmButton = {
-            TextButton(enabled = msat != null && !working, onClick = { go(null) }) { Text(if (working) "Working…" else if (send) "Send" else "Request") }
+            TextButton(enabled = msat != null && !working, onClick = { go(null) }) { Text(stringResource(if (working) R.string.pay_working else if (send) R.string.pay_send else R.string.pay_request)) }
         },
-        dismissButton = { TextButton(enabled = !working, onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !working, onClick = onDismiss) { Text(stringResource(R.string.pay_cancel)) } },
     )
     if (confirming && msat != null) {
         ConfirmPaymentDialog(msat, onConfirm = { confirming = false; go(msat) }, onDismiss = { confirming = false })

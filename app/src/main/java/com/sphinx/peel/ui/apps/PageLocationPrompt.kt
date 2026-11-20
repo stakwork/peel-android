@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.apps
 
 import androidx.compose.foundation.layout.Arrangement
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -41,10 +43,10 @@ internal fun LocationPromptSheet(ask: OrgPageController.LocationAsk) {
                     Switch(checked = precise, onCheckedChange = { precise = it })
                 }
                 Text(PageLocation.PRECISE_NOTE, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
-                Button(onClick = { ask.answer(OrgPageController.LocationAnswer(allow = true, once = false, precise = precise)) }, Modifier.fillMaxWidth()) { Text("Allow") }
-                OutlinedButton(onClick = { ask.answer(OrgPageController.LocationAnswer(allow = true, once = true, precise = precise)) }, Modifier.fillMaxWidth()) { Text("Allow once") }
+                Button(onClick = { ask.answer(OrgPageController.LocationAnswer(allow = true, once = false, precise = precise)) }, Modifier.fillMaxWidth()) { Text(stringResource(R.string.misc_apps_allow)) }
+                OutlinedButton(onClick = { ask.answer(OrgPageController.LocationAnswer(allow = true, once = true, precise = precise)) }, Modifier.fillMaxWidth()) { Text(stringResource(R.string.misc_apps_allow_once)) }
                 TextButton(onClick = { ask.answer(OrgPageController.LocationAnswer(allow = false, once = false, precise = false)) }, Modifier.fillMaxWidth()) {
-                    Text("Don't allow", color = Theme.colors.destructive)
+                    Text(stringResource(R.string.misc_apps_dont_allow), color = Theme.colors.destructive)
                 }
             }
         }

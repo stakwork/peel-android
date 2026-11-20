@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.details
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -163,9 +166,11 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
     var confirmLeave by remember(conversation.chat) { mutableStateOf(false) }
     var leaving by remember(conversation.chat) { mutableStateOf(false) }
     var leaveProblem by remember(conversation.chat) { mutableStateOf<String?>(null) }
+    val didNotGoThrough = stringResource(R.string.ppl_didnt_go_through)
     val scope = rememberCoroutineScope()
 
-    PageFrame("Tribe details", onBack) {
+    val linkCopiedText = stringResource(R.string.ppl_link_copied)
+    PageFrame(stringResource(R.string.ppl_tribe_details), onBack) {
         Hero(conversation, info?.name ?: conversation.name, ChatDetails.heroSubtitle(info))
         info?.description?.let {
             Spacer(Modifier.height(16.dp))
@@ -174,23 +179,24 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
             }
         }
         info?.tags?.takeIf { it.isNotEmpty() }?.let { tags ->
+            val tagsDescription = stringResource(R.string.ppl_tags_desc, tags.joinToString(", "))
             Spacer(Modifier.height(12.dp))
             Text(
                 tags.joinToString("  ·  "),
                 style = MaterialTheme.typography.bodySmall,
                 color = Theme.colors.secondaryText,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Tags: ${tags.joinToString(", ")}" },
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = tagsDescription },
             )
         }
         Spacer(Modifier.height(24.dp))
         FactsCard(facts)
         Spacer(Modifier.height(12.dp))
-        FactsCard(listOf(ChatDetails.Fact("Seen here", seen?.let(ChatDetails::seenLabel) ?: "")))
+        FactsCard(listOf(ChatDetails.Fact(stringResource(R.string.ppl_seen_here), seen?.let(ChatDetails::seenLabel) ?: "")))
         if (link != null) {
             Spacer(Modifier.height(24.dp))
             Text(
-                "Tribe link",
+                stringResource(R.string.ppl_tribe_link),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = Theme.colors.secondaryText,
@@ -199,27 +205,27 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
             )
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Box(Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White).padding(12.dp)) {
-                    QrCodeImage(link, size = 220.dp, contentDescription = "QR code of the tribe link")
+                    QrCodeImage(link, size = 220.dp, contentDescription = stringResource(R.string.ppl_tribe_link_qr))
                 }
             }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
                 OutlinedButton(onClick = {
                     clipboard.setText(AnnotatedString(link))
-                    toast.show("Link copied", ToastType.Success)
-                }) { Text("Copy link") }
+                    toast.show(linkCopiedText, ToastType.Success)
+                }) { Text(stringResource(R.string.ppl_copy_link)) }
                 OutlinedButton(onClick = {
                     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, link)
-                    context.startActivity(Intent.createChooser(send, "Share tribe link"))
-                }) { Text("Share") }
+                    context.startActivity(Intent.createChooser(send, context.str(R.string.ppl_share_tribe_link)))
+                }) { Text(stringResource(R.string.ppl_share)) }
             }
             Spacer(Modifier.height(12.dp))
             MonoValue(link)
         }
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
-            OutlinedButton(onClick = { page = TribePage.MEMBERS }) { Text("Members") }
-            if (isOwner) OutlinedButton(onClick = { page = TribePage.EDIT }) { Text("Edit tribe") }
+            OutlinedButton(onClick = { page = TribePage.MEMBERS }) { Text(stringResource(R.string.ppl_members)) }
+            if (isOwner) OutlinedButton(onClick = { page = TribePage.EDIT }) { Text(stringResource(R.string.ppl_edit_tribe)) }
         }
         Spacer(Modifier.height(24.dp))
         TribeIdentitySection(engine, storage, conversation.chat, info?.name ?: conversation.name)
@@ -232,7 +238,7 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
             Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
         }
         OutlinedButton(onClick = { confirmLeave = true }, enabled = !leaving, modifier = Modifier.fillMaxWidth()) {
-            Text(if (isOwner) "Delete tribe" else "Leave tribe", color = Theme.colors.destructive)
+            Text(stringResource(if (isOwner) R.string.ppl_delete_tribe else R.string.ppl_leave_tribe), color = Theme.colors.destructive)
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -241,8 +247,8 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
         val name = info?.name ?: conversation.name
         AlertDialog(
             onDismissRequest = { confirmLeave = false },
-            title = { Text(if (isOwner) "Delete #$name?" else "Leave #$name?") },
-            text = { Text(if (isOwner) "The tribe is deleted for everyone." else "You can join again later, and may pay its price to join again.") },
+            title = { Text(stringResource(if (isOwner) R.string.ppl_delete_tribe_title else R.string.ppl_leave_tribe_title, name)) },
+            text = { Text(stringResource(if (isOwner) R.string.ppl_delete_tribe_body else R.string.ppl_leave_tribe_body)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmLeave = false
@@ -253,14 +259,14 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
                             if (isOwner) engine.deleteTribe(conversation.chat) else engine.leaveTribe(conversation.chat)
                             onLeftTribe()
                         } catch (e: Exception) {
-                            leaveProblem = e.message ?: "That did not go through."
+                            leaveProblem = e.message ?: didNotGoThrough
                         } finally {
                             leaving = false
                         }
                     }
-                }) { Text(if (isOwner) "Delete" else "Leave", color = Theme.colors.destructive) }
+                }) { Text(stringResource(if (isOwner) R.string.ppl_delete else R.string.ppl_leave), color = Theme.colors.destructive) }
             },
-            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text(stringResource(R.string.ppl_cancel)) } },
         )
     }
 }
@@ -286,14 +292,16 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
     var confirmRemove by remember(conversation.chat) { mutableStateOf(false) }
     var removing by remember(conversation.chat) { mutableStateOf(false) }
     var removeProblem by remember(conversation.chat) { mutableStateOf<String?>(null) }
+    val didNotGoThroughContact = stringResource(R.string.ppl_didnt_go_through)
+    val keyCopiedText = stringResource(R.string.ppl_key_copied)
     val scope = rememberCoroutineScope()
-    PageFrame("Details", onBack) {
+    PageFrame(stringResource(R.string.ppl_details), onBack) {
         Hero(conversation, conversation.name, null)
         // Under the name, like the iPhone: since when, and their time when it is not yours.
         Column(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             since?.let {
                 val day = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()))
-                HeroLine("Contact since $day")
+                HeroLine(stringResource(R.string.ppl_contact_since, day))
             }
             theirZone?.let { zone ->
                 TimeZones.localTimeLine(zone, now, ZoneId.systemDefault(), ::localTime)?.let { HeroLine(it) }
@@ -301,7 +309,7 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
         }
         Spacer(Modifier.height(24.dp))
         Text(
-            "Public key",
+            stringResource(R.string.ppl_public_key),
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.secondaryText,
@@ -309,7 +317,7 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
         )
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            QrCodeImage(conversation.chat, 220.dp, "QR code of their public key")
+            QrCodeImage(conversation.chat, 220.dp, stringResource(R.string.ppl_public_key_qr))
         }
         Spacer(Modifier.height(12.dp))
         MonoValue(conversation.chat)
@@ -317,13 +325,13 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
             OutlinedButton(onClick = {
                 clipboard.setText(AnnotatedString(conversation.chat))
-                toast.show("Key copied", ToastType.Success)
-            }) { Text("Copy key") }
+                toast.show(keyCopiedText, ToastType.Success)
+            }) { Text(stringResource(R.string.ppl_copy_key)) }
             OutlinedButton(onClick = {
                 val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, conversation.chat)
-                context.startActivity(Intent.createChooser(send, "Share public key"))
-            }) { Text("Share") }
-            OutlinedButton(onClick = { shareQr(context, conversation.chat) }) { Text("QR") }
+                context.startActivity(Intent.createChooser(send, context.str(R.string.ppl_share_public_key)))
+            }) { Text(stringResource(R.string.ppl_share)) }
+            OutlinedButton(onClick = { shareQr(context, conversation.chat) }) { Text(stringResource(R.string.ppl_qr)) }
         }
         Spacer(Modifier.height(24.dp))
         TimeZoneSection(engine, conversation.chat, conversation.name)
@@ -332,7 +340,7 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
             Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
         }
         OutlinedButton(onClick = { confirmRemove = true }, enabled = !removing, modifier = Modifier.fillMaxWidth()) {
-            Text(if (removing) "Removing…" else "Remove contact", color = Theme.colors.destructive)
+            Text(stringResource(if (removing) R.string.ppl_removing else R.string.ppl_remove_contact), color = Theme.colors.destructive)
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -340,8 +348,8 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
     if (confirmRemove) {
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
-            title = { Text("Remove ${conversation.name} and delete your chat?") },
-            text = { Text("They keep their copy of the chat, and either of you can add the other again.") },
+            title = { Text(stringResource(R.string.ppl_remove_contact_title, conversation.name)) },
+            text = { Text(stringResource(R.string.ppl_remove_contact_body)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRemove = false
@@ -352,14 +360,14 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
                             withContext(Dispatchers.IO) { engine.deleteContact(conversation.chat) }
                             onRemoved()
                         } catch (e: Exception) {
-                            removeProblem = e.message ?: "That did not go through."
+                            removeProblem = e.message ?: didNotGoThroughContact
                         } finally {
                             removing = false
                         }
                     }
-                }) { Text("Remove", color = Theme.colors.destructive) }
+                }) { Text(stringResource(R.string.ppl_remove), color = Theme.colors.destructive) }
             },
-            dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text(stringResource(R.string.ppl_cancel)) } },
         )
     }
 }
@@ -371,12 +379,14 @@ private fun ContactDetails(engine: Engine, storage: Storage, conversation: Conve
 private fun TribeIdentitySection(engine: Engine, storage: Storage, chat: String, tribeName: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val youWord = stringResource(R.string.ppl_you_lower)
+    val chooseDescription = stringResource(R.string.ppl_choose_photo_desc)
     val saved = remember(chat) { mutableStateOf(engine.tribeIdentity(chat)) }
     var alias by remember(chat) { mutableStateOf(saved.value.alias ?: "") }
     var photo by remember(chat) { mutableStateOf(saved.value.photoUrl) }
     var uploading by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
-    val accountName = remember { storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "you" }
+    val accountName = remember { storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: youWord }
     val accountPhoto = remember { storage.value(Setting.PHOTO_URL)?.takeIf { it.isNotEmpty() } }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -386,10 +396,10 @@ private fun TribeIdentitySection(engine: Engine, storage: Storage, chat: String,
             try {
                 // A JPEG at quality 0.5, at most 1024 px on the long side, as iOS `ProfilePhoto.jpeg`.
                 val jpeg = withContext(Dispatchers.IO) { prepareImageForSending(context, uri, maxDimension = 1024, quality = 50) }
-                    ?: throw IllegalStateException("That is not a picture.")
+                    ?: throw IllegalStateException(context.str(R.string.ppl_not_a_picture))
                 photo = engine.uploadPicture(jpeg)
             } catch (e: Exception) {
-                problem = "Could not upload the photo: ${e.message ?: "try again"}"
+                problem = context.str(R.string.ppl_photo_upload_failed, e.message ?: context.str(R.string.ppl_try_again))
             } finally {
                 uploading = false
             }
@@ -397,22 +407,22 @@ private fun TribeIdentitySection(engine: Engine, storage: Storage, chat: String,
     }
     val typed = alias.trim().takeIf { it.isNotEmpty() }
     val changed = typed != saved.value.alias || photo != saved.value.photoUrl
-    SectionLabel("How you appear in #$tribeName")
+    SectionLabel(stringResource(R.string.ppl_how_you_appear, tribeName))
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Avatar(typed ?: accountName, photo ?: accountPhoto, 56.dp, PersonHue.of(storage.value(Setting.ALIAS) ?: chat))
         OutlinedButton(
             onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             enabled = !uploading,
-            modifier = Modifier.semantics { contentDescription = "Choose your photo for this tribe" },
-        ) { Text(if (uploading) "Uploading…" else "Photo") }
-        if (photo != null) TextButton(onClick = { photo = null }) { Text("Use mine") }
+            modifier = Modifier.semantics { contentDescription = chooseDescription },
+        ) { Text(stringResource(if (uploading) R.string.ppl_uploading else R.string.ppl_photo)) }
+        if (photo != null) TextButton(onClick = { photo = null }) { Text(stringResource(R.string.ppl_use_mine)) }
     }
     Spacer(Modifier.height(12.dp))
     OutlinedTextField(
         value = alias,
         onValueChange = { alias = it; problem = null },
         singleLine = true,
-        label = { Text("Name") },
+        label = { Text(stringResource(R.string.ppl_name)) },
         placeholder = { Text(accountName) },
         modifier = Modifier.fillMaxWidth(),
     )
@@ -426,16 +436,16 @@ private fun TribeIdentitySection(engine: Engine, storage: Storage, chat: String,
                 alias = saved.value.alias ?: ""
                 photo = saved.value.photoUrl
                 problem = null
-            }, modifier = Modifier.weight(1f)) { Text("Revert") }
+            }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.ppl_revert)) }
             Button(onClick = {
                 try {
                     engine.setTribeIdentity(chat, alias, photo)
                     saved.value = engine.tribeIdentity(chat)
                     alias = saved.value.alias ?: ""
                 } catch (e: Exception) {
-                    problem = "Could not save how you appear: ${e.message ?: "try again"}"
+                    problem = context.str(R.string.ppl_save_appear_failed, e.message ?: context.str(R.string.ppl_try_again))
                 }
-            }, enabled = !uploading, modifier = Modifier.weight(1f)) { Text("Save") }
+            }, enabled = !uploading, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.ppl_save)) }
         }
     }
 }
@@ -452,7 +462,7 @@ private fun shareQr(context: android.content.Context, text: String) {
     val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val send = Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri)
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    context.startActivity(Intent.createChooser(send, "Share QR code"))
+    context.startActivity(Intent.createChooser(send, context.str(R.string.ppl_share_qr)))
 }
 
 @Composable
@@ -490,12 +500,12 @@ private fun TimeZoneSection(engine: Engine, chat: String, title: String) {
     var picking by remember { mutableStateOf(false) }
     val deviceId = remember { java.util.TimeZone.getDefault().id }
     val now = System.currentTimeMillis()
-    val zoneText = (if (choice.identifier.isEmpty()) "Automatic · $deviceId" else choice.identifier.replace('_', ' ')) +
+    val zoneText = (if (choice.identifier.isEmpty()) stringResource(R.string.ppl_automatic_zone, deviceId) else choice.identifier.replace('_', ' ')) +
         " (" + TimeZoneSharing.offsetLabel(choice.identifier, now) + ")"
-    SectionLabel("Time zone")
+    SectionLabel(stringResource(R.string.ppl_time_zone))
     Column(Modifier.fillMaxWidth().border(1.dp, Theme.colors.inputBorder, RoundedCornerShape(12.dp)).padding(horizontal = 16.dp)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Share my time zone with $title", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.ppl_share_time_zone, title), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text, modifier = Modifier.weight(1f))
             Switch(checked = choice.enabled, onCheckedChange = {
                 engine.setTimeZoneChoice(chat, it, choice.identifier)
                 choice = engine.timeZoneChoice(chat)
@@ -503,7 +513,7 @@ private fun TimeZoneSection(engine: Engine, chat: String, title: String) {
         }
         HorizontalDivider(color = Theme.colors.divider)
         Row(Modifier.fillMaxWidth().clickable { picking = true }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Time zone", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.ppl_time_zone), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText, modifier = Modifier.weight(1f))
             Text(zoneText, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text, textAlign = TextAlign.End, modifier = Modifier.widthIn(max = 220.dp))
         }
     }
@@ -523,10 +533,10 @@ private fun TimeZonePicker(deviceId: String, now: Long, onDismiss: () -> Unit, o
     val options = remember(query) { TimeZoneSharing.options(query, deviceId) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Time zone") },
+        title = { Text(stringResource(R.string.ppl_time_zone)) },
         text = {
             Column {
-                OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Search") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text(stringResource(R.string.ppl_search)) }, modifier = Modifier.fillMaxWidth())
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
                     items(options, key = { it.identifier }) { option ->
                         Row(Modifier.fillMaxWidth().clickable { onPick(option.identifier) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -537,7 +547,7 @@ private fun TimeZonePicker(deviceId: String, now: Long, onDismiss: () -> Unit, o
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ppl_cancel)) } },
     )
 }
 

@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.components
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.widget.MediaController
@@ -156,7 +158,7 @@ fun VideoAttachment(file: File) {
             InlineVideo(file, Modifier.fillMaxSize(), controls = false, onEnd = { playing = false })
         } else {
             info?.frame?.let {
-                Image(it, contentDescription = "Video", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                Image(it, contentDescription = stringResource(R.string.dash_video), contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
             Box(
                 Modifier
@@ -167,7 +169,7 @@ fun VideoAttachment(file: File) {
                     .clickable { playing = true },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(34.dp))
+                Icon(Icons.Filled.PlayArrow, contentDescription = stringResource(R.string.dash_play), tint = Color.White, modifier = Modifier.size(34.dp))
             }
             info?.durationMs?.takeIf { it > 0 }?.let {
                 Text(
@@ -187,7 +189,7 @@ fun VideoAttachment(file: File) {
             onClick = { playing = false; fullscreen = true },
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(32.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)),
         ) {
-            Icon(Icons.Filled.Fullscreen, contentDescription = "Full screen", tint = Color.White, modifier = Modifier.size(20.dp))
+            Icon(Icons.Filled.Fullscreen, contentDescription = stringResource(R.string.dash_full_screen), tint = Color.White, modifier = Modifier.size(20.dp))
         }
     }
 
@@ -228,7 +230,7 @@ private fun CloseButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         onClick = onClick,
         modifier = modifier.padding(12.dp).size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)),
     ) {
-        Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.dash_close), tint = Color.White)
     }
 }
 
@@ -265,7 +267,7 @@ fun ZoomableImageDialog(file: File, onDismiss: () -> Unit) {
         ) {
             AsyncImage(
                 model = file,
-                contentDescription = "Image",
+                contentDescription = stringResource(R.string.dash_image),
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()

@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.call
 
 import androidx.compose.foundation.background
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,7 +54,7 @@ fun CallBanner(phase: CallPhase, onTap: () -> Unit, onLeave: () -> Unit) {
                 Text(phase.title, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text, maxLines = 1)
                 Text(
                     when (phase) {
-                        is CallPhase.Connecting -> "Connecting…"
+                        is CallPhase.Connecting -> stringResource(R.string.misc_connecting)
                         is CallPhase.Failed -> phase.error
                         is CallPhase.Active -> CallStatusText(phase.session)
                     },
@@ -63,13 +65,13 @@ fun CallBanner(phase: CallPhase, onTap: () -> Unit, onLeave: () -> Unit) {
                 IconButton(onClick = session::toggleMicrophone, enabled = !session.micRefused) {
                     Icon(
                         if (session.micOn) Icons.Filled.Mic else Icons.Filled.MicOff,
-                        contentDescription = if (session.micOn) "Mute" else "Unmute",
+                        contentDescription = if (session.micOn) stringResource(R.string.misc_call_mute) else stringResource(R.string.misc_call_unmute),
                         tint = if (session.micOn) Theme.colors.text else Theme.colors.secondaryText,
                     )
                 }
             }
             IconButton(onClick = onLeave) {
-                Icon(Icons.Filled.CallEnd, contentDescription = "Leave the call", tint = Theme.colors.destructive)
+                Icon(Icons.Filled.CallEnd, contentDescription = stringResource(R.string.misc_call_leave), tint = Theme.colors.destructive)
             }
         }
         HorizontalDivider(color = Theme.colors.divider)

@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.payments
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -116,6 +118,9 @@ private fun PaymentsList(
     var hasMore by remember { mutableStateOf(true) }
     var problem by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val couldNotCheck = stringResource(R.string.pay_err_check)
+    val todayLabel = stringResource(R.string.pay_today)
+    val yesterdayLabel = stringResource(R.string.pay_yesterday)
 
     suspend fun reload() {
         items = withContext(Dispatchers.Default) {
@@ -127,7 +132,7 @@ private fun PaymentsList(
             engine.refreshPaymentHistory()
             problem = null
         } catch (e: Exception) {
-            problem = e.message ?: "Could not check payments with the server."
+            problem = e.message ?: couldNotCheck
         }
         reload()
     }
@@ -147,16 +152,16 @@ private fun PaymentsList(
     LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp)) {
         item {
             Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-                Text("Payments", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+                Text(stringResource(R.string.pay_payments), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
                 Spacer(Modifier.height(16.dp))
                 BalanceHeader(balance, onReceive, onSend)
-                TextButton(onClick = { scope.launch { refresh() } }, enabled = connected) { Text("Refresh", color = Theme.colors.accent) }
+                TextButton(onClick = { scope.launch { refresh() } }, enabled = connected) { Text(stringResource(R.string.pay_refresh), color = Theme.colors.accent) }
             }
         }
         if (items.isEmpty()) {
             item {
                 Text(
-                    problem ?: if (connected) "No payments yet." else "Not connected.",
+                    problem ?: if (connected) stringResource(R.string.pay_no_payments) else stringResource(R.string.pay_not_connected),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Theme.colors.secondaryText,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
@@ -167,7 +172,7 @@ private fun PaymentsList(
             for ((day, dayItems) in days) {
                 item(key = "day$day") {
                     Text(
-                        dayHeading(day),
+                        dayHeading(day, todayLabel, yesterdayLabel),
                         style = MaterialTheme.typography.labelLarge,
                         color = Theme.colors.secondaryText,
                         modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
@@ -195,7 +200,7 @@ private fun PaymentsList(
             if (loadingOlder || problem != null) {
                 item {
                     Text(
-                        if (loadingOlder) "Loading older payments" else problem ?: "",
+                        if (loadingOlder) stringResource(R.string.pay_loading_older) else problem ?: "",
                         style = MaterialTheme.typography.labelMedium,
                         color = Theme.colors.secondaryText,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
@@ -210,7 +215,7 @@ private fun PaymentsList(
 @Composable
 private fun BalanceHeader(balanceMsat: Long?, onReceive: () -> Unit, onSend: () -> Unit) {
     Column {
-        Text("Balance", style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
+        Text(stringResource(R.string.pay_balance), style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 balanceMsat?.let { Sats.number(it) } ?: "–",
@@ -222,13 +227,13 @@ private fun BalanceHeader(balanceMsat: Long?, onReceive: () -> Unit, onSend: () 
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(onClick = onReceive, modifier = Modifier.weight(1f).height(48.dp)) {
-                Icon(Icons.Filled.ArrowDownward, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Receive")
+                Icon(Icons.Filled.ArrowDownward, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.pay_receive))
             }
             Button(
                 onClick = onSend, modifier = Modifier.weight(1f).height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
             ) {
-                Icon(Icons.Filled.ArrowUpward, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Send")
+                Icon(Icons.Filled.ArrowUpward, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.pay_send))
             }
         }
     }
@@ -279,14 +284,14 @@ private fun PaymentRow(item: PaymentItem, modifier: Modifier = Modifier) {
 private fun timeOf(ts: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(ts))
 
 /// iOS `Formatting.dayHeading`: "Today", "Yesterday", else "Monday 3 November".
-private fun dayHeading(dayMs: Long): String {
+private fun dayHeading(dayMs: Long, today: String, yesterday: String): String {
     val now = java.util.Calendar.getInstance()
     val day = java.util.Calendar.getInstance().apply { timeInMillis = dayMs }
     fun ymd(c: java.util.Calendar) = c.get(java.util.Calendar.YEAR) * 1000 + c.get(java.util.Calendar.DAY_OF_YEAR)
-    val yesterday = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.DAY_OF_YEAR, -1) }
+    val yesterdayDate = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.DAY_OF_YEAR, -1) }
     return when (ymd(day)) {
-        ymd(now) -> "Today"
-        ymd(yesterday) -> "Yesterday"
+        ymd(now) -> today
+        ymd(yesterdayDate) -> yesterday
         else -> java.text.SimpleDateFormat("EEEE d MMMM", java.util.Locale.getDefault()).format(Date(dayMs))
     }
 }
@@ -304,7 +309,7 @@ internal fun Fact(label: String, value: String) {
 internal fun PageFrame(title: String, onBack: () -> Unit, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.pay_back), tint = Theme.colors.text) }
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
         }
         Column(

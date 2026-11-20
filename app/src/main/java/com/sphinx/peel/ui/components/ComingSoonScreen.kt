@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.components
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -35,13 +37,13 @@ fun ComingSoonScreen(title: String, onBack: () -> Unit, modifier: Modifier = Mod
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.dash_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(12.dp))
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
         }
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Text("Coming soon", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+            Text(stringResource(R.string.dash_coming_soon), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
         }
     }
 }

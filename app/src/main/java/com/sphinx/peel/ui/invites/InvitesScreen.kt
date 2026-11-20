@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.invites
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -92,6 +95,7 @@ fun NewInviteScreen(engine: Engine, onBack: () -> Unit, onMade: (InviteRecord) -
     var confirmMsat by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
     val msat = Sats.msat(amountText)
+    val makeFailedText = stringResource(R.string.ppl_invite_make_failed)
 
     fun make(confirmed: Long?) {
         val amount = msat ?: return
@@ -106,32 +110,32 @@ fun NewInviteScreen(engine: Engine, onBack: () -> Unit, onMade: (InviteRecord) -
             } catch (e: InviteRefused) {
                 problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not make the invite."
+                problem = e.message ?: makeFailedText
             } finally {
                 working = false
             }
         }
     }
 
-    PageFrame("New invite", onBack) {
+    PageFrame(stringResource(R.string.ppl_new_invite), onBack) {
         OutlinedTextField(
             value = amountText, onValueChange = { amountText = it.filter { c -> c.isDigit() || c == ',' } },
-            label = { Text("Amount (sats)") }, singleLine = true,
+            label = { Text(stringResource(R.string.ppl_amount_sats)) }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "The server may keep a small fee. They get the rest when they join.",
+            stringResource(R.string.ppl_invite_fee_note),
             style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, modifier = Modifier.padding(top = 4.dp),
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = nickname, onValueChange = { nickname = it.take(InviteRecord.MAX_NICKNAME_LENGTH) },
-            label = { Text("Who is it for? (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.ppl_invite_who_for)) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = message, onValueChange = { message = it.take(InviteRecord.MAX_MESSAGE_LENGTH) },
-            label = { Text("Note to yourself (optional)") }, minLines = 2, modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.ppl_invite_note)) }, minLines = 2, modifier = Modifier.fillMaxWidth(),
         )
         problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
         Spacer(Modifier.height(16.dp))
@@ -141,17 +145,17 @@ fun NewInviteScreen(engine: Engine, onBack: () -> Unit, onMade: (InviteRecord) -
             modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
         ) {
-            if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text("Make invite")
+            if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text(stringResource(R.string.ppl_make_invite))
         }
     }
 
     confirmMsat?.let { amount ->
         AlertDialog(
             onDismissRequest = { confirmMsat = null },
-            title = { Text("Put ${Sats.format(amount)} in an invite?") },
-            text = { Text("The sats leave your balance now. Anyone who has the invite can use them, until you cancel it.") },
-            confirmButton = { TextButton(onClick = { confirmMsat = null; make(amount) }) { Text("Make invite", color = Theme.colors.accent) } },
-            dismissButton = { TextButton(onClick = { confirmMsat = null }) { Text("Cancel") } },
+            title = { Text(stringResource(R.string.ppl_invite_confirm_title, Sats.format(amount))) },
+            text = { Text(stringResource(R.string.ppl_invite_confirm_body)) },
+            confirmButton = { TextButton(onClick = { confirmMsat = null; make(amount) }) { Text(stringResource(R.string.ppl_make_invite), color = Theme.colors.accent) } },
+            dismissButton = { TextButton(onClick = { confirmMsat = null }) { Text(stringResource(R.string.ppl_cancel)) } },
         )
     }
 }
@@ -182,6 +186,9 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
     var enlarged by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
     val ready = invite.status == InviteRecord.Status.READY
+    val cancelledText = stringResource(R.string.ppl_invite_cancelled)
+    val cancelFailedText = stringResource(R.string.ppl_invite_cancel_failed)
+    val couldNotRemoveText = stringResource(R.string.ppl_could_not_remove)
     val shareable = ready || invite.status == InviteRecord.Status.SENDING
 
     fun cancel() {
@@ -191,9 +198,9 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
         scope.launch {
             try {
                 engine.cancelInvite(invite.code)
-                toast.show("Invite cancelled.", ToastType.Success)
+                toast.show(cancelledText, ToastType.Success)
             } catch (e: Exception) {
-                problem = e.message ?: "Could not cancel the invite."
+                problem = e.message ?: cancelFailedText
             } finally {
                 working = false
             }
@@ -205,9 +212,9 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
             Box(
                 Modifier.align(Alignment.CenterStart).size(36.dp).clip(CircleShape).background(Theme.colors.fieldFill).clickable(onClick = onClose),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Theme.colors.text, modifier = Modifier.size(18.dp)) }
+            ) { Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.ppl_close), tint = Theme.colors.text, modifier = Modifier.size(18.dp)) }
             Text(
-                invite.nickname ?: "Invite",
+                invite.nickname ?: stringResource(R.string.ppl_invite),
                 style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text,
                 maxLines = 1, modifier = Modifier.padding(horizontal = 48.dp),
             )
@@ -225,28 +232,28 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
                 Modifier.size(248.dp).clip(RoundedCornerShape(20.dp)).background(if (ready) Color.White else Theme.colors.fieldFill),
                 contentAlignment = Alignment.Center,
             ) {
-                if (ready) QrCodeImage(invite.link, size = 224.dp, contentDescription = "QR code of the invite")
+                if (ready) QrCodeImage(invite.link, size = 224.dp, contentDescription = stringResource(R.string.ppl_invite_qr))
             }
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 InviteButton(
-                    "Copy invite", Icons.Filled.ContentCopy, enabled = shareable, modifier = Modifier.weight(1f),
+                    stringResource(R.string.ppl_copy_invite), Icons.Filled.ContentCopy, enabled = shareable, modifier = Modifier.weight(1f),
                 ) { AndroidClipboardAccess.sensitive(context).copy(invite.link, SensitiveClipboard.DEFAULT_CLEAR_MS * 2) }
-                InviteButton("Share", Icons.Filled.Share, enabled = shareable, modifier = Modifier.weight(1f)) {
+                InviteButton(stringResource(R.string.ppl_share), Icons.Filled.Share, enabled = shareable, modifier = Modifier.weight(1f)) {
                     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, invite.link)
-                    context.startActivity(Intent.createChooser(send, "Share invite"))
+                    context.startActivity(Intent.createChooser(send, context.str(R.string.ppl_share_invite)))
                 }
-                InviteButton("QR", Icons.Filled.QrCode, enabled = ready, modifier = Modifier.weight(1f)) { enlarged = true }
+                InviteButton(stringResource(R.string.ppl_qr), Icons.Filled.QrCode, enabled = ready, modifier = Modifier.weight(1f)) { enlarged = true }
             }
             Spacer(Modifier.height(12.dp))
             Text(
-                "Anyone with this invite can claim its sats.",
+                stringResource(R.string.ppl_invite_claim_warning),
                 style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, textAlign = TextAlign.Center,
             )
             invite.message?.let { message ->
                 Spacer(Modifier.height(16.dp))
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Theme.colors.fieldFill).padding(12.dp)) {
-                    Text("Your message", style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
+                    Text(stringResource(R.string.ppl_your_message), style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
                     Spacer(Modifier.height(4.dp))
                     Text(message, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text)
                 }
@@ -260,30 +267,30 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
         // Pinned to the bottom of the screen.
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when {
-                !invite.isPending -> InviteButton("Done", null, modifier = Modifier.fillMaxWidth(), onClick = onClose)
+                !invite.isPending -> InviteButton(stringResource(R.string.ppl_done), null, modifier = Modifier.fillMaxWidth(), onClick = onClose)
                 confirmingCancel -> {
                     Text(
-                        "Get the sats back?", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text,
+                        stringResource(R.string.ppl_get_sats_back), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text,
                         textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
                     )
-                    InviteButton("Cancel invite", null, modifier = Modifier.fillMaxWidth()) { cancel() }
+                    InviteButton(stringResource(R.string.ppl_cancel_invite), null, modifier = Modifier.fillMaxWidth()) { cancel() }
                     TextButton(onClick = { confirmingCancel = false }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Keep it", color = Theme.colors.secondaryText)
+                        Text(stringResource(R.string.ppl_keep_it), color = Theme.colors.secondaryText)
                     }
                 }
                 else -> {
                     if (invite.status == InviteRecord.Status.CANCELLING) {
-                        InviteButton("Remove from list", null, enabled = !working, modifier = Modifier.fillMaxWidth()) {
+                        InviteButton(stringResource(R.string.ppl_remove_from_list), null, enabled = !working, modifier = Modifier.fillMaxWidth()) {
                             try {
                                 engine.forgetInvite(invite.code)
                                 onClose()
                             } catch (e: Exception) {
-                                problem = e.message ?: "Could not remove it."
+                                problem = e.message ?: couldNotRemoveText
                             }
                         }
                     }
                     InviteButton(
-                        if (invite.status == InviteRecord.Status.CANCELLING) "Ask again" else "Cancel invite", null,
+                        stringResource(if (invite.status == InviteRecord.Status.CANCELLING) R.string.ppl_ask_again else R.string.ppl_cancel_invite), null,
                         enabled = InviteRules.canCancel(invite.status) && !working, working = working, modifier = Modifier.fillMaxWidth(),
                     ) { confirmingCancel = true }
                 }
@@ -294,7 +301,7 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
     if (enlarged) {
         Dialog(onDismissRequest = { enlarged = false }) {
             Box(Modifier.clip(RoundedCornerShape(20.dp)).background(Color.White).clickable { enlarged = false }.padding(16.dp)) {
-                QrCodeImage(invite.link, size = 300.dp, contentDescription = "QR code of the invite")
+                QrCodeImage(invite.link, size = 300.dp, contentDescription = stringResource(R.string.ppl_invite_qr))
             }
         }
     }
