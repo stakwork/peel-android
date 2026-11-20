@@ -46,6 +46,7 @@ import com.sphinx.peel.account.Account
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.Signup
 import com.sphinx.peel.engine.InviteLink
+import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.storage.Storage
@@ -77,12 +78,16 @@ private sealed class Step {
 ///
 /// `inviteLink` is what a `sphinx.chat://` link the app was opened with held:
 /// it fills the invite step in (`onInviteLinkUsed` is called once it has).
+/// `onInviteApp` is told the app a worker's invite names (`InviteLink.appOf`, its
+/// `a=`) when the invite step goes on with it, however the invite got there:
+/// tapped, off the clipboard, pasted or scanned (docs/phases/51-pasted-invite.md).
 @Composable
 fun OnboardingScreen(
     secretStore: SecretStore,
     storage: Storage,
     inviteLink: String? = null,
     onInviteLinkUsed: () -> Unit = {},
+    onInviteApp: (PublicAppLink) -> Unit = {},
     onAccountReady: (engine: Engine) -> Unit,
 ) {
     com.sphinx.peel.ui.SecureWindow()
@@ -229,6 +234,9 @@ fun OnboardingScreen(
                 scope.launch {
                     try {
                         invite = withContext(Dispatchers.Default) { InviteLink.parse(inviteText) }
+                        // A worker's invite names the app to open after signup (`a=`): kept as a tapped link's is, so a
+                        // pasted or scanned one opens it too.
+                        InviteLink.appOf(inviteText.trim())?.let(onInviteApp)
                         problem = null
                         step = Step.Name
                     } catch (e: Exception) {
