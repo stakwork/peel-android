@@ -80,3 +80,12 @@ same `public_app` as a fresh database).
   worker; Disconnect clearing the row; a real worker sign-in and payout.
 - A worker who removes their last opened app while in Apps sees "No Stadeum here yet" there (the workspace wording) until Back;
   the Chats row is gone by then. Left as is.
+
+### Fix: the address was never kept (journal)
+`Engine.commitLocked` ignored `RunReturn.myContactInfo`, so `Setting.CONTACT_INFO` was never written outside tests and every
+`sign_in` went out with no `address` (strut's withdraw: "your sign-in gave no Sphinx address to pay"). Now `commitLocked` commits
+it in its one write (`CommitSettings.of`, iOS `Engine.swift` `commit.settings[.contactInfo]`), and `Engine.signInAddress` falls
+back, for accounts that registered before this, to the address built from core state (`SignInAddress.fromState`: `my_scid` 8 bytes
+big-endian, `server_pubkey` 33 raw bytes, as iOS's fixtures), still only if its pubkey is the account key. A domain key still sends
+none. Tests: `SignInAddressStoredTest` (JVM). Not run on a device; the state byte encoding is taken from iOS's `registeredState`
+fixture, not from a real core run.

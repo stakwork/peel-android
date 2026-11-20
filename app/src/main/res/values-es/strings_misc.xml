@@ -204,4 +204,8 @@
     <string name="misc_svc_android_refused">Android no dejó que Peel mantuviera esta llamada en segundo plano.</string>
     <string name="misc_svc_permission">Peel no tiene permiso para mantener esta llamada en segundo plano (falta un permiso).</string>
     <string name="misc_svc_generic">Peel no pudo mantener esta llamada en segundo plano.</string>
+    <string name="misc_you_contact_info">Tu información de contacto</string>
+    <string name="misc_you_contact_info_not_ready">Aún no está listo</string>
+    <string name="misc_you_contact_info_qr">Código QR de tu información de contacto</string>
+    <string name="misc_you_contact_info_copy">Copiar información de contacto</string>
 </resources>

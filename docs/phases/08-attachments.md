@@ -573,3 +573,12 @@ coroutines-test, not a dependency); the pure parts are in `AttachmentRulesTest`.
   convenience functions are themselves built on was the right level to
   reach for once the shape didn't match either convenience function's
   own assumption.
+
+
+## Journal: Staged photos in every chat
+Status: **built, compiles, `testDebugUnitTest` + `assembleDebug` pass; the Compose wiring and the picker have never run on a device (no /dev/kvm in the pod, so no emulator, no screenshots).**
+- Photo (gallery, now `PickMultipleVisualMedia(StagedAttachments.MAX_PICTURES = 10)`, images only) and Camera **stage** the picture in every chat's main composer and the thread composer, reusing `PendingAttachments`/`PendingTray` (`PendingAttachments(context, agent)`, `PendingTray(agent = …)`). Non-agent staging: JPEG at 2048 px, no white flatten, no model switch, no Mac note; the agent DM keeps 4096 px, the switch and the note. Repeated attaching appends up to the cap.
+- **Model found**: one attachment per message (`Engine.sendAttachment`: one file, one caption). `sendImageAttachment` is `sendAttachment("image.jpg","image/jpg")`; `sendFileAttachment` only adds `classifyOutgoingFile`. So Send posts the pictures in order as separate messages, the typed text as the caption of the FIRST (like the existing `sendAll`). Non-agent pictures use `sendImageAttachment` with `isTribe`, reply and thread, exactly the old immediate path.
+- Failure: a non-agent send stops at the first failure (order and caption position kept); failed and remaining pictures stay staged, the text returns to the box if the caption did not go, the reply target is restored, the first error is shown in the screen's usual `error`. Sent files are removed one by one; all temp files are dropped on removal, send and leaving (`DisposableEffect`).
+- **Files** and voice notes: voice sends immediately; Files in non-agent chats still send on pick (staging would run the File picker through the picture-to-JPEG conversion, changing what recipients get). The agent DM stages files as before.
+- Pure rules `StagedAttachments` (`engine/AttachmentRules.kt`, `StagedAttachmentsTest`): cap and its "up to 10 photos" message (shown when a pick is truncated), send-enabled, caption placement, size limit (agent 32 MB, others 100 MB on the raw copy, as the engine). Staging converts with `prepareImageBytes(bytes)` defaults = the old `prepareImageForSending` (2048 px, q85, same EXIF rotation, no flatten).

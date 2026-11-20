@@ -148,3 +148,33 @@ data class VisitorSignature(
 fun interface VisitorSigner {
     suspend fun sign(challenge: VisitorChallenge, key: SignInKey): VisitorSignature
 }
+
+/// The settings one core call's result commits beside its state (pure, so a test drives the real rule without the core):
+/// the clock, a reported balance, and the contact info the core reports as `myContactInfo` (iOS Engine.swift).
+internal object CommitSettings {
+    fun of(time: String, newBalance: ULong?, myContactInfo: String?): Map<com.sphinx.peel.storage.Setting, String> {
+        val settings = mutableMapOf(com.sphinx.peel.storage.Setting.CLOCK to time)
+        newBalance?.let { settings[com.sphinx.peel.storage.Setting.BALANCE_MSAT] = it.toString() }
+        myContactInfo?.let { settings[com.sphinx.peel.storage.Setting.CONTACT_INFO] = it }
+        return settings
+    }
+}
+
+/// The account's own Sphinx address for a sign-in with its root key. Never used with a domain key.
+internal object SignInAddress {
+    /// The stored contact info when it is this key's address, else the one the core state holds: `my_scid` (8 bytes,
+    /// big-endian) and `server_pubkey` (33 raw bytes), as `<accountKey>_<server_pubkey>_<scid>`. Null when either is
+    /// missing or not that shape, or the result is not an address of [accountKey] (`VisitorSignature.address`).
+    fun resolve(contactInfo: String?, state: Map<String, ByteArray>, accountKey: String): String? =
+        VisitorSignature.address(contactInfo, accountKey) ?: fromState(state, accountKey)
+
+    fun fromState(state: Map<String, ByteArray>, accountKey: String): String? {
+        val scidBytes = state["my_scid"] ?: return null
+        val lsp = state["server_pubkey"] ?: return null
+        if (scidBytes.size != 8 || lsp.size != 33) return null
+        val scid = java.math.BigInteger(1, scidBytes)
+        if (scid.bitLength() > 64) return null
+        val lspHex = lsp.joinToString("") { "%02x".format(it) }
+        return VisitorSignature.address("${accountKey}_${lspHex}_$scid", accountKey)
+    }
+}

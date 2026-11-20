@@ -368,8 +368,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         // this port has none of yet; storing the number itself needed
         // nothing from that to be worth doing — it's what lets Profile
         // show a real balance instead of nothing at all.
-        val settings = mutableMapOf(Setting.CLOCK to time)
-        result.newBalance?.let { settings[Setting.BALANCE_MSAT] = it.toString() }
+        // The contact info the core reports (at registering, and on any later call that restates it) is the account's own
+        // Sphinx address; a sign-in with the account's key sends it (`signInAddress`). Committed in this same write, as
+        // Engine.swift does (`commit.settings[.contactInfo] = info`).
+        val settings = CommitSettings.of(time, result.newBalance, result.myContactInfo).toMutableMap()
 
         // One write: the state, and an app's payment rows with its budget check. When it refuses nothing below runs, so the state is not moved.
         storage.apply(
@@ -838,7 +840,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// The account's own Sphinx address for a sign-in with its key (iOS `Engine.signInAddress`): the contact info the core
     /// reported at registering ([Setting.CONTACT_INFO], `<pubkey>_<lsp_pubkey>_<scid>`, the one Peel shows as yours), whose
     /// pubkey is the key at child 0 ([accountKey]). Null before registering, and null rather than an address of another key.
-    fun signInAddress(): String? = VisitorSignature.address(storage.value(Setting.CONTACT_INFO), accountKey)
+    /// An account that registered before [commitLocked] kept the contact info has none stored; its address is the same three
+    /// parts the core holds in state ([SignInAddress.fromState]), so it is built from them, still only if its pubkey is [accountKey].
+    fun signInAddress(): String? = SignInAddress.resolve(storage.value(Setting.CONTACT_INFO), state, accountKey)
 
     /// The app wallet's host (iOS `AppModel.walletReply`/`listenToWallet`): one for the account, so one sheet at a time across
     /// every page, and the notifications its pages listen to come from one place.

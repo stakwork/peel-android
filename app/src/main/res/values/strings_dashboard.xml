@@ -45,4 +45,7 @@
     <string name="dash_image">Image</string>
     <string name="dash_inviter_failed">Adding the person who invited you didn\'t work: %1$s</string>
     <string name="dash_inviter_will_retry">Adding the person who invited you didn\'t work yet. Peel will try again.</string>
+    <string name="dash_attach_too_many">You can attach up to %1$d photos at a time.</string>
+    <string name="dash_attach_too_large">%1$s is too large to send.</string>
+    <string name="dash_attach_too_large_agent">%1$s is too large to send. The agent takes files up to 32 MB.</string>
 </resources>

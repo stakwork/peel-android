@@ -2,6 +2,7 @@ package com.sphinx.peel.ui.dashboard
 
 import com.sphinx.peel.ui.str
 import com.sphinx.peel.engine.AgentMessages
+import com.sphinx.peel.engine.StagedAttachments
 import com.sphinx.peel.engine.ChatSearch
 import com.sphinx.peel.engine.TEXT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AgentExtras
@@ -276,8 +277,8 @@ fun ConversationScreen(
     var sendingLabel by remember(chat) { mutableStateOf<String?>(null) }
     var cameraOutputUri by remember(chat) { mutableStateOf<android.net.Uri?>(null) }
 
-    // The agent's DM holds what is picked until Send (`PendingAttachments`); every other chat sends on pick.
-    val pending = remember(chat) { PendingAttachments(context) }
+    // Every chat holds picked pictures until Send (`PendingAttachments`); the agent's DM also holds files, other chats send files on pick.
+    val pending = remember(chat) { PendingAttachments(context, agent = isAgent) }
     DisposableEffect(chat) { onDispose { pending.clear() } }
 
     fun addPending(uri: android.net.Uri, picture: Boolean) {
@@ -288,35 +289,24 @@ fun ConversationScreen(
         }
     }
 
-    fun sendImage(uri: android.net.Uri) {
-        if (isAgent) { addPending(uri, picture = true); return }
+    // Every chat stages pictures (gallery, camera) until Send; "Files" stay agent-staged / immediate elsewhere.
+    fun stagePictures(uris: List<android.net.Uri>) {
         scope.launch {
-            sendingLabel = context.str(R.string.conv_sending_photo)
             error = null
-            try {
-                val jpeg = withContext(Dispatchers.Default) { prepareImageForSending(context, uri) }
-                    ?: throw IllegalStateException(context.str(R.string.conv_not_image))
-                val caption = draft
-                val replyUuid = replyTo?.uuid
-                val inThread = replyTo?.let { threadRoot(it) }
-                draft = ""
-                replyTo = null
-                engine.sendImageAttachment(chat, jpeg, caption, isTribe, replyUuid, inThread)
-                reload()
-            } catch (e: Exception) {
-                error = e.message ?: context.str(R.string.conv_err_image)
-            } finally {
-                sendingLabel = null
+            val room = StagedAttachments.room(pending.files.size)
+            for (uri in uris.take(room)) {
+                pending.addPicture(uri)?.let { error = it }
             }
+            if (uris.size > room) error = context.str(R.string.dash_attach_too_many, StagedAttachments.MAX_PICTURES)
         }
     }
 
-    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) sendImage(uri)
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(StagedAttachments.MAX_PICTURES)) { uris ->
+        if (uris.isNotEmpty()) stagePictures(uris)
     }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val uri = cameraOutputUri
-        if (success && uri != null) sendImage(uri)
+        if (success && uri != null) stagePictures(listOf(uri))
     }
 
     // "Files" — any file, the one attach option that isn't image/camera
@@ -791,12 +781,13 @@ fun ConversationScreen(
             sendingLabel = sendingLabel,
             onSendSats = { moneyAction = ChatMoneyAction.SEND }.takeIf { !isTribe && !isAgent },
             onRequestSats = { moneyAction = ChatMoneyAction.REQUEST }.takeIf { !isTribe && !isAgent },
-            tray = if (isAgent) ({ PendingTray(pending, Modifier.padding(bottom = 6.dp)) }) else null,
-            hasPending = isAgent && pending.files.isNotEmpty(),
+            tray = ({ PendingTray(pending, Modifier.padding(bottom = 6.dp), agent = isAgent) }),
+            hasPending = pending.files.isNotEmpty(),
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
-                if (isAgent && pending.files.isNotEmpty()) {
+                if (pending.files.isNotEmpty()) {
+                    val repliedTo = replyTo
                     val inThreadOfReply = replyTo?.let { threadRoot(it) }
                     draft = ""
                     replyTo = null
@@ -805,9 +796,13 @@ fun ConversationScreen(
                     scope.launch {
                         sendingLabel = context.str(R.string.conv_sending)
                         try {
-                            val outcome = pending.sendAll(engine, chat, toSend, replyUuid, inThreadOfReply) { reload() }
-                            // A refused first file leaves the text on its own, as the Mac does.
-                            if (!outcome.captionSent) {
+                            val outcome = pending.sendAll(engine, chat, toSend, isTribe, replyUuid, inThreadOfReply) { reload() }
+                            if (!outcome.captionSent && !isAgent) {
+                                // Staged photos failed: the text did not go either, so it stays in the box (photos stay staged).
+                                draft = toSend
+                                if (replyTo == null) replyTo = repliedTo
+                            } else if (!outcome.captionSent) {
+                                // A refused first file leaves the text on its own, as the Mac does (agent DM).
                                 try {
                                     engine.sendMessage(chat, toSend, isTribe, replyUuid, inThreadOfReply)
                                 } catch (e: Exception) {
@@ -901,31 +896,27 @@ private fun ThreadScreen(
     // `sendImage`/`sendFile`/`sendVoice`, just always addressed at the
     // root instead of whatever `replyTo` the main screen's own reply
     // state happens to hold.
-    fun sendImage(uri: android.net.Uri) {
+    // Pictures are staged until Send, as in the main composer (`PendingAttachments`); files and voice notes send on pick.
+    val pending = remember(threadRootUuid) { PendingAttachments(context, agent = isAgent) }
+    DisposableEffect(threadRootUuid) { onDispose { pending.clear() } }
+
+    fun stagePictures(uris: List<android.net.Uri>) {
         scope.launch {
-            sendingLabel = context.str(R.string.conv_sending_photo)
             error = null
-            try {
-                val jpeg = withContext(Dispatchers.Default) { prepareImageForSending(context, uri) }
-                    ?: throw IllegalStateException(context.str(R.string.conv_not_image))
-                val caption = draft
-                draft = ""
-                engine.sendImageAttachment(chat, jpeg, caption, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
-                onSent()
-            } catch (e: Exception) {
-                error = e.message ?: context.str(R.string.conv_err_image)
-            } finally {
-                sendingLabel = null
+            val room = StagedAttachments.room(pending.files.size)
+            for (uri in uris.take(room)) {
+                pending.addPicture(uri)?.let { error = it }
             }
+            if (uris.size > room) error = context.str(R.string.dash_attach_too_many, StagedAttachments.MAX_PICTURES)
         }
     }
 
-    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) sendImage(uri)
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(StagedAttachments.MAX_PICTURES)) { uris ->
+        if (uris.isNotEmpty()) stagePictures(uris)
     }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val uri = cameraOutputUri
-        if (success && uri != null) sendImage(uri)
+        if (success && uri != null) stagePictures(listOf(uri))
     }
 
     fun sendFile(uri: android.net.Uri) {
@@ -1160,10 +1151,29 @@ private fun ThreadScreen(
             onReleaseRecord = { voiceRecorder.release() },
             onCancelRecord = { voiceRecorder.cancel() },
             sendingLabel = sendingLabel,
+            tray = ({ PendingTray(pending, Modifier.padding(bottom = 6.dp), agent = isAgent) }),
+            hasPending = pending.files.isNotEmpty(),
             onSend = {
                 val toSend = draft
                 draft = ""
                 error = null
+                if (pending.files.isNotEmpty()) {
+                    scope.launch {
+                        sendingLabel = context.str(R.string.conv_sending)
+                        try {
+                            val outcome = pending.sendAll(engine, chat, toSend, isTribe, threadRootUuid, threadRootUuid) { onSent() }
+                            if (!outcome.captionSent) draft = toSend
+                            outcome.errors.firstOrNull()?.let { error = it }
+                            onSent()
+                        } catch (e: Exception) {
+                            draft = toSend
+                            error = e.message ?: context.str(R.string.conv_err_send)
+                        } finally {
+                            sendingLabel = null
+                        }
+                    }
+                    return@Composer
+                }
                 scope.launch {
                     try {
                         engine.sendMessage(chat, toSend, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
@@ -2425,7 +2435,7 @@ private fun Composer(
                     )
                 }
             }
-            val canSend = text.isNotBlank() || hasPending
+            val canSend = StagedAttachments.canSend(text, if (hasPending) 1 else 0)
             if (canSend) {
                 Box(
                     Modifier

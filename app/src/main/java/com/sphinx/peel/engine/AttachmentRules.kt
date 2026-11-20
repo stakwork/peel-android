@@ -157,3 +157,28 @@ object AgentAttachments {
         return "$base.jpg"
     }
 }
+
+/// Pictures staged in a chat's composer before Send (every chat, not only the agent's DM): the pure rules.
+/// Not ported from peel: the Mac/iPhone composers have their own tray; this is the Android equivalent, WhatsApp/Signal-style.
+object StagedAttachments {
+    /// Most pictures staged at once, and the gallery picker's `maxItems`.
+    const val MAX_PICTURES = 10
+
+    /// How many more pictures may be staged when [staged] are already held (never negative).
+    fun room(staged: Int): Int = (MAX_PICTURES - staged).coerceAtLeast(0)
+
+    /// Send is enabled with text, or with at least one staged file.
+    fun canSend(text: String, staged: Int): Boolean = text.isNotBlank() || staged > 0
+
+    /// A message carries one attachment, so the typed text is the caption of the first one only.
+    fun captionFor(index: Int, caption: String): String = if (index == 0) caption else ""
+
+    /// Shown when a pick had more pictures than [room] left.
+    fun tooMany(): String = "You can attach up to $MAX_PICTURES photos at a time."
+
+    /// The biggest file held for a chat: the agent's 32 MB, else the engine's own 100 MB (`Engine.ATTACHMENT_LIMIT`).
+    fun sendLimit(agent: Boolean): Long = if (agent) AgentAttachments.SEND_LIMIT.toLong() else 100_000_000L
+
+    /// Whether [size] bytes may be staged in a chat ([agent]: the agent's DM).
+    fun fits(size: Long, agent: Boolean): Boolean = size <= sendLimit(agent)
+}

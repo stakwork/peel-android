@@ -204,4 +204,8 @@
     <string name="misc_svc_android_refused">Android would not let Peel keep this call running in the background.</string>
     <string name="misc_svc_permission">Peel is not allowed to keep this call running in the background (a permission is missing).</string>
     <string name="misc_svc_generic">Peel could not keep this call running in the background.</string>
+    <string name="misc_you_contact_info">Your contact info</string>
+    <string name="misc_you_contact_info_not_ready">Not ready yet</string>
+    <string name="misc_you_contact_info_qr">QR code of your contact info</string>
+    <string name="misc_you_contact_info_copy">Copy contact info</string>
 </resources>

@@ -150,4 +150,13 @@
         <item quantity="one">%1$d hour</item>
         <item quantity="other">%1$d hours</item>
     </plurals>
+    <string name="scan_no_app">No app can open that.</string>
+    <string name="scan_label_open_peel">Open in Peel</string>
+    <string name="scan_label_open_host_peel">Open %1$s in Peel</string>
+    <string name="scan_label_link_box">Link a box</string>
+    <string name="scan_label_invite">Sphinx invite</string>
+    <string name="scan_label_contact">Contact</string>
+    <string name="scan_label_tribe">Tribe</string>
+    <string name="scan_label_invoice">Lightning invoice</string>
+    <string name="scan_label_invoice_amount">Lightning invoice · %1$s</string>
 </resources>
