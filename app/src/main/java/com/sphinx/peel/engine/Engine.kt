@@ -47,6 +47,8 @@ import uniffi.sphinxrs.RunReturn
 import uniffi.sphinxrs.agentSeed as coreAgentSeed
 import uniffi.sphinxrs.fetchFirstMsgsPerKey as coreFetchFirstMsgsPerKey
 import uniffi.sphinxrs.fetchMsgsBatch as coreFetchMsgsBatch
+import uniffi.sphinxrs.fetchPings as coreFetchPings
+import uniffi.sphinxrs.pingDone as corePingDone
 import uniffi.sphinxrs.getContact as coreGetContact
 import uniffi.sphinxrs.getMsgsCounts as coreGetMsgsCounts
 import uniffi.sphinxrs.getMutes as coreGetMutes
@@ -134,6 +136,9 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// Tags of sends whose async pay the server has not answered yet (false), or has (true):
     /// `publishOrderedLocked`'s wait for it (PeelCore's `money.asyncPays`).
     private val asyncPays = ConcurrentHashMap<String, Boolean>()
+
+    /// Pings of payments to this account, answered and not yet acknowledged (`handleInbound`).
+    private val pings = PingBook()
 
     /// Invite codes being cancelled right now: the server answers a cancel with the balance
     /// alone, so one at a time (`cancelInvite`).
@@ -566,15 +571,19 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
     }
 
-    /// One inbound message: through the core's `handle`, committed, answered if it is a key
-    /// exchange, stored and broadcast on [inboundResults].
+    /// One inbound message: through the core's `handle`, committed, answered where the core asks
+    /// ([publishHandled]), stored and broadcast on [inboundResults]; the pings it ends acknowledged.
     private suspend fun handleInbound(message: Inbound) {
+        // Answering a ping needs this account's own route hint: until registered it is let go, and
+        // the server passes it on again when asked (`fetchPings`, `afterConnect`). PeelCore's `receive`.
+        if (InboundTopic.kind(message.topic) == InboundTopic.PING && !isRegistered) return
         val startedAt = SystemClock.elapsedRealtime()
         val rawOnions = HistoryPage.onions(message.payload)
         if (rawOnions != null && rawOnions.isNotEmpty()) {
             rawPageMax = maxOf(rawPageMax, rawOnions.maxOf { HistoryPage.index(it) })
             rawPageCount += rawOnions.size
         }
+        var acknowledge = emptyList<ULong>()
         val handled = mutex.withLock {
             val handleTime = clock.next()
             val stateBytes = StateCodec.encode(state)
@@ -602,8 +611,15 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
                 read
             }
             commitLocked(result, handleTime)
-            answerKeyExchange(result)
+            publishHandled(result)
+            result.ping?.let(pings::note)
+            acknowledge = pings.done(result.msgs.mapNotNull { it.paymentHash }, result.error)
             result
+        }
+        // Outside the lock: `run` takes it.
+        for (pingTime in acknowledge) {
+            runCatching { run { time, stateBytes -> corePingDone(seed, time, stateBytes, pingTime) } }
+                .onFailure { Log.w("PeelEngine", "acknowledging a ping failed", it) }
         }
         // Every inbound message, live or a restore's own page answer
         // alike: whichever `askAndAwait` is waiting on this one (if
@@ -622,22 +638,26 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         inboundResults.emit(handled)
     }
 
-    /// The core's reply to someone adding this account (their type-10 message): the key
-    /// confirmation it made, and the sats it pays back. `handle` returns them but sends
-    /// nothing, so without publishing them the other side never gets this account's key.
-    /// Only for a live key exchange: never while a restore replays history (PeelCore
-    /// publishes every handled result; this port does so only where it is needed, see
-    /// docs/phases/21-invites.md). Under the lock, like the commit it follows. A failure
-    /// is logged, not thrown: it must not end the listener.
-    private suspend fun answerKeyExchange(result: RunReturn) {
-        if (restoreProgressFlow.value.restoring) return
-        if (result.msgs.none { it.type?.toInt() == CONTACT_KEY_MESSAGE_TYPE && it.fromMe != true }) return
+    /// What the core asks to send in answer to an inbound message ([InboundPublish]): to someone
+    /// adding this account (their type-10 message), the key confirmation and the sats it pays
+    /// back, live only; to a ping, the "online" message that has the server hand over the payment
+    /// held for this account (docs/phases/50-answer-pings.md); to a payment that came, its settle.
+    /// `handle` returns them but sends nothing. Under the lock, like the commit it follows. A
+    /// failure is logged, not thrown: it must not end the listener.
+    private suspend fun publishHandled(result: RunReturn) {
+        val publishes = InboundPublish.publishes(
+            keyExchange = result.msgs.any { it.type?.toInt() == CONTACT_KEY_MESSAGE_TYPE && it.fromMe != true },
+            restoring = restoreProgressFlow.value.restoring,
+            answersPing = result.ping != null,
+            settles = result.settleTopic != null && result.settlePayload != null,
+        )
+        if (!publishes) return
         try {
             publishOrderedLocked(result, waitForAsyncPay = false)?.let { finishAfterPay(it) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w("PeelEngine", "answering a key exchange failed", e)
+            Log.w("PeelEngine", "answering an inbound message failed", e)
         }
     }
 
@@ -2006,9 +2026,8 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// [scope], not the caller's: call this once, right after the engine
     /// is made, and read [connectionState]/[restoreProgress] from
     /// wherever needs them. Mirrors PeelUI's `AppModel.attach` +
-    /// `Engine.start()`, minus the keep-alive/reconnect loop and the
-    /// ping/read-sync half of `cameOnline` — this gets an account
-    /// connected and, if needed, restored; staying online is later work.
+    /// `Engine.start()`: connected, then `cameOnline`'s steps
+    /// (`afterConnect`: pings, reads, history) and, if needed, restored.
     fun start() {
         if (started) return
         started = true
@@ -2178,6 +2197,11 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         caughtUp = false
         catchUpIndex = null
         readsJob = null
+        // Payments held for this account while it was away: the server passes their pings on
+        // again, and each is answered as it comes (`publishHandled`). First, as PeelCore's
+        // `cameOnlineSteps`; never fails what follows.
+        runCatching { run { time, stateBytes -> coreFetchPings(seed, time, stateBytes) } }
+            .onFailure { Log.w("PeelEngine", "asking for pings failed", it) }
         runCatching {
             // A restoring account asks once, after its contacts exist (settleReadsAfterRestore):
             // an earlier answer cannot be used.
