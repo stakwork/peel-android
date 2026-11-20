@@ -288,10 +288,10 @@ private fun dayHeading(dayMs: Long, today: String, yesterday: String): String {
     val now = java.util.Calendar.getInstance()
     val day = java.util.Calendar.getInstance().apply { timeInMillis = dayMs }
     fun ymd(c: java.util.Calendar) = c.get(java.util.Calendar.YEAR) * 1000 + c.get(java.util.Calendar.DAY_OF_YEAR)
-    val yesterday = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.DAY_OF_YEAR, -1) }
+    val yesterdayDate = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.DAY_OF_YEAR, -1) }
     return when (ymd(day)) {
         ymd(now) -> today
-        ymd(yesterday) -> yesterday
+        ymd(yesterdayDate) -> yesterday
         else -> java.text.SimpleDateFormat("EEEE d MMMM", java.util.Locale.getDefault()).format(Date(dayMs))
     }
 }
