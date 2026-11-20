@@ -86,12 +86,29 @@ object TribeMembers {
         return withRequests + requests.filter { it.pubkey !in known }
     }
 
-    /// The body that approves (type 20) or rejects (type 21) a request: names the request by `replyUuid`.
+    /// The body that approves (type 20) or rejects (type 21) a request: names the request by `replyUuid`, and the member by their
+    /// key (`member`) when it is one, which the tribes server reads first (iOS `Engine.answerJoinRequest`; stakwork/sphinx
+    /// `tribes/src/forward.rs` `member_from_raw`): an answer without a stored request still names who it lets in.
     fun answerBody(member: TribeMember): String = JSONObject().apply {
         put("content", "")
         member.requestUuid?.let { put("replyUuid", it) }
         put("pubkey", member.pubkey)
+        if (BoxPlaces.isKey(member.pubkey)) put("member", member.pubkey)
     }.toString()
+
+    /// [key] waiting to join, as the tribes server lists them in [members] ([Engine.tribeMembers]), with the stored request it
+    /// answers when one names them by key or, failing that, by the listed alias (iOS `Storage.joinRequest(in:from:)`: a request
+    /// may carry an alias alone). Null when the server does not list them waiting: a box's Jamie is approved by its key, never
+    /// by a request's say-so.
+    fun waiting(members: List<TribeMember>, key: String): TribeMember? {
+        val listed = members.firstOrNull { it.pending && it.pubkey.equals(key, ignoreCase = true) && BoxPlaces.isKey(it.pubkey) }
+            ?: return null
+        if (listed.requestUuid != null) return listed
+        val requests = members.filter { it.pending && it.requestUuid != null && it !== listed }
+        val request = requests.firstOrNull { it.pubkey.equals(key, ignoreCase = true) }
+            ?: requests.firstOrNull { it.pubkey.isEmpty() && listed.alias != null && it.alias == listed.alias }
+        return listed.copy(requestUuid = request?.requestUuid)
+    }
 
     /// The body that removes a member (type 16).
     fun kickBody(memberPubkey: String): String = JSONObject().put("content", "").put("pubkey", memberPubkey).toString()

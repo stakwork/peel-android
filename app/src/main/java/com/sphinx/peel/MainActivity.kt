@@ -41,6 +41,7 @@ import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.InviteLink
 import com.sphinx.peel.engine.InviterFlow
+import com.sphinx.peel.engine.jamieApprover
 import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.StorageWalletConnections
 import com.sphinx.peel.engine.WalletHost
@@ -403,6 +404,15 @@ private fun BoxesHousekeeping(engine: Engine, storage: Storage) {
             model.close()
             model.sign = null
             model.accountName = null
+        }
+    }
+    // A request to join a tribe this account owns: approved when it is the Jamie of a box the person linked the tribe on
+    // (`BoxJamies.requested`, docs/phases/54-jamie-from-a-box.md). Only the owner is sent a request; a restore's are old.
+    androidx.compose.runtime.LaunchedEffect(engine) {
+        engine.incoming.collect { rows ->
+            if (engine.restoreProgress.value.restoring) return@collect
+            rows.filter { it.type == com.sphinx.peel.engine.MEMBER_REQUEST_MESSAGE_TYPE && !it.deleted }.map { it.chat }.distinct()
+                .forEach { tribe -> com.sphinx.peel.engine.Boxes.jamies.requested(tribe, engine.jamieApprover) }
         }
     }
 }

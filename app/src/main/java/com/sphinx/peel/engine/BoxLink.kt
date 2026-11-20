@@ -20,7 +20,7 @@ import org.json.JSONObject
 // ([HiveLink]), never in its place. Pure (the HTTP is behind [BoxHttp]), JVM-tested (`BoxLinkTest`).
 
 /// A failure said in words for the person (iOS `PeelError`), from a box or about one.
-class BoxException(message: String) : Exception(message)
+open class BoxException(message: String) : Exception(message)
 
 /// The values of a `peel://<host><path>?…` link that names exactly `names`, each once, and nothing else (iOS `PeelLink`): no
 /// user, port or fragment, and `path` as given ("" for none, which takes "/" too). Null for any other link. Any page can open

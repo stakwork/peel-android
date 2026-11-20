@@ -164,6 +164,14 @@
         <item quantity="one">%1$d nuevo</item>
         <item quantity="other">%1$d nuevos</item>
     </plurals>
+    <!-- La fila de Jamie de una tribu (docs/phases/54-jamie-from-a-box.md). -->
+    <string name="ppl_jamie">Jamie</string>
+    <string name="ppl_jamie_answers_from">Responde desde</string>
+    <string name="ppl_jamie_none">Sin Jamie</string>
+    <string name="ppl_jamie_pick_helper">Elige una de tus cajas: Jamie se une a #%1$s y responde a @jamie allí desde esa caja, con tu acceso a ella.</string>
+    <string name="ppl_jamie_answers_helper">Cualquiera en #%1$s puede preguntar a @jamie. Jamie responde desde %2$s, con tu acceso a ella.</string>
+    <string name="ppl_jamie_asking">Preguntando a tus cajas…</string>
+    <string name="ppl_jamie_try_again">Reintentar</string>
     <plurals name="ppl_replies">
         <item quantity="one">%1$d respuesta</item>
         <item quantity="other">%1$d respuestas</item>

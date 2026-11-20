@@ -68,8 +68,11 @@ import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.TimeZoneSharing
 import com.sphinx.peel.engine.TimeZones
 import com.sphinx.peel.engine.TribeInfo
+import com.sphinx.peel.engine.TribePlace
 import com.sphinx.peel.engine.deleteContact
 import com.sphinx.peel.engine.deleteTribe
+import com.sphinx.peel.engine.hasJoinRequest
+import com.sphinx.peel.engine.jamieApprover
 import com.sphinx.peel.engine.leaveTribe
 import com.sphinx.peel.engine.ownsTribe
 import com.sphinx.peel.storage.ConversationRow
@@ -226,6 +229,14 @@ private fun TribeDetails(engine: Engine, storage: Storage, conversation: Convers
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
             OutlinedButton(onClick = { page = TribePage.MEMBERS }) { Text(stringResource(R.string.ppl_members)) }
             if (isOwner) OutlinedButton(onClick = { page = TribePage.EDIT }) { Text(stringResource(R.string.ppl_edit_tribe)) }
+        }
+        // Jamie, for the owner of a tribe whose link a box's Jamie can join (iOS `offersJamie`): nothing without a box ready.
+        if (isOwner && link != null) {
+            val name = info?.name ?: conversation.name
+            TribeJamieSection(
+                TribePlace(conversation.chat, link, name), name, engine.jamieApprover,
+                waiting = { withContext(Dispatchers.IO) { engine.hasJoinRequest(conversation.chat) } },
+            )
         }
         Spacer(Modifier.height(24.dp))
         TribeIdentitySection(engine, storage, conversation.chat, info?.name ?: conversation.name)
@@ -552,7 +563,7 @@ private fun TimeZonePicker(deviceId: String, now: Long, onDismiss: () -> Unit, o
 }
 
 @Composable
-private fun SectionLabel(text: String) {
+internal fun SectionLabel(text: String) {
     Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.secondaryText, modifier = Modifier.padding(bottom = 6.dp))
 }
 

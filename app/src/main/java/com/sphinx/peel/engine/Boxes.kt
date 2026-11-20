@@ -225,6 +225,25 @@ class BoxesModel(
     /// Whether [page] is a box's this account is linked to: it stays open while the box does.
     fun shows(page: OrgPageRequest): Boolean = links.any { it.peer == page.peer }
 
+    /// [call] as [box]'s member, with the link kept for it now (its places, [PlacesClient]): a token the box refused
+    /// ([BoxTokenRefused]) is renewed once and [call] made again, as [home] does; a box that no longer links the key is let go
+    /// ([notice]) and that is thrown in words.
+    suspend fun <T> asMember(box: BoxLink, call: suspend (BoxLink) -> T): T {
+        val gone = BoxException("Peel is no longer linked to ${box.host}.")
+        val kept = links.firstOrNull { it.url == box.url } ?: throw gone
+        try {
+            return call(kept)
+        } catch (_: BoxTokenRefused) {
+            // Renewed below.
+        }
+        val renewed = try {
+            renew(kept)
+        } catch (_: Superseded) {
+            throw gone
+        } ?: throw BoxException(unlinked(kept))
+        return call(renewed)
+    }
+
     // Renewing
 
     /// Peel came back to the front: a box due is renewed now, where the hourly look may have slept through its turn (Android's own;
@@ -357,4 +376,7 @@ object Boxes {
             allowsLoopback = NetworkPolicy.plainLoopbackAllowed(com.sphinx.peel.BuildConfig.DEBUG),
         )
     }
+
+    /// The boxes as tribes' Jamies ([BoxJamies]): the tribe details' Jamie row, and Jamie's join requests approved.
+    val jamies: BoxJamies by lazy { BoxJamies(model, dispatcher = Dispatchers.Main.immediate) }
 }
