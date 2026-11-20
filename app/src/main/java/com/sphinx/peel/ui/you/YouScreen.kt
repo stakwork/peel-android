@@ -1,6 +1,9 @@
 package com.sphinx.peel.ui.you
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import com.sphinx.peel.ui.str
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -159,27 +162,28 @@ private val CardShape = RoundedCornerShape(24.dp)
 private fun ContactInfoCard(contactInfo: String?) {
     val clipboard = LocalClipboardManager.current
     val toast = LocalToast.current
+    val copiedText = stringResource(R.string.misc_copied)
     Box(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).padding(16.dp)) {
         if (contactInfo == null) {
             Column {
-                Text("Your contact info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                Text(stringResource(R.string.misc_you_contact_info), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
                 Spacer(Modifier.height(4.dp))
-                Text("Not ready yet", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.misc_you_contact_info_not_ready), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
             }
             return@Box
         }
-        val qr: @Composable () -> Unit = { QrCodeImage(contactInfo, 120.dp, "QR code of your contact info") }
+        val qr: @Composable () -> Unit = { QrCodeImage(contactInfo, 120.dp, stringResource(R.string.misc_you_contact_info_qr)) }
         val text: @Composable (Modifier) -> Unit = { modifier ->
             Column(modifier) {
-                Text("Your contact info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                Text(stringResource(R.string.misc_you_contact_info), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = {
                     clipboard.setText(AnnotatedString(contactInfo))
-                    toast.show("Copied", ToastType.Success)
+                    toast.show(copiedText, ToastType.Success)
                 }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                     Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Copy contact info", fontSize = 14.sp, maxLines = 1, softWrap = false)
+                    Text(stringResource(R.string.misc_you_contact_info_copy), fontSize = 14.sp, maxLines = 1, softWrap = false)
                 }
             }
         }
@@ -271,7 +275,7 @@ private fun YouMain(
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
             Text(
-                "You", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                stringResource(R.string.misc_you_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                 color = Theme.colors.text, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
             )
@@ -279,16 +283,16 @@ private fun YouMain(
         item {
             Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Avatar(
-                    name = alias ?: "You", url = photoUrl,
+                    name = alias ?: stringResource(R.string.misc_you_title), url = photoUrl,
                     size = 88.dp, hue = PersonHue.of(engine.accountKey), shape = AvatarShape.CIRCLE,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(
                         onClick = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         enabled = !uploadingPhoto,
-                    ) { Text(if (uploadingPhoto) "Uploading…" else if (photoUrl == null) "Add photo" else "Change photo") }
+                    ) { Text(if (uploadingPhoto) stringResource(R.string.misc_you_uploading) else if (photoUrl == null) stringResource(R.string.misc_you_add_photo) else stringResource(R.string.misc_you_change_photo)) }
                     if (photoUrl != null && !uploadingPhoto) {
-                        TextButton(onClick = { confirmingRemovePhoto = true }) { Text("Remove photo", color = Theme.colors.destructive) }
+                        TextButton(onClick = { confirmingRemovePhoto = true }) { Text(stringResource(R.string.misc_you_remove_photo), color = Theme.colors.destructive) }
                     }
                 }
                 photoProblem?.let {
@@ -300,13 +304,13 @@ private fun YouMain(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        alias ?: "Set your name",
+                        alias ?: stringResource(R.string.misc_you_set_name),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = if (alias != null) Theme.colors.text else Theme.colors.secondaryText,
                     )
                     Spacer(Modifier.width(8.dp))
-                    Icon(Icons.Filled.Edit, contentDescription = "Edit name", tint = Theme.colors.secondaryText, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.misc_you_edit_name), tint = Theme.colors.secondaryText, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -321,7 +325,7 @@ private fun YouMain(
             Spacer(Modifier.height(24.dp))
         }
 
-        item { SectionHeader("Agent") }
+        item { SectionHeader(stringResource(R.string.misc_you_agent)) }
         item {
             Row(
                 Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)
@@ -339,7 +343,7 @@ private fun YouMain(
                     // device request) — just whether the shared account
                     // already has the agent's chat as a contact, set up
                     // from wherever that flow does exist.
-                    if (hasAgent) "Ready" else "Set up on your Mac",
+                    if (hasAgent) stringResource(R.string.misc_you_ready) else stringResource(R.string.misc_you_agent_setup),
                     color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -351,24 +355,24 @@ private fun YouMain(
         item { Spacer(Modifier.height(24.dp)) }
         item { BoxesSection(Boxes.model) }
 
-        item { SectionHeader("Account") }
+        item { SectionHeader(stringResource(R.string.misc_you_account)) }
         item {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
                 // Read again each time You shows (it leaves composition while Twelve words is open).
                 val wordsChecked = remember { Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED)) }
                 AccountRow(
-                    label = "Twelve words", value = if (wordsChecked) "" else "Not checked yet",
+                    label = stringResource(R.string.misc_you_twelve_words), value = if (wordsChecked) "" else stringResource(R.string.misc_you_not_checked_yet),
                     onClick = onOpenWords, chevron = true,
                 )
                 AccountDivider()
-                AccountRow(label = "Change PIN", onClick = onOpenChangePin, chevron = true)
+                AccountRow(label = stringResource(R.string.misc_you_change_pin), onClick = onOpenChangePin, chevron = true)
                 AccountDivider()
-                AccountRow(label = "Ask for the PIN", value = PinTimeout.label(pinTimeoutHours), onClick = { editingPinTimeout = true })
+                AccountRow(label = stringResource(R.string.misc_you_ask_pin), value = PinTimeout.label(pinTimeoutHours), onClick = { editingPinTimeout = true })
                 if (biometricsAvailable || biometricOn) {
                     AccountDivider()
                     val everyTime = pinTimeoutHours == 0
                     AccountRow(
-                        label = "Biometric unlock", value = if (biometricOn && !everyTime) "On" else "Off",
+                        label = stringResource(R.string.misc_you_biometric), value = if (biometricOn && !everyTime) stringResource(R.string.misc_you_on) else stringResource(R.string.misc_you_off),
                         onClick = {
                             if (everyTime) return@AccountRow
                             if (biometricOn) {
@@ -379,7 +383,7 @@ private fun YouMain(
                                 // Turning it on needs a successful check, not the PIN.
                                 val host = context.findActivity() as? androidx.fragment.app.FragmentActivity
                                 if (host != null) scope.launch {
-                                    if (BiometricUnlock.check(host, "Turn on biometric unlock")) {
+                                    if (BiometricUnlock.check(host, context.str(R.string.misc_you_biometric_prompt))) {
                                         secretStore.setBiometricEnabled(true)
                                         engine.setBiometricEnabled(true)
                                         biometricOn = true
@@ -389,33 +393,33 @@ private fun YouMain(
                         },
                     )
                     Text(
-                        if (everyTime) "Peel asks for your PIN every time it opens."
-                        else "Asks for ${BiometricUnlock.name()} when Peel opens, until it asks for your PIN.",
+                        if (everyTime) stringResource(R.string.misc_you_pin_every_time)
+                        else stringResource(R.string.misc_you_biometric_note, BiometricUnlock.name()),
                         style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
                 AccountDivider()
                 AccountRow(
-                    label = "Boost amount", value = "${boostAmountMsat / 1000} sats",
+                    label = stringResource(R.string.misc_you_boost_amount), value = "${boostAmountMsat / 1000} sats",
                     onClick = { editingBoostAmount = true },
                 )
                 AccountDivider()
                 AccountRow(
-                    label = "Confirm payments",
-                    value = if (confirmationMsat == 0L) "Always" else "Over ${Sats.format(confirmationMsat)}",
+                    label = stringResource(R.string.misc_you_confirm_payments),
+                    value = if (confirmationMsat == 0L) stringResource(R.string.misc_always) else stringResource(R.string.misc_you_over, Sats.format(confirmationMsat)),
                     onClick = { editingConfirmation = true },
                 )
                 AccountDivider()
                 val walletVersion by storage.walletConnectionsVersion.collectAsState()
                 AccountRow(
-                    label = "Connected apps", value = ConnectedAppRow.summary(remember(walletVersion) { storage.walletConnections().size }),
+                    label = stringResource(R.string.misc_you_connected_apps), value = ConnectedAppRow.summary(remember(walletVersion) { storage.walletConnections().size }),
                     onClick = onOpenConnectedApps, chevron = true,
                 )
                 AccountDivider()
                 val siteVersion by storage.siteLocationsVersion.collectAsState()
                 AccountRow(
-                    label = "Site location", value = remember(siteVersion) { storage.siteLocations().size.let { if (it == 0) "None" else "$it" } },
+                    label = stringResource(R.string.misc_you_site_location), value = remember(siteVersion) { storage.siteLocations().size }.let { if (it == 0) stringResource(R.string.misc_none) else "$it" },
                     onClick = onOpenSiteLocation, chevron = true,
                 )
                 AccountDivider()
@@ -424,20 +428,20 @@ private fun YouMain(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Auto download media", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.misc_you_auto_download), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
                     Switch(checked = autoDownload, onCheckedChange = {
                         autoDownload = it
                         engine.setAutoDownloadsMedia(it)
                     })
                 }
                 Text(
-                    "Off: images, videos, voice messages and files wait for a tap.",
+                    stringResource(R.string.misc_you_auto_download_note),
                     style = MaterialTheme.typography.labelSmall,
                     color = Theme.colors.secondaryText,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
                 )
                 AccountDivider()
-                AccountRow(label = "Diagnostics", onClick = onOpenDiagnostics, chevron = true)
+                AccountRow(label = stringResource(R.string.misc_you_diagnostics), onClick = onOpenDiagnostics, chevron = true)
                 AccountDivider()
                 UpdateRow()
                 AccountDivider()
@@ -445,11 +449,11 @@ private fun YouMain(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Server", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                    Text(stringResource(R.string.misc_you_server), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                         Text(
-                            engine.serverLabel() ?: "None",
+                            engine.serverLabel() ?: stringResource(R.string.misc_none),
                             style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
                             textAlign = TextAlign.End,
                         )
@@ -489,7 +493,7 @@ private fun YouMain(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    "Forget this account", fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+                    stringResource(R.string.misc_you_forget_account), fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                     color = Theme.colors.destructive,
                 )
             }
@@ -500,17 +504,17 @@ private fun YouMain(
     if (confirmingRemovePhoto) {
         AlertDialog(
             onDismissRequest = { confirmingRemovePhoto = false },
-            title = { Text("Remove your photo?") },
-            text = { Text("Others see your initials instead, from your next message on.") },
+            title = { Text(stringResource(R.string.misc_you_remove_photo_title)) },
+            text = { Text(stringResource(R.string.misc_you_remove_photo_body)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingRemovePhoto = false
                     runCatching { engine.setPhotoUrl("") }
                         .onSuccess { photoUrl = null; photoProblem = null }
                         .onFailure { photoProblem = ProfilePhoto.message(it) }
-                }) { Text("Remove", color = Theme.colors.destructive) }
+                }) { Text(stringResource(R.string.misc_remove), color = Theme.colors.destructive) }
             },
-            dismissButton = { TextButton(onClick = { confirmingRemovePhoto = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmingRemovePhoto = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 
@@ -518,7 +522,7 @@ private fun YouMain(
         var draft by remember { mutableStateOf(alias ?: "") }
         AlertDialog(
             onDismissRequest = { editingName = false },
-            title = { Text("Your name") },
+            title = { Text(stringResource(R.string.misc_you_your_name)) },
             text = {
                 BasicTextField(
                     value = draft,
@@ -536,9 +540,9 @@ private fun YouMain(
                         alias = trimmed
                     }
                     editingName = false
-                }) { Text("Save") }
+                }) { Text(stringResource(R.string.misc_save)) }
             },
-            dismissButton = { TextButton(onClick = { editingName = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { editingName = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 
@@ -551,7 +555,7 @@ private fun YouMain(
         var askedFor by remember { mutableStateOf<Long?>(null) }
         AlertDialog(
             onDismissRequest = { editingBoostAmount = false },
-            title = { Text("Boost amount") },
+            title = { Text(stringResource(R.string.misc_you_boost_amount)) },
             text = {
                 Column {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -586,10 +590,10 @@ private fun YouMain(
                 TextButton(onClick = {
                     val sats = draft.toLongOrNull()
                     if (sats == null || sats <= 0) {
-                        error = "Enter a whole number of sats, more than zero."
+                        error = context.str(R.string.misc_you_boost_error_whole)
                     } else if (PaymentRules.needsConfirmation(sats * 1000, askedFor, confirmationMsat)) {
                         askedFor = sats * 1000
-                        error = "Every boost sends ${Sats.format(sats * 1000)}, more than your confirmation limit. Save again to confirm."
+                        error = context.str(R.string.misc_you_boost_error_limit, Sats.format(sats * 1000))
                     } else {
                         boostAmountMsat = sats * 1000
                         editingBoostAmount = false
@@ -597,20 +601,20 @@ private fun YouMain(
                             withContext(Dispatchers.Default) { engine.setBoostAmount(sats) }
                         }
                     }
-                }) { Text("Save") }
+                }) { Text(stringResource(R.string.misc_save)) }
             },
-            dismissButton = { TextButton(onClick = { editingBoostAmount = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { editingBoostAmount = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 
     if (editingPinTimeout) {
         AlertDialog(
             onDismissRequest = { editingPinTimeout = false },
-            title = { Text("Ask for the PIN") },
+            title = { Text(stringResource(R.string.misc_you_ask_pin)) },
             text = {
                 Column {
                     Text(
-                        "Peel remembers your PIN for this long after you last used it, and opens without asking.",
+                        stringResource(R.string.misc_you_pin_timeout_body),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     (PinTimeout.OPTIONS + PinTimeout.NEVER).forEach { hours ->
@@ -624,7 +628,7 @@ private fun YouMain(
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { editingPinTimeout = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { editingPinTimeout = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 
@@ -632,11 +636,11 @@ private fun YouMain(
         val choices = listOf(0L, 100L, 1_000L, 10_000L).map { it * 1000 }.let { if (confirmationMsat in it) it else it + confirmationMsat }
         AlertDialog(
             onDismissRequest = { editingConfirmation = false },
-            title = { Text("Confirm payments") },
+            title = { Text(stringResource(R.string.misc_you_confirm_payments)) },
             text = {
                 Column {
                     Text(
-                        "Payments and boosts over this amount ask you to confirm first.",
+                        stringResource(R.string.misc_you_confirm_body),
                         style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
                     )
                     for (msat in choices) {
@@ -646,7 +650,7 @@ private fun YouMain(
                             editingConfirmation = false
                         }) {
                             Text(
-                                (if (msat == 0L) "Always" else "Over ${Sats.format(msat)}") + if (msat == confirmationMsat) "  ✓" else "",
+                                (if (msat == 0L) stringResource(R.string.misc_always) else stringResource(R.string.misc_you_over, Sats.format(msat))) + if (msat == confirmationMsat) "  ✓" else "",
                                 color = Theme.colors.text,
                             )
                         }
@@ -654,19 +658,17 @@ private fun YouMain(
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { editingConfirmation = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { editingConfirmation = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 
     if (confirmingForget) {
         AlertDialog(
             onDismissRequest = { confirmingForget = false },
-            title = { Text("Forget this account?") },
+            title = { Text(stringResource(R.string.misc_you_forget_title)) },
             text = {
                 Text(
-                    "This wipes everything stored on this device for it. Your twelve words " +
-                        "still restore it — on this device or another — but anything only here, " +
-                        "unsaved, is gone for good.",
+                    stringResource(R.string.misc_you_forget_body),
                 )
             },
             confirmButton = {
@@ -697,18 +699,19 @@ private fun YouMain(
                         }
                         onForgotten()
                     }
-                }) { Text("Forget it", color = Theme.colors.destructive) }
+                }) { Text(stringResource(R.string.misc_you_forget_it), color = Theme.colors.destructive) }
             },
-            dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 }
 
+@Composable
 private fun connectionLabel(connection: ConnectionState): String = when (connection) {
-    ConnectionState.Idle -> "Not connected yet"
-    ConnectionState.Connecting -> "Connecting…"
-    ConnectionState.Connected -> "Connected"
-    is ConnectionState.Offline -> "Offline, retrying in ${connection.retryInSeconds}s…"
+    ConnectionState.Idle -> stringResource(R.string.misc_you_conn_idle)
+    ConnectionState.Connecting -> stringResource(R.string.misc_you_conn_connecting)
+    ConnectionState.Connected -> stringResource(R.string.misc_you_conn_connected)
+    is ConnectionState.Offline -> stringResource(R.string.misc_you_conn_offline, connection.retryInSeconds)
     is ConnectionState.Failed -> connection.message
 }
 
@@ -721,7 +724,7 @@ private fun SectionHeader(title: String) {
     )
 }
 
-/// "Check for updates" (docs/phases/52-in-app-updates.md): the installed version, then the result of a tap. The update prompt
+/// "Check for updates" (docs/phases/53-in-app-updates.md): the installed version, then the result of a tap. The update prompt
 /// itself is `UpdateHost`'s; an available version opens it again from here.
 @Composable
 private fun UpdateRow() {
@@ -781,7 +784,7 @@ internal fun BackButton(onBack: () -> Unit) {
             .clickable(onClick = onBack),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Theme.colors.text)
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back), tint = Theme.colors.text)
     }
 }
 
@@ -850,6 +853,7 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
     var note by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
+    val strCtx = androidx.compose.ui.platform.LocalContext.current
     fun reset(to: ChangePinStep, message: String?) {
         if (to == ChangePinStep.OLD) old = ""
         new = ""
@@ -862,22 +866,22 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
         BackButtonRow(onBack)
         when (step) {
             ChangePinStep.OLD -> PinPrompt(
-                title = "Enter your current PIN", detail = note, pin = old,
+                title = stringResource(R.string.misc_you_pin_old), detail = note, pin = old,
                 onPinChange = { old = it }, onComplete = { note = null; step = ChangePinStep.NEW },
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
             )
             ChangePinStep.NEW -> PinPrompt(
-                title = "Choose a new PIN", detail = note, pin = new,
+                title = stringResource(R.string.misc_you_pin_new), detail = note, pin = new,
                 onPinChange = { new = it }, onComplete = { note = null; step = ChangePinStep.CONFIRM },
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
             )
             ChangePinStep.CONFIRM -> PinPrompt(
-                title = "Enter the new PIN again", detail = note, pin = confirmation, working = working,
+                title = stringResource(R.string.misc_you_pin_again), detail = note, pin = confirmation, working = working,
                 onPinChange = { confirmation = it },
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
                 onComplete = {
                     if (confirmation != new) {
-                        reset(ChangePinStep.NEW, "The PINs don't match. Choose the new PIN again.")
+                        reset(ChangePinStep.NEW, strCtx.str(R.string.misc_you_pin_mismatch))
                         return@PinPrompt
                     }
                     working = true
@@ -886,9 +890,9 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
                             withContext(Dispatchers.Default) { secretStore.changePin(old, new) }
                             onBack()
                         } catch (e: SecretStoreFailure.WrongPin) {
-                            reset(ChangePinStep.OLD, "Wrong PIN")
+                            reset(ChangePinStep.OLD, strCtx.str(R.string.misc_you_wrong_pin))
                         } catch (e: Exception) {
-                            reset(ChangePinStep.NEW, (e.message ?: "Could not change the PIN.") + " Choose the new PIN again.")
+                            reset(ChangePinStep.NEW, strCtx.str(R.string.misc_you_pin_change_failed_again, e.message ?: strCtx.str(R.string.misc_you_pin_change_failed)))
                         }
                         working = false
                     }
@@ -908,7 +912,8 @@ private enum class WordsStage { INTRO, PIN, WORDS, CHECK }
 /// "Check words" asks the PIN, then three of the words, as iOS does.
 @Composable
 private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack: () -> Unit) {
-    val host = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
+    val strCtx = androidx.compose.ui.platform.LocalContext.current
+    val host = strCtx.findActivity() as? androidx.fragment.app.FragmentActivity
     val shownForSeconds = 30
     var stage by remember { mutableStateOf(WordsStage.INTRO) }
     var pin by remember { mutableStateOf("") }
@@ -986,20 +991,20 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
         when (stage) {
             WordsStage.INTRO -> {
                 RouteHeader(
-                    "Twelve words",
-                    if (checked) "Checked against your paper." else "Not checked against your paper yet.",
+                    stringResource(R.string.misc_you_twelve_words),
+                    if (checked) stringResource(R.string.misc_you_words_checked) else stringResource(R.string.misc_you_words_unchecked),
                     onBack,
                 )
                 Spacer(Modifier.weight(1f))
                 if (!checked) {
                     PillButton(
-                        "Check words", onClick = { start(toCheck = true) },
+                        stringResource(R.string.misc_you_check_words), onClick = { start(toCheck = true) },
                         container = Theme.colors.accent, content = Theme.colors.buttonText,
                     )
                     Spacer(Modifier.height(10.dp))
                 }
                 PillButton(
-                    "Show words", onClick = { start(toCheck = false) },
+                    stringResource(R.string.misc_you_show_words), onClick = { start(toCheck = false) },
                     container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
                 )
                 Spacer(Modifier.height(24.dp))
@@ -1007,14 +1012,14 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
             WordsStage.PIN -> {
                 BackButtonRow(onBack = { hide(); stage = WordsStage.INTRO }) {
                     PillButton(
-                        "Cancel", onClick = { hide(); stage = WordsStage.INTRO },
+                        stringResource(R.string.common_cancel), onClick = { hide(); stage = WordsStage.INTRO },
                         container = Color.Transparent, content = Theme.colors.accent,
                         modifier = Modifier, border = Theme.colors.inputBorder,
                     )
                 }
                 PinPrompt(
-                    title = "Enter your PIN",
-                    detail = problem ?: if (checking) "To check your twelve words." else "To show your twelve words.",
+                    title = stringResource(R.string.misc_you_enter_pin),
+                    detail = problem ?: if (checking) stringResource(R.string.misc_you_pin_to_check) else stringResource(R.string.misc_you_pin_to_show),
                     pin = pin, onPinChange = { pin = it }, working = working,
                     onComplete = {
                         working = true
@@ -1035,13 +1040,13 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                                     revealedAt = System.currentTimeMillis()
                                 }
                             } catch (e: SecretStoreFailure.LockedOut) {
-                                problem = "Too many wrong PINs. Try again in ${LockoutPolicy.describe(e.remainingMs)}."
+                                problem = strCtx.str(R.string.misc_you_too_many_pins, LockoutPolicy.describe(e.remainingMs))
                                 pin = ""
                             } catch (e: SecretStoreFailure.WrongPin) {
-                                problem = "Wrong PIN"
+                                problem = strCtx.str(R.string.misc_you_wrong_pin)
                                 pin = ""
                             } catch (e: Exception) {
-                                problem = e.message ?: "Could not open the account."
+                                problem = e.message ?: strCtx.str(R.string.misc_you_could_not_open)
                                 pin = ""
                             }
                             working = false
@@ -1051,7 +1056,7 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                 )
             }
             WordsStage.CHECK -> {
-                RouteHeader("Check what you wrote", "Type these three words from your paper.", onBack = { hide() })
+                RouteHeader(stringResource(R.string.misc_you_check_written), stringResource(R.string.misc_you_check_three), onBack = { hide() })
                 Spacer(Modifier.height(20.dp))
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                     WordCheckBoxes(check = check, onSubmit = ::confirm)
@@ -1064,15 +1069,15 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                 }
                 Spacer(Modifier.height(12.dp))
                 PillButton(
-                    "Check", onClick = ::confirm, enabled = check.isFilled,
+                    stringResource(R.string.misc_you_check), onClick = ::confirm, enabled = check.isFilled,
                     container = Theme.colors.accent, content = Theme.colors.buttonText,
                 )
                 Spacer(Modifier.height(24.dp))
             }
             WordsStage.WORDS -> {
                 RouteHeader(
-                    "Your twelve words",
-                    "Anyone with these words controls your account. Keep them on paper.",
+                    stringResource(R.string.misc_you_your_twelve),
+                    stringResource(R.string.misc_you_words_warning),
                     onBack = { hide(); stage = WordsStage.INTRO },
                 )
                 Spacer(Modifier.height(20.dp))
@@ -1100,19 +1105,19 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                         }
                     }
                     Text(
-                        "Hides in $remaining s", style = MaterialTheme.typography.bodySmall,
+                        stringResource(R.string.misc_you_hides_in, remaining), style = MaterialTheme.typography.bodySmall,
                         color = Theme.colors.secondaryText, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                     )
                 }
                 Spacer(Modifier.height(12.dp))
                 PillButton(
-                    "Reveal", onClick = { visible = true },
+                    stringResource(R.string.misc_you_reveal), onClick = { visible = true },
                     container = Theme.colors.accent, content = Theme.colors.buttonText,
                 )
                 Spacer(Modifier.height(10.dp))
                 PillButton(
-                    "Hide", onClick = { hide() },
+                    stringResource(R.string.misc_you_hide), onClick = { hide() },
                     container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
                 )
                 Spacer(Modifier.height(24.dp))
@@ -1143,29 +1148,29 @@ private fun StadeumSection(model: StadeumModel) {
     Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
         when (status) {
             StadeumModel.Status.Off -> {
-                StadeumNote("Open what your workspaces' assistants make for you, and their apps, here on this phone.")
+                StadeumNote(stringResource(R.string.misc_you_stadeum_intro))
                 if (model.reconnectHint) {
-                    StadeumNote("Your account is back, but not its Stadeum connection. Connect Stadeum again.", Theme.colors.attention)
+                    StadeumNote(stringResource(R.string.misc_you_stadeum_lost), Theme.colors.attention)
                 }
                 AccountDivider()
-                StadeumButton("Connect Stadeum", Theme.colors.accent, ::connect)
+                StadeumButton(stringResource(R.string.misc_you_stadeum_connect), Theme.colors.accent, ::connect)
             }
             is StadeumModel.Status.Pairing -> {
-                StadeumNote("Approve this phone in Stadeum. Check the code matches:")
+                StadeumNote(stringResource(R.string.misc_you_stadeum_approve))
                 Text(
                     status.pairing.userCode, fontSize = 28.sp, fontWeight = FontWeight.SemiBold,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = Theme.colors.text,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
                 AccountDivider()
-                StadeumButton("Open Stadeum", Theme.colors.accent) { open(status.pairing.verificationUriComplete) }
+                StadeumButton(stringResource(R.string.misc_you_stadeum_open), Theme.colors.accent) { open(status.pairing.verificationUriComplete) }
                 AccountDivider()
-                StadeumButton("Cancel", Theme.colors.secondaryText) { model.cancelPairing() }
+                StadeumButton(stringResource(R.string.common_cancel), Theme.colors.secondaryText) { model.cancelPairing() }
             }
             StadeumModel.Status.Connected, StadeumModel.Status.NeedsPairing -> {
                 if (status == StadeumModel.Status.NeedsPairing) {
-                    StadeumNote("Stadeum no longer knows this phone. Connect it again to open your workspaces' work here.", Theme.colors.attention)
-                    StadeumButton("Connect again", Theme.colors.accent, ::connect)
+                    StadeumNote(stringResource(R.string.misc_you_stadeum_unknown), Theme.colors.attention)
+                    StadeumButton(stringResource(R.string.misc_you_connect_again), Theme.colors.accent, ::connect)
                     AccountDivider()
                 }
                 link?.peers?.forEach { peer ->
@@ -1180,7 +1185,7 @@ private fun StadeumSection(model: StadeumModel) {
                     StadeumNote(Stadeum.IDENTIFIED_LINE)
                     AccountDivider()
                 }
-                StadeumButton("Disconnect", Theme.colors.destructive) { model.disconnect() }
+                StadeumButton(stringResource(R.string.misc_you_disconnect), Theme.colors.destructive) { model.disconnect() }
             }
         }
     }
@@ -1213,7 +1218,7 @@ private fun BoxesSection(model: BoxesModel) {
         }
     }
     Column(Modifier.fillMaxWidth()) {
-        SectionHeader("Boxes")
+        SectionHeader(stringResource(R.string.misc_you_boxes))
         if (links.isNotEmpty() || linking != null) {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
                 links.forEachIndexed { i, box ->
@@ -1223,8 +1228,8 @@ private fun BoxesSection(model: BoxesModel) {
                             Modifier.fillMaxWidth()
                                 .combinedClickable(
                                     enabled = opening == null,
-                                    onClickLabel = "Open ${box.host} as ${box.person}",
-                                    onLongClickLabel = "Forget",
+                                    onClickLabel = stringResource(R.string.misc_you_box_open, box.host, box.person),
+                                    onLongClickLabel = stringResource(R.string.misc_forget),
                                     onLongClick = { menuFor = box.url },
                                     onClick = { open(box) },
                                 )
@@ -1240,7 +1245,7 @@ private fun BoxesSection(model: BoxesModel) {
                         }
                         DropdownMenu(expanded = menuFor == box.url, onDismissRequest = { menuFor = null }) {
                             DropdownMenuItem(
-                                text = { Text("Forget", color = Theme.colors.destructive) },
+                                text = { Text(stringResource(R.string.misc_forget), color = Theme.colors.destructive) },
                                 onClick = { menuFor = null; model.forget(box) },
                             )
                         }
@@ -1251,7 +1256,7 @@ private fun BoxesSection(model: BoxesModel) {
                     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(12.dp))
-                        Text("Linking Peel to ${linking.host}…", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                        Text(stringResource(R.string.misc_you_linking, linking.host), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
                     }
                 }
             }
@@ -1287,7 +1292,7 @@ internal fun ConnectedAppsScreen(storage: Storage, onBack: () -> Unit) {
     val version by storage.walletConnectionsVersion.collectAsState()
     val connections = remember(version) { storage.walletConnections() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)) {
-        item { RouteHeader("Connected apps", null, onBack) }
+        item { RouteHeader(stringResource(R.string.misc_you_connected_apps), null, onBack) }
         item { Spacer(Modifier.height(24.dp)) }
         if (connections.isEmpty()) item { StadeumNote(ConnectedAppRow.EMPTY) }
         items(connections, key = { it.key }) { connection ->
@@ -1322,10 +1327,10 @@ private fun ConnectedAppCard(storage: Storage, connection: WalletConnection) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.OutlinedTextField(
                     value = limitText, onValueChange = { limitText = it.filter(Char::isDigit) }, modifier = Modifier.weight(1f), singleLine = true,
-                    placeholder = { Text("No limit") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    placeholder = { Text(stringResource(R.string.misc_you_no_limit)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 Text("sats", Modifier.padding(horizontal = 8.dp), color = Theme.colors.secondaryText)
-                TextButton(onClick = { storage.setSpendingLimit(connection.key, row.typedMsat) }, enabled = row.canSave) { Text("Save") }
+                TextButton(onClick = { storage.setSpendingLimit(connection.key, row.typedMsat) }, enabled = row.canSave) { Text(stringResource(R.string.misc_save)) }
             }
             row.spentLine?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
         }
@@ -1365,7 +1370,7 @@ internal fun SiteLocationScreen(storage: Storage, onBack: () -> Unit) {
                 Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(PageLocation.summary(grant), color = Theme.colors.text, fontWeight = FontWeight.SemiBold)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Allowed", Modifier.weight(1f), color = Theme.colors.text)
+                        Text(stringResource(R.string.misc_you_allowed), Modifier.weight(1f), color = Theme.colors.text)
                         androidx.compose.material3.Switch(checked = grant.allowed, onCheckedChange = { storage.putSiteLocation(grant.copy(allowed = it, decidedAt = System.currentTimeMillis() / 1000)) })
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1373,16 +1378,16 @@ internal fun SiteLocationScreen(storage: Storage, onBack: () -> Unit) {
                         androidx.compose.material3.Switch(checked = grant.precise, onCheckedChange = { storage.putSiteLocation(grant.copy(precise = it, decidedAt = System.currentTimeMillis() / 1000)) })
                     }
                     Text(PageLocation.PRECISE_NOTE, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
-                    TextButton(onClick = { forget(grant.origin); open = null }) { Text("Remove", color = Theme.colors.destructive) }
+                    TextButton(onClick = { forget(grant.origin); open = null }) { Text(stringResource(R.string.misc_remove), color = Theme.colors.destructive) }
                 }
             }
         }
         return
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)) {
-        item { RouteHeader("Site location", null, onBack) }
+        item { RouteHeader(stringResource(R.string.misc_you_site_location), null, onBack) }
         item { Spacer(Modifier.height(24.dp)) }
-        if (sites.isEmpty()) item { StadeumNote("No site has asked for your location.") }
+        if (sites.isEmpty()) item { StadeumNote(stringResource(R.string.misc_you_no_site)) }
         items(sites, key = { it.origin }) { site ->
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).clickable { open = site.origin }.padding(16.dp)) {
                 Text(com.sphinx.peel.engine.Seller.host(site.origin) ?: site.origin, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
@@ -1394,8 +1399,8 @@ internal fun SiteLocationScreen(storage: Storage, onBack: () -> Unit) {
             TextButton(onClick = {
                 runCatching { android.webkit.GeolocationPermissions.getInstance().clearAll() }
                 storage.clearSiteLocations()
-            }) { Text("Forget all sites", color = Theme.colors.destructive) }
+            }) { Text(stringResource(R.string.misc_you_forget_all), color = Theme.colors.destructive) }
         }
-        item { TextButton(onClick = { settings() }) { Text("Phone location settings") } }
+        item { TextButton(onClick = { settings() }) { Text(stringResource(R.string.misc_you_phone_location)) } }
     }
 }

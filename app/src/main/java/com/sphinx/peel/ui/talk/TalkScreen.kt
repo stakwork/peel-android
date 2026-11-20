@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.talk
 
 import android.content.Intent
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -84,12 +86,12 @@ fun TalkScreen(store: TalkStore, onClose: () -> Unit) {
     val over = state is TalkStore.State.Failed || phase?.isOver == true
     val words = when {
         state is TalkStore.State.Failed -> state.reason
-        session == null -> "Calling…"
+        session == null -> stringResource(R.string.misc_talk_calling)
         else -> session.encryptionNotice ?: session.phase.words
     }
     Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
         Text(
-            "Jamie · ${home.name}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+            stringResource(R.string.misc_talk_title, home.name), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
             color = Theme.colors.text, maxLines = 1, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp),
         )
         Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
@@ -101,7 +103,7 @@ fun TalkScreen(store: TalkStore, onClose: () -> Unit) {
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
         )
         if (session != null) {
-            if (session.micRefused) Note("Peel can't use the microphone, so Jamie can't hear you. Allow it in Settings.")
+            if (session.micRefused) Note(stringResource(R.string.misc_talk_mic_refused))
             session.notice?.let { Note(it) }
             Transcript(session, Modifier.weight(1f).fillMaxWidth())
         } else {
@@ -109,8 +111,8 @@ fun TalkScreen(store: TalkStore, onClose: () -> Unit) {
         }
         if (over) {
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
-                TextButton(onClick = store::tryAgain) { Text("Try again") }
-                TextButton(onClick = onClose) { Text("Close") }
+                TextButton(onClick = store::tryAgain) { Text(stringResource(R.string.misc_call_try_again)) }
+                TextButton(onClick = onClose) { Text(stringResource(R.string.misc_close)) }
             }
         } else {
             Row(
@@ -123,7 +125,7 @@ fun TalkScreen(store: TalkStore, onClose: () -> Unit) {
                     modifier = Modifier.size(56.dp).clip(CircleShape).background(Theme.colors.fieldFill),
                 ) {
                     Icon(
-                        if (micOn) Icons.Filled.Mic else Icons.Filled.MicOff, contentDescription = if (micOn) "Mute" else "Unmute",
+                        if (micOn) Icons.Filled.Mic else Icons.Filled.MicOff, contentDescription = if (micOn) stringResource(R.string.misc_call_mute) else stringResource(R.string.misc_call_unmute),
                         tint = if (micOn) Theme.colors.text else Theme.colors.secondaryText,
                     )
                 }
@@ -138,7 +140,7 @@ fun TalkScreen(store: TalkStore, onClose: () -> Unit) {
                     onClick = onClose,
                     modifier = Modifier.size(56.dp).clip(CircleShape).background(Theme.colors.destructive),
                 ) {
-                    Icon(Icons.Filled.CallEnd, contentDescription = "Hang up", tint = Theme.colors.buttonText)
+                    Icon(Icons.Filled.CallEnd, contentDescription = stringResource(R.string.misc_talk_hang_up), tint = Theme.colors.buttonText)
                 }
             }
         }

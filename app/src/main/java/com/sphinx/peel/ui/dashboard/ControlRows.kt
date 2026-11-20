@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -59,6 +61,7 @@ fun AgentRequestLine(label: String, request: AgentRequest?) {
         now = System.currentTimeMillis() / 1000
     }
     val outcome = request?.outcomeElsewhere(now)
+    val doneDescription = stringResource(R.string.dash_request_done, label)
     val text = if (outcome != null) "$label · $outcome" else "$label  ✓"
     Text(
         text,
@@ -67,13 +70,14 @@ fun AgentRequestLine(label: String, request: AgentRequest?) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = TEXT_INSET, end = 16.dp, top = 3.dp, bottom = 3.dp)
-            .semantics { if (outcome == null) contentDescription = "$label, done" },
+            .semantics { if (outcome == null) contentDescription = doneDescription },
     )
 }
 
 /// The tools an agent's reply ran, above it in its DM: one quiet line each, in line with the messages' text ("Read unseen messages · Kate").
 @Composable
 fun AgentToolLines(tools: List<AgentToolLine>) {
+    val failedWord = stringResource(R.string.dash_tool_failed)
     Column(
         Modifier.fillMaxWidth().padding(start = TEXT_INSET, end = 16.dp, top = 3.dp, bottom = 3.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -81,7 +85,7 @@ fun AgentToolLines(tools: List<AgentToolLine>) {
         // By position: a reply may run one tool twice.
         tools.forEachIndexed { index, tool ->
             val asked = remember(tool) { AgentToolTitle.asked(tool.summary, tool.name) }
-            val line = AgentToolTitle.of(tool.name) + (if (asked.isNotEmpty()) " · $asked" else "") + (if (tool.failed) " · failed" else "")
+            val line = AgentToolTitle.of(tool.name) + (if (asked.isNotEmpty()) " · $asked" else "") + (if (tool.failed) " · $failedWord" else "")
             Row { Text(line, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
     }

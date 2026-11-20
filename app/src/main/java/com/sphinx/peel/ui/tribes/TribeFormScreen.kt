@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.tribes
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -70,12 +73,12 @@ fun TribeFormScreen(engine: Engine, chat: String?, onBack: () -> Unit, onDone: (
     if (info != null) {
         TribeFormBody(engine, chat, TribeForm.from(info), onBack, onDone)
     } else {
-        PageFrame("Edit tribe", onBack) {
+        PageFrame(stringResource(R.string.ppl_edit_tribe), onBack) {
             if (result == null) {
                 CircularProgressIndicator(Modifier.padding(top = 24.dp))
             } else {
                 Text(
-                    "Could not read the tribe: ${result.exceptionOrNull()?.message ?: "try again"}",
+                    stringResource(R.string.ppl_tribe_read_failed, result.exceptionOrNull()?.message ?: stringResource(R.string.ppl_try_again)),
                     color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -103,6 +106,10 @@ private fun TribeFormBody(engine: Engine, chat: String?, initial: TribeForm, onB
     val context = LocalContext.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
+    val tribeCreatedText = stringResource(R.string.ppl_tribe_created)
+    val savedText = stringResource(R.string.ppl_saved)
+    val notConnectedText = stringResource(R.string.ppl_not_connected)
+    val saveFailedText = stringResource(R.string.ppl_save_tribe_failed)
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -111,10 +118,10 @@ private fun TribeFormBody(engine: Engine, chat: String?, initial: TribeForm, onB
         scope.launch {
             try {
                 val jpeg = withContext(Dispatchers.IO) { prepareImageForSending(context, uri, maxDimension = 1024, quality = 50) }
-                    ?: throw IllegalStateException("That is not a picture.")
+                    ?: throw IllegalStateException(context.str(R.string.ppl_not_a_picture))
                 img = engine.uploadPicture(jpeg)
             } catch (e: Exception) {
-                problem = "Could not upload the picture: ${e.message ?: "try again"}"
+                problem = context.str(R.string.ppl_picture_upload_failed, e.message ?: context.str(R.string.ppl_try_again))
             } finally {
                 uploading = false
             }
@@ -144,40 +151,40 @@ private fun TribeFormBody(engine: Engine, chat: String?, initial: TribeForm, onB
         scope.launch {
             try {
                 val key = if (chat == null) engine.createTribe(filled) else chat.also { engine.updateTribe(it, filled) }
-                toast.show(if (chat == null) "Tribe created." else "Saved.", ToastType.Success)
+                toast.show(if (chat == null) tribeCreatedText else savedText, ToastType.Success)
                 onDone(key)
             } catch (e: NotConnectedException) {
-                problem = "Not connected. Try again in a moment."
+                problem = notConnectedText
             } catch (e: TribeRefused) {
                 problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not save the tribe."
+                problem = e.message ?: saveFailedText
             } finally {
                 working = false
             }
         }
     }
 
-    PageFrame(if (chat == null) "Create a tribe" else "Edit tribe", onBack) {
+    PageFrame(stringResource(if (chat == null) R.string.ppl_create_tribe else R.string.ppl_edit_tribe), onBack) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Avatar(name.ifBlank { "Tribe" }, img, 64.dp, PersonHue.of(chat ?: name))
+            Avatar(name.ifBlank { stringResource(R.string.ppl_tribe_default_name) }, img, 64.dp, PersonHue.of(chat ?: name))
             OutlinedButton(
                 onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 enabled = !uploading,
-            ) { Text(if (uploading) "Uploading…" else "Picture") }
-            if (img != null) TextButton(onClick = { img = null }) { Text("Remove") }
+            ) { Text(stringResource(if (uploading) R.string.ppl_uploading else R.string.ppl_picture)) }
+            if (img != null) TextButton(onClick = { img = null }) { Text(stringResource(R.string.ppl_remove)) }
         }
-        Field("Name", name, { name = it.take(TribeForm.MAX_NAME) })
-        Field("Description", description, { description = it.take(TribeForm.MAX_DESCRIPTION) }, singleLine = false)
-        Field("Tags (comma separated)", tags, { tags = it.take(300) })
-        Field("Price to join (sats)", priceToJoin, { priceToJoin = it.digits() }, number = true)
-        Field("Price per message (sats)", pricePerMessage, { pricePerMessage = it.digits() }, number = true)
-        Field("Escrow amount (sats)", escrowSat, { escrowSat = it.digits() }, number = true)
-        Field("Escrow time (hours held)", escrowHours, { escrowHours = it.digits() }, number = true)
-        Field("App URL", appUrl, { appUrl = it.trim().take(500) })
-        Field("Feed URL", feedUrl, { feedUrl = it.trim().take(500) })
-        SwitchRow("Unlisted", "Left out of the tribes directory; people need the link.", unlisted) { unlisted = it }
-        SwitchRow("Approval required", "Private: you approve each member who asks to join.", approval) { approval = it }
+        Field(stringResource(R.string.ppl_name), name, { name = it.take(TribeForm.MAX_NAME) })
+        Field(stringResource(R.string.ppl_description), description, { description = it.take(TribeForm.MAX_DESCRIPTION) }, singleLine = false)
+        Field(stringResource(R.string.ppl_tags_field), tags, { tags = it.take(300) })
+        Field(stringResource(R.string.ppl_price_to_join), priceToJoin, { priceToJoin = it.digits() }, number = true)
+        Field(stringResource(R.string.ppl_price_per_message), pricePerMessage, { pricePerMessage = it.digits() }, number = true)
+        Field(stringResource(R.string.ppl_escrow_amount), escrowSat, { escrowSat = it.digits() }, number = true)
+        Field(stringResource(R.string.ppl_escrow_time), escrowHours, { escrowHours = it.digits() }, number = true)
+        Field(stringResource(R.string.ppl_app_url), appUrl, { appUrl = it.trim().take(500) })
+        Field(stringResource(R.string.ppl_feed_url), feedUrl, { feedUrl = it.trim().take(500) })
+        SwitchRow(stringResource(R.string.ppl_unlisted), stringResource(R.string.ppl_unlisted_detail), unlisted) { unlisted = it }
+        SwitchRow(stringResource(R.string.ppl_approval), stringResource(R.string.ppl_approval_detail), approval) { approval = it }
         problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
         Spacer(Modifier.height(16.dp))
         Button(
@@ -186,7 +193,7 @@ private fun TribeFormBody(engine: Engine, chat: String?, initial: TribeForm, onB
             modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
         ) {
-            if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text(if (chat == null) "Create" else "Save")
+            if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text(stringResource(if (chat == null) R.string.ppl_create else R.string.ppl_save))
         }
         Spacer(Modifier.height(24.dp))
     }

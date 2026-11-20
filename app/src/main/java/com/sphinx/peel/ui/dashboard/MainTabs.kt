@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.dashboard
 
+import com.sphinx.peel.ui.str
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import com.sphinx.peel.engine.TalkHome
@@ -183,7 +184,7 @@ fun MainTabs(
     val nudge = CallController.notificationNudge
     LaunchedEffect(nudge) {
         if (!nudge) return@LaunchedEffect
-        toast.show("Notifications are off, so the call's controls won't show on the lock screen. The call still runs.", ToastType.Warning)
+        toast.show(context.str(com.sphinx.peel.R.string.call_notifications_off), ToastType.Warning)
         CallController.nudgeShown()
     }
 
@@ -203,7 +204,7 @@ fun MainTabs(
     fun request(chat: String, title: String, link: CallLink, camera: Boolean) {
         // One call at a time: a group call waits until Talk is hung up.
         if (talk.isOn) {
-            toast.show("Hang up on Jamie first, then join the call.", ToastType.Warning)
+            toast.show(context.str(com.sphinx.peel.R.string.call_hang_up_jamie_first), ToastType.Warning)
             return
         }
         val current = callPhase
@@ -221,7 +222,7 @@ fun MainTabs(
     fun talkToJamie(home: TalkHome) {
         val other = callPhase
         if (other != null) {
-            toast.show("Leave the call in ${other.title} first, then talk to Jamie.", ToastType.Warning)
+            toast.show(context.str(com.sphinx.peel.R.string.call_leave_first, other.title), ToastType.Warning)
             return
         }
         CallController.talkTo(home)
@@ -235,16 +236,16 @@ fun MainTabs(
     pendingCall?.let { pending ->
         AlertDialog(
             onDismissRequest = { pendingCall = null },
-            title = { Text("Leave the current call?") },
-            text = { Text("You're on a call in ${callPhase?.title ?: "another chat"}. Leave it and join the call in ${pending.title}?") },
+            title = { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_leave_title)) },
+            text = { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_leave_body, callPhase?.title ?: androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_another_chat), pending.title)) },
             confirmButton = {
                 TextButton(onClick = {
                     pendingCall = null
                     leaveCall()
                     connectNow(pending.chat, pending.title, pending.link, pending.camera)
-                }) { Text("Leave and join") }
+                }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_leave_and_join)) }
             },
-            dismissButton = { TextButton(onClick = { pendingCall = null }) { Text("Stay") } },
+            dismissButton = { TextButton(onClick = { pendingCall = null }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_stay)) } },
         )
     }
 
@@ -257,8 +258,8 @@ fun MainTabs(
             properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
             title = { Text(BoxWords.title(offer)) },
             text = { Text(BoxWords.question(offer)) },
-            confirmButton = { TextButton(onClick = { boxes.accept() }) { Text("Link") } },
-            dismissButton = { TextButton(onClick = { boxes.decline() }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { boxes.accept() }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.box_link)) } },
+            dismissButton = { TextButton(onClick = { boxes.decline() }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.common_cancel)) } },
         )
     }
 
@@ -266,12 +267,12 @@ fun MainTabs(
     if (CallController.choosingDevice != null) {
         AlertDialog(
             onDismissRequest = { CallController.answerDeviceChoice(CallController.DeviceChoice.CANCEL) },
-            title = { Text(CallDevices.QUESTION) },
+            title = { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_device_question)) },
             confirmButton = {
                 Column(horizontalAlignment = Alignment.End) {
-                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.SWITCH) }) { Text(CallDevices.SWITCH) }
-                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.STAY) }) { Text(CallDevices.STAY) }
-                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.CANCEL) }) { Text(CallDevices.CANCEL) }
+                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.SWITCH) }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_device_switch)) }
+                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.STAY) }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.call_device_stay)) }
+                    TextButton(onClick = { CallController.answerDeviceChoice(CallController.DeviceChoice.CANCEL) }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.common_cancel)) }
                 }
             },
         )
@@ -430,7 +431,7 @@ private fun CallNoticeBar(notice: CallNotice, onDismiss: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(notice.message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = if (notice.error) Color.White else Theme.colors.text)
-        Text("Dismiss", Modifier.clickable(onClick = onDismiss), style = MaterialTheme.typography.labelLarge, color = if (notice.error) Color.White else Theme.colors.accent)
+        Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.common_dismiss), Modifier.clickable(onClick = onDismiss), style = MaterialTheme.typography.labelLarge, color = if (notice.error) Color.White else Theme.colors.accent)
     }
 }
 
@@ -449,11 +450,11 @@ private fun BottomBar(selected: MainTab, hasTasks: Boolean, onSelect: (MainTab) 
         ) {
             MainTab.pill(hasTasks).forEach { tab ->
                 val (icon, label) = when (tab) {
-                    MainTab.TASKS -> Icons.Filled.TaskAlt to "Tasks"
-                    MainTab.CHATS -> Icons.AutoMirrored.Filled.Chat to "Chats"
-                    MainTab.PAYMENTS -> Icons.Filled.Bolt to "Payments"
-                    MainTab.YOU -> Icons.Filled.Person to "You"
-                    MainTab.SEARCH -> Icons.Filled.Search to "Search"
+                    MainTab.TASKS -> Icons.Filled.TaskAlt to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_tasks)
+                    MainTab.CHATS -> Icons.AutoMirrored.Filled.Chat to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_chats)
+                    MainTab.PAYMENTS -> Icons.Filled.Bolt to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_payments)
+                    MainTab.YOU -> Icons.Filled.Person to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_you)
+                    MainTab.SEARCH -> Icons.Filled.Search to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_search)
                 }
                 TabIcon(icon, label, selected == tab) { onSelect(tab) }
             }
@@ -468,7 +469,7 @@ private fun BottomBar(selected: MainTab, hasTasks: Boolean, onSelect: (MainTab) 
         ) {
             Icon(
                 Icons.Filled.Search,
-                contentDescription = "Search",
+                contentDescription = androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_search),
                 tint = if (selected == MainTab.SEARCH) Theme.colors.accent else Theme.colors.secondaryText,
             )
         }

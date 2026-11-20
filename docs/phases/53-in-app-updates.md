@@ -1,4 +1,4 @@
-# Phase 52 — In-app updates
+# Phase 53 — In-app updates
 
 Status (2026-11-20): **built; JVM-tested (`update/*Test`); not run on a device, and the system installer hand-off has not been exercised.**
 Open: a real end-to-end run (install a release containing this, publish a newer one); showing a notification for a found update (none: the prompt is in-app only).

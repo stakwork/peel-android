@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.threads
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -115,15 +118,15 @@ fun ThreadsScreen(
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.ppl_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(12.dp))
             Text(
-                "Threads", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
+                stringResource(R.string.ppl_threads), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                 color = Theme.colors.text, modifier = Modifier.weight(1f),
             )
             if (unreadChats.isNotEmpty()) {
-                TextButton(onClick = { markRead(unreadChats) }) { Text("Mark all read", color = Theme.colors.accent) }
+                TextButton(onClick = { markRead(unreadChats) }) { Text(stringResource(R.string.ppl_mark_all_read), color = Theme.colors.accent) }
             }
         }
         if (!loaded) {
@@ -155,10 +158,10 @@ private fun EmptyThreads() {
     ) {
         Icon(Icons.Filled.ChatBubbleOutline, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(40.dp))
         Spacer(Modifier.size(12.dp))
-        Text("No threads yet", style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
+        Text(stringResource(R.string.ppl_no_threads), style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
         Spacer(Modifier.size(4.dp))
         Text(
-            "Threads you start or reply in show here, with their new replies.",
+            stringResource(R.string.ppl_no_threads_body),
             style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText, textAlign = TextAlign.Center,
         )
     }
@@ -172,8 +175,10 @@ private fun ThreadRow(item: ThreadListItem, myAlias: String, myPhotoUrl: String?
     val (rootName, rootPhoto, rootHueKey) = senderDisplay(item.root, myAlias, myPhotoUrl, isTribe)
     val rootContent = previewContent(item.root)
     val rootIsBlank = MessageMarkup.plainText(rootContent).isBlank()
-    val rootFallback = attachmentFallback(item.root)
+    val rootFallback = attachmentFallback(context, item.root)
     val unread = item.unread > 0
+    val unreadLabel = context.resources.getQuantityString(R.plurals.ppl_new_count, item.unread.toInt(), item.unread)
+    val repliesLabel = context.resources.getQuantityString(R.plurals.ppl_replies, item.count, item.count)
 
     Box {
         Row(
@@ -222,16 +227,16 @@ private fun ThreadRow(item: ThreadListItem, myAlias: String, myPhotoUrl: String?
                 Text(
                     buildAnnotatedString {
                         if (unread) {
-                            withStyle(SpanStyle(color = Theme.colors.accent, fontWeight = FontWeight.SemiBold)) { append("${item.unread} new") }
+                            withStyle(SpanStyle(color = Theme.colors.accent, fontWeight = FontWeight.SemiBold)) { append(unreadLabel) }
                             append(" · ")
                         }
-                        append(if (item.count == 1) "1 reply" else "${item.count} replies")
+                        append(repliesLabel)
                     },
                     style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
                 )
                 val latest = item.latest
                 val (latestName, _, latestHueKey) = senderDisplay(latest, myAlias, myPhotoUrl, isTribe)
-                val latestText = MessageMarkup.plainText(previewContent(latest)).ifBlank { attachmentFallback(latest) }
+                val latestText = MessageMarkup.plainText(previewContent(latest)).ifBlank { attachmentFallback(context, latest) }
                 if (latestText.isNotEmpty()) {
                     Text(
                         buildAnnotatedString {
@@ -245,13 +250,14 @@ private fun ThreadRow(item: ThreadListItem, myAlias: String, myPhotoUrl: String?
             }
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(text = { Text("Open thread") }, onClick = { menuOpen = false; onOpen() })
-            if (unread) DropdownMenuItem(text = { Text("Mark read") }, onClick = { menuOpen = false; onMarkRead() })
+            DropdownMenuItem(text = { Text(stringResource(R.string.ppl_open_thread)) }, onClick = { menuOpen = false; onOpen() })
+            if (unread) DropdownMenuItem(text = { Text(stringResource(R.string.ppl_mark_read)) }, onClick = { menuOpen = false; onMarkRead() })
         }
     }
 }
 
-private fun attachmentFallback(row: MessageRow): String = if (row.type == 6) "Attachment" else ""
+private fun attachmentFallback(context: android.content.Context, row: MessageRow): String =
+    if (row.type == 6) context.str(R.string.ppl_attachment) else ""
 
 /// Time of day for today, "Yesterday", else a short date. ChatsScreen has
 /// no formatter of its own to share (its rows show no time).
@@ -263,6 +269,6 @@ private fun relativeTime(context: android.content.Context, timestamp: Long): Str
     val then = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
     if (sameDay(now, then)) return android.text.format.DateFormat.getTimeFormat(context).format(timestamp)
     now.add(java.util.Calendar.DAY_OF_YEAR, -1)
-    if (sameDay(now, then)) return "Yesterday"
+    if (sameDay(now, then)) return context.str(R.string.ppl_yesterday)
     return android.text.format.DateFormat.getMediumDateFormat(context).format(timestamp)
 }

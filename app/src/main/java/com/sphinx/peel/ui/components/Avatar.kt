@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.components
 
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -170,7 +171,7 @@ fun PeelLogo(size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun AgentTag() {
     Text(
-        "AGENT",
+        stringResource(R.string.dash_agent_tag),
         style = MaterialTheme.typography.labelSmall,
         color = Theme.colors.secondaryText,
         modifier = Modifier

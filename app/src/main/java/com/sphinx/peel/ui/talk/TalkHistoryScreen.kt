@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.talk
 
 import androidx.activity.compose.BackHandler
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -57,14 +59,14 @@ fun TalkHistoryScreen(home: TalkHome, store: TalkHistoryStore, onBack: () -> Uni
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = { if (shown != null) open = null else onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+                IconButton(onClick = { if (shown != null) open = null else onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(12.dp))
             Text(
-                if (shown != null) TalkHistoryFormat.title(shown.date) else "Conversations", Modifier.weight(1f),
+                if (shown != null) TalkHistoryFormat.title(shown.date) else stringResource(R.string.misc_talk_conversations), Modifier.weight(1f),
                 style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text,
             )
-            IconButton(onClick = { onTalk(home) }) { Icon(Icons.Filled.Mic, if (shown != null) "Resume" else "New conversation", tint = Theme.colors.accent) }
+            IconButton(onClick = { onTalk(home) }) { Icon(Icons.Filled.Mic, if (shown != null) stringResource(R.string.misc_talk_resume) else stringResource(R.string.misc_apps_new_conversation), tint = Theme.colors.accent) }
         }
         val list = sessions
         when {
@@ -82,8 +84,8 @@ fun TalkHistoryScreen(home: TalkHome, store: TalkHistoryStore, onBack: () -> Uni
             list.isEmpty() -> Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Filled.History, null, Modifier.size(40.dp), tint = Theme.colors.secondaryText)
-                    Text("No conversations yet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
-                    Text("Past conversations with Jamie on ${home.name} will appear here after a call ends.", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                    Text(stringResource(R.string.misc_talk_none_yet), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                    Text(stringResource(R.string.misc_talk_none_body, home.name), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
                 }
             }
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
@@ -92,11 +94,11 @@ fun TalkHistoryScreen(home: TalkHome, store: TalkHistoryStore, onBack: () -> Uni
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(TalkHistoryFormat.row(session.date), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
                             Text(
-                                session.preview ?: "No transcript", maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                session.preview ?: stringResource(R.string.misc_talk_no_transcript), maxLines = 2, overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
                             )
                         }
-                        IconButton(onClick = { onTalk(home) }) { Icon(Icons.Filled.Mic, "Resume", tint = Theme.colors.accent) }
+                        IconButton(onClick = { onTalk(home) }) { Icon(Icons.Filled.Mic, stringResource(R.string.misc_talk_resume), tint = Theme.colors.accent) }
                     }
                 }
             }

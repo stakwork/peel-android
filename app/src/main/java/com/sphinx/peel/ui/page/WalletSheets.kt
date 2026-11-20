@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.page
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -140,7 +142,7 @@ fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, clock: () -> Long = DEFAU
             Text(WalletWords.who(sheet.title, sheet.app, sheet.version, sheet.place, sheet.byOrg), color = Theme.colors.text)
             Text(WalletWords.sharedConnection(sheet), color = Theme.colors.secondaryText)
             sheet.signIn?.let { offer ->
-                SectionTitle("Sign in")
+                SectionTitle(stringResource(R.string.wallet_sign_in))
                 // One key (what the server asks for, WalletHost.signIn) is no choice: only what it means.
                 if (offer.keys.size > 1) offer.keys.forEach { key ->
                     Row(
@@ -155,7 +157,7 @@ fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, clock: () -> Long = DEFAU
                 identity?.let { Text(WalletWords.signInNote(it), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText) }
             }
             if (sheet.asksWallet) {
-                SectionTitle("It may")
+                SectionTitle(stringResource(R.string.wallet_it_may))
                 WalletWords.methods(sheet.required).forEach { Text(it, color = Theme.colors.text) }
                 sheet.optional.forEach { method ->
                     Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -166,18 +168,18 @@ fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, clock: () -> Long = DEFAU
                         })
                     }
                 }
-                if (sheet.notifications.isNotEmpty()) Text("Hear when its own payments land", color = Theme.colors.text)
+                if (sheet.notifications.isNotEmpty()) Text(stringResource(R.string.wallet_hear_payments), color = Theme.colors.text)
                 HorizontalDivider(color = Theme.colors.divider)
-                SectionTitle("Spending limit")
+                SectionTitle(stringResource(R.string.wallet_spending_limit))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = limit, onValueChange = { limit = it.filter(Char::isDigit) }, modifier = Modifier.weight(1f), singleLine = true,
-                        placeholder = { Text("None") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        placeholder = { Text(stringResource(R.string.wallet_none)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     )
                     Text("sats", Modifier.padding(start = 8.dp), color = Theme.colors.secondaryText)
                 }
                 Text(form.limitSentence, color = Theme.colors.secondaryText)
-                SectionTitle("Over the limit")
+                SectionTitle(stringResource(R.string.wallet_over_limit))
                 OverBudget.entries.forEach { choice ->
                     Row(
                         Modifier.fillMaxWidth().selectable(selected = overBudget == choice, onClick = { overBudget = choice }, role = Role.RadioButton)
@@ -189,7 +191,7 @@ fun WalletConnectPhoneSheet(sheet: WalletConnectSheet, clock: () -> Long = DEFAU
                     }
                 }
                 Text(
-                    "Inside it, apps pay without asking you. Change it or take it back in You › Connected apps.",
+                    stringResource(R.string.wallet_inside_limit),
                     style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
                 )
             }
@@ -218,38 +220,38 @@ fun WalletPaymentPhoneSheet(sheet: WalletPaymentSheet, clock: () -> Long = DEFAU
     }
     val key = PaymentItem.shortKey(sheet.payee)
     Dialog(onDismissRequest = { done(false) }, properties = sheetProperties) {
-        SheetPage(title = WalletWords.paymentTitle(sheet), no = "Decline", onNo = { done(false) }, yes = null) {
+        SheetPage(title = WalletWords.paymentTitle(sheet), no = stringResource(R.string.wallet_decline), onNo = { done(false) }, yes = null) {
             Text(WalletWords.who(sheet.title, sheet.app, sheet.version, sheet.place, sheet.byOrg), color = Theme.colors.secondaryText)
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(Sats.number(sheet.amountMsat), fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Theme.colors.text)
                 Text(" sats", Modifier.padding(bottom = 6.dp), color = Theme.colors.secondaryText)
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("To " + (sheet.payeeName?.let { "$it · $key" } ?: "$key, not a contact"), color = Theme.colors.text)
-                sheet.memo?.let { Text((if (sheet.keysend) "Message: " else "Memo: ") + it, color = Theme.colors.text) }
-                Text(if (sheet.async) "Fee added on top, with 1 sat to reach them" else "Fee added on top", color = Theme.colors.secondaryText)
+                Text(sheet.payeeName?.let { stringResource(R.string.wallet_to_named, it, key) } ?: stringResource(R.string.wallet_to_unknown, key), color = Theme.colors.text)
+                sheet.memo?.let { Text(stringResource(if (sheet.keysend) R.string.wallet_message else R.string.wallet_memo, it), color = Theme.colors.text) }
+                Text(stringResource(if (sheet.async) R.string.wallet_fee_async else R.string.wallet_fee), color = Theme.colors.secondaryText)
                 sheet.maxAmountMsat?.let {
-                    Text("${Sats.format(sheet.usedMsat)} of its ${Sats.format(it)} limit spent", color = Theme.colors.secondaryText)
+                    Text(stringResource(R.string.wallet_limit_spent, Sats.format(sheet.usedMsat), Sats.format(it)), color = Theme.colors.secondaryText)
                 }
-                sheet.comment?.let { Text("The app says: \u201C$it\u201D", color = Theme.colors.secondaryText) }
+                sheet.comment?.let { Text(stringResource(R.string.wallet_app_says, it), color = Theme.colors.secondaryText) }
             }
             val armed = state.armedMsat
             if (armed != null) {
                 Text(step.armedNote, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = { step.cancel() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = !state.working) { Text("Cancel") }
+                    OutlinedButton(onClick = { step.cancel() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = !state.working) { Text(stringResource(R.string.wallet_cancel)) }
                     Button(
                         onClick = { tap() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = ready,
                         colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.attention, contentColor = Theme.colors.buttonText),
                     ) {
                         if (state.working) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
-                        Text("Pay ${Sats.format(armed)}")
+                        Text(stringResource(R.string.wallet_pay_amount, Sats.format(armed)))
                     }
                 }
             } else {
                 Button(onClick = { tap() }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     if (state.working) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
-                    Text("Pay")
+                    Text(stringResource(R.string.wallet_pay))
                 }
             }
             state.problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium) }
@@ -277,36 +279,36 @@ fun WalletCreditPhoneSheet(sheet: WalletCreditSheet, clock: () -> Long = DEFAULT
         scope.launch { if (step.tap()) done(true) }
     }
     Dialog(onDismissRequest = { done(false) }, properties = sheetProperties) {
-        SheetPage(title = WalletWords.creditTitle(sheet), no = "Decline", onNo = { done(false) }, yes = null) {
+        SheetPage(title = WalletWords.creditTitle(sheet), no = stringResource(R.string.wallet_decline), onNo = { done(false) }, yes = null) {
             Text(WalletWords.creditApp(sheet), color = Theme.colors.secondaryText)
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(Sats.number(sheet.amountMsat), fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Theme.colors.text)
                 Text(" sats", Modifier.padding(bottom = 6.dp), color = Theme.colors.secondaryText)
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Runs ${sheet.workflow}", color = Theme.colors.text)
-                Text("Buys " + WalletWords.creditBuys(sheet), color = Theme.colors.text)
-                Text("Fee added on top", color = Theme.colors.secondaryText)
-                Text("The server says: \u201C${sheet.description}\u201D", color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.wallet_runs, sheet.workflow), color = Theme.colors.text)
+                Text(stringResource(R.string.wallet_buys, WalletWords.creditBuys(sheet)), color = Theme.colors.text)
+                Text(stringResource(R.string.wallet_fee), color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.wallet_server_says, sheet.description), color = Theme.colors.secondaryText)
                 Text(WalletWords.creditNote(sheet), color = Theme.colors.secondaryText)
             }
             val armed = state.armedMsat
             if (armed != null) {
                 Text(step.armedNote, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = { step.cancel() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = !state.working) { Text("Cancel") }
+                    OutlinedButton(onClick = { step.cancel() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = !state.working) { Text(stringResource(R.string.wallet_cancel)) }
                     Button(
                         onClick = { tap() }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = ready,
                         colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.attention, contentColor = Theme.colors.buttonText),
                     ) {
                         if (state.working) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
-                        Text("Pay ${Sats.format(armed)}")
+                        Text(stringResource(R.string.wallet_pay_amount, Sats.format(armed)))
                     }
                 }
             } else {
                 Button(onClick = { tap() }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     if (state.working) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
-                    Text("Pay")
+                    Text(stringResource(R.string.wallet_pay))
                 }
             }
             state.problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium) }

@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.mentions
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -76,6 +79,7 @@ fun MentionsScreen(
     // being empty after that really does mean none.
     var loaded by remember { mutableStateOf(false) }
     val myAlias = storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
+    val somethingWrongText = stringResource(R.string.ppl_something_wrong)
 
     // No reactive query layer, so a plain poll, as the chat list does.
     LaunchedEffect(Unit) {
@@ -86,7 +90,7 @@ fun MentionsScreen(
                 rows = loadedRows
                 error = null
             } catch (e: Exception) {
-                error = e.message ?: "Something went wrong."
+                error = e.message ?: somethingWrongText
             }
             loaded = true
             delay(3_000)
@@ -96,10 +100,10 @@ fun MentionsScreen(
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.ppl_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(12.dp))
-            Text("Mentions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+            Text(stringResource(R.string.ppl_mentions), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
         }
         val loadError = error
         if (!loaded) {
@@ -108,9 +112,9 @@ fun MentionsScreen(
             }
         } else if (rows.isEmpty()) {
             if (loadError != null) {
-                EmptyState("Mentions did not load", loadError, icon = false)
+                EmptyState(stringResource(R.string.ppl_mentions_failed), loadError, icon = false)
             } else {
-                EmptyState("No mentions yet", "When someone in a tribe mentions you, it shows here.", icon = true)
+                EmptyState(stringResource(R.string.ppl_no_mentions), stringResource(R.string.ppl_no_mentions_body), icon = true)
             }
         } else {
             val aliases = remember(myAlias) { setOf(Mentions.tribeAlias(myAlias)) }
@@ -186,7 +190,7 @@ private fun MentionRow(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "in $tribeName",
+                        stringResource(R.string.ppl_in_tribe, tribeName),
                         style = MaterialTheme.typography.labelSmall,
                         color = Theme.colors.secondaryText,
                         maxLines = 1,
@@ -207,13 +211,13 @@ private fun MentionRow(
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             if (uuid != null) {
                 DropdownMenuItem(
-                    text = { Text("Open in $tribeName") },
+                    text = { Text(stringResource(R.string.ppl_open_in, tribeName)) },
                     onClick = { menuOpen = false; onOpenMessage(row.chat, uuid, row.threadUuid) },
                 )
             }
             if (content.isNotBlank()) {
                 DropdownMenuItem(
-                    text = { Text("Copy") },
+                    text = { Text(stringResource(R.string.ppl_copy)) },
                     onClick = { menuOpen = false; ClipboardUtil.copySensitive(context, "message", content) },
                 )
             }

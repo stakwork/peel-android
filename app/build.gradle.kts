@@ -24,7 +24,7 @@ val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")?.takeIf { it.is
 val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
 val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.takeIf { it.isNotBlank() }
 val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
-// Self-update (docs/phases/52-in-app-updates.md): only a build made by the release workflow (a supplied VERSION_CODE, release
+// Self-update (docs/phases/53-in-app-updates.md): only a build made by the release workflow (a supplied VERSION_CODE, release
 // type) can update in place. Debug builds (versionCode 1, maybe a .dev id) and unversioned local builds never check or prompt.
 val versionSupplied = propOrEnv("VERSION_CODE") != null
 // Test override: -Ppeel.update.force=true makes a debug build check on launch too (it still can't install over a release: other

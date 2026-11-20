@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -43,15 +45,17 @@ import com.sphinx.peel.ui.theme.Theme
 /// pinned apps under it.
 @Composable
 internal fun AppsRow(fold: Boolean?, onToggleFold: () -> Unit, onClick: () -> Unit) {
+    val expandedLabel = stringResource(R.string.dash_expanded)
+    val collapsedLabel = stringResource(R.string.dash_collapsed)
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.Filled.Apps, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(24.dp))
         Spacer(Modifier.width(12.dp))
-        Text("Apps", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+        Text(stringResource(R.string.dash_apps), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
         if (fold != null) {
-            IconButton(onClick = onToggleFold, Modifier.size(32.dp).semantics { stateDescription = if (fold) "Expanded" else "Collapsed" }) {
+            IconButton(onClick = onToggleFold, Modifier.size(32.dp).semantics { stateDescription = if (fold) expandedLabel else collapsedLabel }) {
                 Icon(
                     if (fold) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "Pinned apps", tint = Theme.colors.secondaryText,
+                    contentDescription = stringResource(R.string.dash_pinned_apps), tint = Theme.colors.secondaryText,
                 )
             }
         }
@@ -72,14 +76,14 @@ internal fun PinnedAppRow(app: WorkspaceApp, showsSource: Boolean, pinned: Boole
             WorkspaceAppIcon(app.icon, Theme.colors.secondaryText, Modifier.size(24.dp), 20.dp)
             Spacer(Modifier.width(12.dp))
             Text(
-                if (showsSource) "${app.title} \u00b7 ${app.source}" else app.title,
+                if (showsSource) stringResource(R.string.dash_app_with_source, app.title, app.source) else app.title,
                 Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText,
             )
         }
         DropdownMenu(menu, { menu = false }) {
             DropdownMenuItem(
-                text = { Text(if (pinned) "Unpin" else "Pin to Chats") },
+                text = { Text(if (pinned) stringResource(R.string.dash_unpin) else stringResource(R.string.dash_pin_to_chats)) },
                 leadingIcon = { Icon(Icons.Filled.PushPin, null) },
                 onClick = { menu = false; onTogglePin() },
             )

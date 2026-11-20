@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -53,6 +55,8 @@ fun UndeliveredLine(row: MessageRow, engine: Engine, now: Long, modifier: Modifi
     var confirmingDiscard by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
+    val cannotDiscard = stringResource(R.string.dash_cannot_discard)
+    val couldNotResend = stringResource(R.string.dash_could_not_resend)
     val retryable = SendRetry.isRetryable(row, now)
     val discardable = SendRetry.isDiscardable(row, now)
 
@@ -63,18 +67,18 @@ fun UndeliveredLine(row: MessageRow, engine: Engine, now: Long, modifier: Modifi
             modifier = Modifier.heightIn(min = 28.dp),
         ) {
             if (confirmingDiscard) {
-                Text("Discard, never sent?", style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.dash_discard_question), style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
                 Text(
-                    "Discard",
+                    stringResource(R.string.dash_discard),
                     style = MaterialTheme.typography.labelMedium,
                     color = Theme.colors.destructive,
                     modifier = Modifier.clickable {
                         confirmingDiscard = false
-                        if (!engine.discardMessage(row.id)) problem = "That message can no longer be discarded."
+                        if (!engine.discardMessage(row.id)) problem = cannotDiscard
                     },
                 )
                 Text(
-                    "Cancel",
+                    stringResource(R.string.common_cancel),
                     style = MaterialTheme.typography.labelMedium,
                     color = Theme.colors.secondaryText,
                     modifier = Modifier.clickable { confirmingDiscard = false },
@@ -83,7 +87,7 @@ fun UndeliveredLine(row: MessageRow, engine: Engine, now: Long, modifier: Modifi
                 Text(SendRetry.undeliveredLabel(row), style = MaterialTheme.typography.labelMedium, color = Theme.colors.destructive)
                 if (retryable) {
                     Text(
-                        "Retry",
+                        stringResource(R.string.dash_retry),
                         style = MaterialTheme.typography.labelMedium,
                         color = if (working) Theme.colors.secondaryText else Theme.colors.link,
                         modifier = Modifier.clickable(enabled = !working) {
@@ -95,7 +99,7 @@ fun UndeliveredLine(row: MessageRow, engine: Engine, now: Long, modifier: Modifi
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
-                                    problem = "Could not send again. ${e.message ?: ""}".trim()
+                                    problem = "$couldNotResend ${e.message ?: ""}".trim()
                                 } finally {
                                     working = false
                                 }
@@ -105,7 +109,7 @@ fun UndeliveredLine(row: MessageRow, engine: Engine, now: Long, modifier: Modifi
                 }
                 if (discardable) {
                     Text(
-                        "Discard",
+                        stringResource(R.string.dash_discard),
                         style = MaterialTheme.typography.labelMedium,
                         color = Theme.colors.secondaryText,
                         modifier = Modifier.clickable { confirmingDiscard = true },

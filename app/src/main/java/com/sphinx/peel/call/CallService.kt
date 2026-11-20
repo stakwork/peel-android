@@ -1,6 +1,7 @@
 package com.sphinx.peel.call
 
 import android.Manifest
+import com.sphinx.peel.R
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -63,7 +64,7 @@ class CallService : Service() {
         Notifications.createChannels(this)
         val next = typeFor(snapshot)
         if (next == ForegroundTypes.NONE) {
-            CallController.serviceRefused("Peel needs the microphone to keep a call running in the background.")
+            CallController.serviceRefused(getString(R.string.misc_svc_mic))
             stopSelf()
             return START_NOT_STICKY
         }
@@ -73,7 +74,7 @@ class CallService : Service() {
         } catch (e: Exception) {
             // Android 12+ refuses a start from the background, Android 14+ a type
             // whose permission is not held: said, never swallowed.
-            CallController.serviceRefused(refusal(e))
+            CallController.serviceRefused(refusal(this, e))
             stopSelf()
             return START_NOT_STICKY
         }
@@ -108,7 +109,7 @@ class CallService : Service() {
                 type = next
                 return
             } catch (e: Exception) {
-                CallController.serviceRefused(refusal(e))
+                CallController.serviceRefused(refusal(this, e))
             }
         }
         Notifications.updateOngoingCall(this, notification)
@@ -178,20 +179,20 @@ class CallService : Service() {
             ContextCompat.startForegroundService(context, Intent(context, CallService::class.java))
             null
         } catch (e: Exception) {
-            refusal(e)
+            refusal(context, e)
         }
 
         fun stop(context: Context) {
             context.stopService(Intent(context, CallService::class.java))
         }
 
-        internal fun refusal(e: Exception): String =
+        internal fun refusal(context: Context, e: Exception): String =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is android.app.ForegroundServiceStartNotAllowedException) {
-                "Android would not let Peel keep this call running in the background."
+                context.getString(R.string.misc_svc_android_refused)
             } else if (e is SecurityException) {
-                "Peel is not allowed to keep this call running in the background (a permission is missing)."
+                context.getString(R.string.misc_svc_permission)
             } else {
-                "Peel could not keep this call running in the background."
+                context.getString(R.string.misc_svc_generic)
             }
     }
 }

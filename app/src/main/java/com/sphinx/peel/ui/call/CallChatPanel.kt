@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.call
 
 import androidx.compose.foundation.background
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,13 +57,13 @@ fun CallChatPanel(session: CallSession, onClose: () -> Unit, modifier: Modifier 
         modifier.fillMaxHeight().widthIn(max = 340.dp).fillMaxWidth(0.86f).background(Theme.colors.background).imePadding(),
     ) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Chat", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close the chat", tint = Theme.colors.text) }
+            Text(stringResource(R.string.misc_call_chat), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.misc_call_close_chat), tint = Theme.colors.text) }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (messages.isEmpty()) {
                 Text(
-                    "Messages here are only for people on this call.",
+                    stringResource(R.string.misc_call_chat_hint),
                     Modifier.align(Alignment.Center).padding(24.dp),
                     style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
                 )
@@ -93,12 +95,12 @@ fun CallChatPanel(session: CallSession, onClose: () -> Unit, modifier: Modifier 
             }
             OutlinedTextField(
                 draft, { draft = it.take(CallChat.MAX_LENGTH) }, Modifier.weight(1f),
-                placeholder = { Text("Message") }, maxLines = 4,
+                placeholder = { Text(stringResource(R.string.misc_call_message)) }, maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { send() }),
             )
             IconButton(onClick = send, enabled = CallChat.outgoing(draft) != null) {
-                Icon(Icons.Filled.Send, contentDescription = "Send", tint = Theme.colors.accent)
+                Icon(Icons.Filled.Send, contentDescription = stringResource(R.string.misc_call_send), tint = Theme.colors.accent)
             }
         }
     }

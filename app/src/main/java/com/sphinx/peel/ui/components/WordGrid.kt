@@ -123,7 +123,7 @@ fun WordEntry(words: List<String>, onWordsChange: (List<String>) -> Unit, modifi
             val next = words.toMutableList()
             parts.take(next.size).forEachIndexed { i, word -> next[i] = word }
             onWordsChange(next)
-        }) { Text("Paste") }
+        }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.common_paste)) }
 
         NumberedWords(places = words.indices.toList()) { index ->
             WordField(

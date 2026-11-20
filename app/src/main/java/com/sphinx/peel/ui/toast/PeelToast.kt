@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.toast
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -93,7 +95,7 @@ fun PeelToast(message: String, type: ToastType, onClose: () -> Unit, modifier: M
                 modifier = Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp),
             )
             IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Outlined.Close, contentDescription = "Dismiss", tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp))
+                Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.dash_dismiss), tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp))
             }
         }
     }

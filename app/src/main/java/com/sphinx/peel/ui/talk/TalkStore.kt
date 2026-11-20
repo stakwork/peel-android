@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.talk
 
 import com.sphinx.peel.diagnostics.DiagnosticEvent
+import com.sphinx.peel.ui.str
+import com.sphinx.peel.R
 import com.sphinx.peel.diagnostics.Diagnostics
 import android.content.Context
 import androidx.compose.runtime.getValue
@@ -77,7 +79,7 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
         voice = TalkVoice.stored(prefs)
         val asked = voice
         otherCall()?.let { other ->
-            state = State.Failed("Leave the call in $other first, then talk to Jamie.")
+            state = State.Failed(appContext.str(R.string.misc_talk_leave_first, other))
             return
         }
         state = State.Starting
@@ -101,16 +103,16 @@ class TalkStore(context: Context, private val http: TalkHttp = OkHttpTalk()) {
                 throw e
             } catch (e: TalkRefusal) {
                 Diagnostics.note(DiagnosticEvent.ErrorKind.refused)
-                State.Failed(e.message ?: "${target.name} could not start the call.")
+                State.Failed(e.message ?: appContext.str(R.string.misc_talk_could_not_start, target.name))
             } catch (e: HiveException) {
                 Diagnostics.note(DiagnosticEvent.ErrorKind.call)
-                State.Failed(e.message ?: "${target.name} could not start the call.")
+                State.Failed(e.message ?: appContext.str(R.string.misc_talk_could_not_start, target.name))
             } catch (e: IOException) {
                 Diagnostics.note(DiagnosticEvent.ErrorKind.call)
-                State.Failed("Peel could not reach ${target.name}: ${e.message ?: e.javaClass.simpleName}.")
+                State.Failed(appContext.str(R.string.misc_talk_could_not_reach, target.name, e.message ?: e.javaClass.simpleName))
             } catch (e: Exception) {
                 Diagnostics.note(DiagnosticEvent.ErrorKind.call)
-                State.Failed("Peel could not start the call: ${e.message ?: e.javaClass.simpleName}.")
+                State.Failed(appContext.str(R.string.misc_talk_peel_could_not_start, e.message ?: e.javaClass.simpleName))
             }
             state = next
             onChanged()

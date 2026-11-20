@@ -124,7 +124,7 @@ sections for code that isn't written yet.
     `ui/dashboard/ChatSearchBar.kt` — in-chat message search (`docs/phases/05-conversation.md` "In-chat search", port of peel#576): `MessageQuery`
     (words, "phrases", `from:`; `ftsMatch`, `snippet`), `ChatSearch` (observable state: status, stepping, `historyNote` while history still syncs,
     Return waiting for matches); the bar and the results sheet; the chat's 3-dots menu starts it. Not compiled or run when written.
-  - `update/` — in-app updates (`docs/phases/52-in-app-updates.md`): pure `UpdateRelease.kt` (`ReleaseVersion` tag→code as release.yml, `ReleaseParser`,
+  - `update/` — in-app updates (`docs/phases/53-in-app-updates.md`): pure `UpdateRelease.kt` (`ReleaseVersion` tag→code as release.yml, `ReleaseParser`,
     `UpdateFailure`, `ReleaseNotes`), `UpdateChecker.kt` (`UpdateChecker`, `UpdateSchedule` throttle/Later, `UpdateHttp`/`UpdateStore` seams), `ApkDownload.kt`
     (`ApkDownloader`, `UpdateFiles`, `ArchiveCheck`), `UpdateController.kt` (state machine over `ApkInstaller`), `UpdateText.kt`; Android parts only in
     `AndroidUpdate.kt` (OkHttp, prefs, PackageManager, FileProvider install intent, `Updates` singleton). UI: `ui/update/UpdateUi.kt` (`UpdateHost`, in

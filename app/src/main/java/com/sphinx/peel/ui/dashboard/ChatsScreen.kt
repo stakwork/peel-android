@@ -78,6 +78,8 @@ import com.sphinx.peel.ui.theme.Theme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 
 /// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
 /// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
@@ -96,7 +98,7 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Chats",
+                stringResource(R.string.chats_title),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = Theme.colors.text,
@@ -242,8 +244,8 @@ private fun ChatListBody(
                         }
                     }
                     items(underApps, key = { "pinned-${it.id}" }) { app -> pinnedRow(app) }
-                    item { NavRow(Icons.Filled.ChatBubbleOutline, "Threads", unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
-                    item { NavRow(Icons.Filled.AlternateEmail, "Mentions", unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
+                    item { NavRow(Icons.Filled.ChatBubbleOutline, stringResource(R.string.chats_threads), unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
+                    item { NavRow(Icons.Filled.AlternateEmail, stringResource(R.string.chats_mentions), unreadMentions) { onOpenRoute(DashboardRoute.MENTIONS) } }
                     item { Spacer(Modifier.height(16.dp)) }
                 }
 
@@ -251,7 +253,7 @@ private fun ChatListBody(
                 if (searching) items(underApps, key = { "found-${it.id}" }) { app -> pinnedRow(app) }
 
                 if (sections.unread.isNotEmpty()) {
-                    item { SectionHeader("Unread", expanded = true, onToggle = null) }
+                    item { SectionHeader(stringResource(R.string.chats_unread), expanded = true, onToggle = null) }
                     items(sections.unread, key = { "unread-${it.chat}" }) { conversation ->
                         ChatRowActions(conversation, engine, onChanged = { refresh++ }) { onLongClick ->
                             ChatRow(
@@ -276,7 +278,7 @@ private fun ChatListBody(
 
                 if (recent) {
                     // One list, newest first, with every action after it (iOS's Recent view).
-                    item { SectionHeader("Recent", expanded = true, onToggle = null) }
+                    item { SectionHeader(stringResource(R.string.chats_recent), expanded = true, onToggle = null) }
                     agentConversation?.let { agent ->
                         item(key = "agent") {
                             ChatRowActions(agent, engine, onChanged = { refresh++ }) { onLongClick ->
@@ -290,20 +292,20 @@ private fun ChatListBody(
                         }
                     }
                     sections.allCombinedCount?.let { count ->
-                        item { ShowAllRow(count = count, noun = "chats", expanded = layout.allRecent) { changeLayout(layout.copy(allRecent = !layout.allRecent)) } }
+                        item { ShowAllRow(count = count, showAll = R.string.chats_show_all_chats, expanded = layout.allRecent) { changeLayout(layout.copy(allRecent = !layout.allRecent)) } }
                     }
-                    item { ActionRow("Join a tribe") { onOpenRoute(DashboardRoute.JOIN_TRIBE) } }
-                    item { ActionRow("Create a tribe") { onOpenRoute(DashboardRoute.CREATE_TRIBE) } }
+                    item { ActionRow(stringResource(R.string.chats_join_tribe)) { onOpenRoute(DashboardRoute.JOIN_TRIBE) } }
+                    item { ActionRow(stringResource(R.string.chats_create_tribe)) { onOpenRoute(DashboardRoute.CREATE_TRIBE) } }
                     items(pendingInvites, key = { "invite-${it.code}" }) { invite -> PendingInviteRow(invite) { onOpenInvite(invite.code) } }
-                    item { ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
-                    item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITE) } }
+                    item { ActionRow(stringResource(R.string.chats_add_contact)) { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
+                    item { ActionRow(stringResource(R.string.chats_invite_someone)) { onOpenRoute(DashboardRoute.INVITE) } }
                 }
 
                 // Searching shows every matching section, no chevron, no
                 // actions — a section with no matches doesn't show at all.
                 if (!recent && (!searching || sections.tribes.isNotEmpty())) {
                     val toggleTribes: (() -> Unit)? = if (searching) null else ({ tribesOpen = !tribesOpen })
-                    item { SectionHeader("Tribes", expanded = tribesOpen || searching, onToggle = toggleTribes) }
+                    item { SectionHeader(stringResource(R.string.chats_tribes), expanded = tribesOpen || searching, onToggle = toggleTribes) }
                     if (tribesOpen || searching) {
                         items(sections.tribes, key = { "tribe-${it.chat}" }) { conversation ->
                             ChatRowActions(conversation, engine, onChanged = { refresh++ }) { onLongClick ->
@@ -311,11 +313,11 @@ private fun ChatListBody(
                         }
                         }
                         sections.allTribesCount?.let { count ->
-                            item { ShowAllRow(count = count, noun = "tribes", expanded = allTribes) { allTribes = !allTribes } }
+                            item { ShowAllRow(count = count, showAll = R.string.chats_show_all_tribes, expanded = allTribes) { allTribes = !allTribes } }
                         }
                         if (!searching) {
-                            item { ActionRow("Join a tribe") { onOpenRoute(DashboardRoute.JOIN_TRIBE) } }
-                            item { ActionRow("Create a tribe") { onOpenRoute(DashboardRoute.CREATE_TRIBE) } }
+                            item { ActionRow(stringResource(R.string.chats_join_tribe)) { onOpenRoute(DashboardRoute.JOIN_TRIBE) } }
+                            item { ActionRow(stringResource(R.string.chats_create_tribe)) { onOpenRoute(DashboardRoute.CREATE_TRIBE) } }
                         }
                     }
                     item { Spacer(Modifier.height(16.dp)) }
@@ -323,7 +325,7 @@ private fun ChatListBody(
 
                 if (!recent && (!searching || sections.direct.isNotEmpty() || agentConversation != null)) {
                     val toggleDirect: (() -> Unit)? = if (searching) null else ({ directOpen = !directOpen })
-                    item { SectionHeader("Direct messages", expanded = directOpen || searching, onToggle = toggleDirect) }
+                    item { SectionHeader(stringResource(R.string.chats_direct), expanded = directOpen || searching, onToggle = toggleDirect) }
                     if (directOpen || searching) {
                         agentConversation?.let { agent ->
                             item(key = "agent") {
@@ -338,12 +340,12 @@ private fun ChatListBody(
                         }
                         }
                         sections.allDirectCount?.let { count ->
-                            item { ShowAllRow(count = count, noun = "people", expanded = allDirect) { allDirect = !allDirect } }
+                            item { ShowAllRow(count = count, showAll = R.string.chats_show_all_people, expanded = allDirect) { allDirect = !allDirect } }
                         }
                         if (!searching) {
                             items(pendingInvites, key = { "invite-${it.code}" }) { invite -> PendingInviteRow(invite) { onOpenInvite(invite.code) } }
-                            item { ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
-                            item { ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITE) } }
+                            item { ActionRow(stringResource(R.string.chats_add_contact)) { onOpenRoute(DashboardRoute.ADD_CONTACT) } }
+                            item { ActionRow(stringResource(R.string.chats_invite_someone)) { onOpenRoute(DashboardRoute.INVITE) } }
                         }
                     }
                 }
@@ -358,7 +360,7 @@ private fun ChatListBody(
 @Composable
 private fun LayoutSwitch(recent: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("Separated" to false, "Recent" to true).forEach { (label, value) ->
+        listOf(stringResource(R.string.chats_separated) to false, stringResource(R.string.chats_recent) to true).forEach { (label, value) ->
             val selected = recent == value
             val modifier = Modifier.weight(1f)
             if (selected) {
@@ -378,7 +380,7 @@ private fun NoSearchResults(query: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("No results for \"$query\"", style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
+        Text(stringResource(R.string.chats_no_results, query), style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
     }
 }
 
@@ -398,7 +400,7 @@ fun SearchScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier
 
     Column(modifier.fillMaxSize()) {
         Text(
-            "Search",
+            stringResource(R.string.tab_search),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = Theme.colors.text,
@@ -428,7 +430,7 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, modifier
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f)) {
             if (query.isEmpty()) {
-                Text("Search chats", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.chats_search_hint), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
             }
             BasicTextField(
                 value = query,
@@ -443,7 +445,7 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, modifier
             Spacer(Modifier.width(8.dp))
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Clear",
+                contentDescription = stringResource(R.string.chats_clear),
                 tint = Theme.colors.secondaryText,
                 modifier = Modifier.size(18.dp).clickable { onQueryChange("") },
             )
@@ -451,7 +453,7 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, modifier
     }
 }
 
-/// "Search chats" / "Tribes and people by name." for a blank query —
+/// "Search chats" / stringResource(R.string.chats_search_detail) for a blank query —
 /// PeelCore's own `ContentUnavailableView("Search chats", ...)`.
 @Composable
 private fun EmptySearch() {
@@ -462,9 +464,9 @@ private fun EmptySearch() {
     ) {
         Icon(Icons.Filled.Search, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(40.dp))
         Spacer(Modifier.height(12.dp))
-        Text("Search chats", style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
+        Text(stringResource(R.string.chats_search_hint), style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
         Spacer(Modifier.height(4.dp))
-        Text("Tribes and people by name.", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+        Text(stringResource(R.string.chats_search_detail), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
     }
 }
 
@@ -482,16 +484,16 @@ private fun EmptyChats(
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            if (restoring) "Restoring your chats" else "No chats yet",
+            if (restoring) stringResource(R.string.chats_restoring) else stringResource(R.string.chats_none_yet),
             style = MaterialTheme.typography.titleMedium,
             color = Theme.colors.text,
         )
         Spacer(Modifier.height(8.dp))
         Text(
             if (restoring) {
-                "They show here as they arrive. This can take a while."
+                stringResource(R.string.chats_restoring_detail)
             } else {
-                "Join a tribe or add someone below, and they show here."
+                stringResource(R.string.chats_none_detail)
             },
             style = MaterialTheme.typography.bodyMedium,
             color = Theme.colors.secondaryText,
@@ -500,13 +502,13 @@ private fun EmptyChats(
             // Nobody to talk to yet: the two ways to get someone here must not hide behind a chat.
             Spacer(Modifier.height(16.dp))
             for (invite in pendingInvites) PendingInviteRow(invite) { onOpenInvite(invite.code) }
-            ActionRow("Add contact") { onOpenRoute(DashboardRoute.ADD_CONTACT) }
-            ActionRow("Invite someone") { onOpenRoute(DashboardRoute.INVITE) }
+            ActionRow(stringResource(R.string.chats_add_contact)) { onOpenRoute(DashboardRoute.ADD_CONTACT) }
+            ActionRow(stringResource(R.string.chats_invite_someone)) { onOpenRoute(DashboardRoute.INVITE) }
         }
         // A new worker has no chats yet but has the Stadeum's worker app: Apps must not hide behind a chat either.
         if (showsApps) {
             Spacer(Modifier.height(16.dp))
-            NavRow(Icons.Filled.Apps, "Apps", 0) { onOpenRoute(DashboardRoute.APPS) }
+            NavRow(Icons.Filled.Apps, stringResource(R.string.chats_apps), 0) { onOpenRoute(DashboardRoute.APPS) }
         }
     }
 }
@@ -522,7 +524,7 @@ private fun ConnectionBolt(connected: Boolean) {
     ) {
         Icon(
             Icons.Filled.Bolt,
-            contentDescription = if (connected) "Connected" else "Not connected",
+            contentDescription = if (connected) stringResource(R.string.chats_connected) else stringResource(R.string.chats_not_connected),
             tint = if (connected) Theme.colors.confirmed else Theme.colors.attention,
         )
     }
@@ -602,7 +604,7 @@ private fun ChatRow(
         }
         if (onCall) {
             Spacer(Modifier.width(8.dp))
-            Icon(Icons.Filled.Call, contentDescription = "On a call", tint = Theme.colors.confirmed, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Call, contentDescription = stringResource(R.string.chats_on_call), tint = Theme.colors.confirmed, modifier = Modifier.size(18.dp))
         }
         if (unread > 0) {
             Spacer(Modifier.width(8.dp))
@@ -618,7 +620,7 @@ private fun ChatRow(
             when (conversation.muteLevel) {
                 2 -> {
                     Spacer(Modifier.width(8.dp))
-                    Icon(Icons.Filled.NotificationsOff, contentDescription = "Muted", tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Filled.NotificationsOff, contentDescription = stringResource(R.string.chats_muted), tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp))
                 }
                 1 -> {
                     Spacer(Modifier.width(8.dp))
@@ -633,7 +635,7 @@ private fun ChatRow(
 @Composable
 private fun NewTag() {
     Text(
-        "NEW",
+        stringResource(R.string.chats_new),
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
         color = Theme.colors.buttonText,
@@ -660,7 +662,7 @@ private fun PendingInviteRow(invite: InviteRecord, onClick: () -> Unit) {
         }
         Spacer(Modifier.width(12.dp))
         Text(
-            invite.nickname ?: "Invite",
+            invite.nickname ?: stringResource(R.string.chats_invite),
             style = MaterialTheme.typography.bodyLarge,
             color = Theme.colors.secondaryText,
             maxLines = 1,
@@ -729,9 +731,9 @@ private fun UnreadBadge(count: Long) {
 
 /// "Show all 14 tribes" / "Show fewer" — PeelCore's `ShowAll`.
 @Composable
-private fun ShowAllRow(count: Int, noun: String, expanded: Boolean, onToggle: () -> Unit) {
+private fun ShowAllRow(count: Int, @androidx.annotation.StringRes showAll: Int, expanded: Boolean, onToggle: () -> Unit) {
     Text(
-        if (expanded) "Show fewer" else "Show all $count $noun",
+        if (expanded) stringResource(R.string.chats_show_fewer) else stringResource(showAll, count),
         style = MaterialTheme.typography.bodyMedium,
         color = Theme.colors.accent,
         modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 10.dp),
