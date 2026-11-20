@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="new_messages">Mensajes nuevos</string>
+
+    <!-- Common -->
+    <string name="common_cancel">Cancelar</string>
+    <string name="common_paste">Pegar</string>
+    <string name="common_continue">Continuar</string>
+    <string name="common_back">Atrás</string>
+    <string name="common_dismiss">Descartar</string>
+
+    <!-- Messages for failures the engine and account code raise in English (ui/ErrorText.kt) -->
+    <string name="err_not_an_invite">Eso no parece una invitación de Sphinx.</string>
+    <string name="err_invite_too_long">Eso es demasiado largo para ser una invitación de Sphinx.</string>
+    <string name="err_invite_no_inviter">Esa invitación no indica a nadie para agregar.</string>
+    <string name="err_invite_no_server">La invitación no indica qué servidor usar.</string>
+    <string name="err_not_confirmed">Aún sin confirmar. Si sigue así, pide una nueva invitación.</string>
+    <string name="err_enter_name">Escribe un nombre.</string>
+    <string name="err_unusable_server">La invitación indica un servidor que Peel no puede usar.</string>
+    <string name="err_could_not_save">No se pudo guardar la cuenta.</string>
+    <string name="err_server_timeout">El servidor no respondió a tiempo.</string>
+    <string name="err_no_registration_answer">No llegó a tiempo una respuesta al registro.</string>
+    <string name="err_could_not_connect">No se pudo conectar con el servidor.</string>
+    <string name="err_restoring_stopped">La restauración se detuvo.</string>
+    <string name="err_tribe_link">Ese es un enlace de tribu, no de una persona.</string>
+    <string name="err_not_contact_info">Eso no es información de contacto, una invitación ni un enlace de Sphinx.</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_welcome">Te damos la bienvenida a Peel</string>
+    <string name="onboarding_tagline">Mensajes privados, pagos y un asistente que trabaja para ti.</string>
+    <string name="onboarding_join">Unirme con una invitación</string>
+    <string name="onboarding_restore">Restaurar con palabras de recuperación</string>
+    <string name="onboarding_no_invite">¿No tienes invitación? Pídesela a un amigo que use Peel.</string>
+    <string name="onboarding_step_of">Paso %1$d de %2$d</string>
+    <string name="onboarding_invite_title">Pega tu invitación</string>
+    <string name="onboarding_invite_detail">El enlace o código que alguien te envió.</string>
+    <string name="onboarding_scan_qr">Escanear código QR</string>
+    <string name="onboarding_scan_prompt">Apunta la cámara al código QR de la invitación.</string>
+    <string name="onboarding_not_an_invite_code">Ese código no es una invitación de Sphinx.</string>
+    <string name="onboarding_name_title">¿Cómo quieres que te llamen?</string>
+    <string name="onboarding_invited_you">%1$s te invitó.</string>
+    <string name="onboarding_name_label">Nombre</string>
+    <string name="onboarding_words_detail">Escríbelas en orden o pega las doce.</string>
+    <string name="onboarding_words_invalid">Esas doce palabras no forman una cuenta válida. Revisa cada una.</string>
+    <string name="onboarding_set_pin">Crea un PIN</string>
+    <string name="onboarding_confirm_pin">Ingresa tu PIN otra vez</string>
+    <string name="onboarding_pins_dont_match">Los PIN no coinciden. Créalo de nuevo.</string>
+
+    <!-- Restoring an account -->
+    <string name="restore_title">Restaurando tu cuenta</string>
+    <string name="restore_detail">Puedes empezar ahora mientras llegan los mensajes anteriores.</string>
+    <string name="restore_account">Cuenta</string>
+    <string name="restore_waiting">En espera</string>
+    <string name="restore_connecting">Conectando…</string>
+    <string name="restore_connected">Conectado</string>
+    <string name="restore_offline">Sin conexión, reintentando en %1$d s…</string>
+    <string name="restore_contacts_tribes">Contactos y tribus</string>
+    <string name="restore_messages">Mensajes</string>
+    <string name="restore_noun_checked">revisados</string>
+    <string name="restore_noun_received">recibidos</string>
+    <string name="restore_skipped">(%1$d omitidos)</string>
+    <string name="restore_none">Ninguno</string>
+    <string name="restore_of">%1$s de %2$s</string>
+    <string name="restore_resume">Reanudar</string>
+    <string name="restore_open">Abrir Peel</string>
+
+    <!-- Camera scanner -->
+    <string name="scanner_camera_refused">Peel no puede usar la cámara. Permítelo en Ajustes o pega el contenido.</string>
+    <string name="scanner_waiting_camera">Esperando acceso a la cámara…</string>
+    <string name="scanner_open_settings">Abrir Ajustes</string>
+    <string name="scan_invoice_prompt">Apunta la cámara al código QR de una factura.</string>
+    <string name="scan_invoice_refused">Peel no puede usar la cámara. Permítelo en Ajustes o pega la factura.</string>
+    <string name="scan_unsupported">Eso es %1$s, que Peel no puede pagar. Escanea una factura.</string>
+    <string name="scan_not_invoice">Ese código no es una factura.</string>
+
+    <!-- Lock screen -->
+    <string name="lock_locked">Peel está bloqueado</string>
+    <string name="lock_unlock_biometrics">Desbloquear con biometría</string>
+    <string name="lock_unlock_peel">Desbloquear Peel</string>
+    <string name="lock_enter_pin">Ingresa tu PIN</string>
+    <string name="lock_wrong_pin">PIN incorrecto</string>
+    <string name="lock_too_many">Demasiados PIN incorrectos. Inténtalo de nuevo en %1$s.</string>
+    <string name="lock_could_not_open">No se pudo abrir la cuenta.</string>
+
+    <!-- Calls and boxes (MainTabs) -->
+    <string name="call_notifications_off">Las notificaciones están desactivadas, así que los controles de la llamada no aparecerán en la pantalla de bloqueo. La llamada sigue activa.</string>
+    <string name="call_hang_up_jamie_first">Primero cuelga con Jamie y luego únete a la llamada.</string>
+    <string name="call_leave_first">Primero sal de la llamada en %1$s y luego habla con Jamie.</string>
+    <string name="call_leave_title">¿Salir de la llamada actual?</string>
+    <string name="call_leave_body">Estás en una llamada en %1$s. ¿Salir de ella y unirte a la llamada en %2$s?</string>
+    <string name="call_another_chat">otro chat</string>
+    <string name="call_leave_and_join">Salir y unirme</string>
+    <string name="call_stay">Quedarme</string>
+    <string name="call_device_question">Ya estás en esta llamada en otro de tus dispositivos.</string>
+    <string name="call_device_switch">Cambiar a este dispositivo</string>
+    <string name="call_device_stay">Quedarme en ambos dispositivos</string>
+    <string name="box_link">Vincular</string>
+
+    <!-- Tabs -->
+    <string name="tab_tasks">Tareas</string>
+    <string name="tab_chats">Chats</string>
+    <string name="tab_payments">Pagos</string>
+    <string name="tab_you">Tú</string>
+    <string name="tab_search">Buscar</string>
+
+    <!-- Chats list -->
+    <string name="chats_title">Chats</string>
+    <string name="chats_threads">Hilos</string>
+    <string name="chats_mentions">Menciones</string>
+    <string name="chats_unread">No leídos</string>
+    <string name="chats_recent">Recientes</string>
+    <string name="chats_separated">Separados</string>
+    <string name="chats_tribes">Tribus</string>
+    <string name="chats_direct">Mensajes directos</string>
+    <string name="chats_show_all_chats">Mostrar los %1$d chats</string>
+    <string name="chats_show_all_tribes">Mostrar las %1$d tribus</string>
+    <string name="chats_show_all_people">Mostrar las %1$d personas</string>
+    <string name="chats_show_fewer">Mostrar menos</string>
+    <string name="chats_join_tribe">Unirme a una tribu</string>
+    <string name="chats_create_tribe">Crear una tribu</string>
+    <string name="chats_add_contact">Agregar contacto</string>
+    <string name="chats_invite_someone">Invitar a alguien</string>
+    <string name="chats_apps">Apps</string>
+    <string name="chats_no_results">Sin resultados para \"%1$s\"</string>
+    <string name="chats_search_hint">Buscar chats</string>
+    <string name="chats_search_detail">Tribus y personas por nombre.</string>
+    <string name="chats_clear">Borrar</string>
+    <string name="chats_restoring">Restaurando tus chats</string>
+    <string name="chats_restoring_detail">Aparecerán aquí a medida que lleguen. Esto puede tardar un poco.</string>
+    <string name="chats_none_yet">Aún no hay chats</string>
+    <string name="chats_none_detail">Únete a una tribu o agrega a alguien abajo y aparecerán aquí.</string>
+    <string name="chats_connected">Conectado</string>
+    <string name="chats_not_connected">Sin conexión</string>
+    <string name="chats_on_call">En una llamada</string>
+    <string name="chats_muted">Silenciado</string>
+    <string name="chats_new">NUEVO</string>
+    <string name="chats_invite">Invitación</string>
+
+    <plurals name="duration_seconds">
+        <item quantity="one">%1$d segundo</item>
+        <item quantity="other">%1$d segundos</item>
+    </plurals>
+    <plurals name="duration_minutes">
+        <item quantity="one">%1$d minuto</item>
+        <item quantity="other">%1$d minutos</item>
+    </plurals>
+    <plurals name="duration_hours">
+        <item quantity="one">%1$d hora</item>
+        <item quantity="other">%1$d horas</item>
+    </plurals>
+</resources>

@@ -1,5 +1,9 @@
 package com.sphinx.peel.ui.lock
 
+import com.sphinx.peel.ui.str
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.ErrorText
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,7 +27,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import com.sphinx.peel.account.LockDecision
-import com.sphinx.peel.account.LockoutPolicy
 import com.sphinx.peel.account.RememberedPIN
 import com.sphinx.peel.ui.theme.Theme
 import androidx.compose.material3.MaterialTheme
@@ -108,7 +111,7 @@ fun LockScreen(
             waitMs = secretStore.lockoutRemainingMs()
             phase = Phase.PIN
         } catch (e: Exception) {
-            problem = e.message ?: "Could not open the account."
+            problem = ErrorText.text(context, e, R.string.lock_could_not_open)
             phase = Phase.PIN
         }
         working = false
@@ -118,7 +121,7 @@ fun LockScreen(
         val host = activity ?: return
         if (working) return
         scope.launch {
-            if (BiometricUnlock.check(host, "Unlock Peel")) openWithRemembered()
+            if (BiometricUnlock.check(host, context.str(R.string.lock_unlock_peel))) openWithRemembered()
         }
     }
 
@@ -155,15 +158,15 @@ fun LockScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text("Peel is locked", style = MaterialTheme.typography.titleLarge, color = Theme.colors.text)
+            Text(stringResource(R.string.lock_locked), style = MaterialTheme.typography.titleLarge, color = Theme.colors.text)
             TextButton(onClick = { biometricCheck() }, enabled = !working && activity != null) {
-                Text("Unlock with biometrics")
+                Text(stringResource(R.string.lock_unlock_biometrics))
             }
         }
         Phase.PIN -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
             PinPrompt(
-                title = "Enter your PIN",
-                detail = if (waitMs > 0) "Too many wrong PINs. Try again in ${LockoutPolicy.describe(waitMs)}." else problem,
+                title = stringResource(R.string.lock_enter_pin),
+                detail = if (waitMs > 0) stringResource(R.string.lock_too_many, LockoutText.describe(context, waitMs)) else problem,
                 pin = pin,
                 onPinChange = { pin = it },
                 enabled = waitMs <= 0,
@@ -185,10 +188,10 @@ fun LockScreen(
                             pin = ""
                         } catch (e: SecretStoreFailure.WrongPin) {
                             waitMs = secretStore.lockoutRemainingMs()
-                            problem = "Wrong PIN"
+                            problem = context.str(R.string.lock_wrong_pin)
                             pin = ""
                         } catch (e: Exception) {
-                            problem = e.message ?: "Could not open the account."
+                            problem = ErrorText.text(context, e, R.string.lock_could_not_open)
                             pin = ""
                         }
                         working = false

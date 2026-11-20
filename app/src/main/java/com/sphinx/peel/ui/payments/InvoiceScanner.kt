@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.payments
 
+import com.sphinx.peel.ui.str
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -52,14 +53,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 /// in the manifest already, for calls); refused, it says so and points at paste.
 @Composable
 fun InvoiceScanner(onFound: (String) -> Unit, onCancel: () -> Unit) {
+    val context = LocalContext.current
     CodeScanner(
-        prompt = "Point the camera at an invoice's QR code.",
-        refused = "Peel can't use the camera. Allow it in Settings, or paste the invoice.",
+        prompt = androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.scan_invoice_prompt),
+        refused = androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.scan_invoice_refused),
         accept = { text ->
             when (val input = PaymentInput.parse(text)) {
                 is PaymentInput.Bolt11 -> { onFound(input.bolt11); null }
-                is PaymentInput.Unsupported -> "That's ${input.kind}, which Peel can't pay. Scan an invoice."
-                PaymentInput.Unknown -> "That code isn't an invoice."
+                is PaymentInput.Unsupported -> context.str(com.sphinx.peel.R.string.scan_unsupported, input.kind)
+                PaymentInput.Unknown -> context.str(com.sphinx.peel.R.string.scan_not_invoice)
             }
         },
         onCancel = onCancel,
@@ -74,7 +76,7 @@ fun CodeScanner(
     prompt: String,
     accept: (String) -> String?,
     onCancel: () -> Unit,
-    refused: String = "Peel can't use the camera. Allow it in Settings, or paste instead.",
+    refused: String = androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.scanner_camera_refused),
 ) {
     val context = LocalContext.current
     var granted by remember {
@@ -103,7 +105,7 @@ fun CodeScanner(
             Text(
                 when {
                     denied -> refused
-                    !granted -> "Waiting for camera access…"
+                    !granted -> androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.scanner_waiting_camera)
                     else -> note ?: prompt
                 },
                 color = Color.White,
@@ -115,8 +117,8 @@ fun CodeScanner(
                 context.startActivity(
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
                 )
-            }) { Text("Open Settings", color = Theme.colors.accent) }
-            TextButton(onClick = onCancel) { Text("Cancel", color = Theme.colors.accent) }
+            }) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.scanner_open_settings), color = Theme.colors.accent) }
+            TextButton(onClick = onCancel) { Text(androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.common_cancel), color = Theme.colors.accent) }
         }
     }
 }

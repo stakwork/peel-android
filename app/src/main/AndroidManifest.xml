@@ -38,6 +38,7 @@
          MQTT client's Netty, LiveKit's media connection) ignore them, so
          real enforcement is in code (NetworkPolicy, Transport, CallServer). -->
     <application
+        android:localeConfig="@xml/locales_config"
         android:name=".PeelApplication"
         android:allowBackup="false"
         android:usesCleartextTraffic="false"
