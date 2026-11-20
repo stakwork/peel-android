@@ -221,13 +221,6 @@ class OpeningsTest {
         assertEquals("https://acme.sphinx.chat:3355/lab/?app=board&input=view%3D%252Fruns%26run%3D12&solo=1", here.url)
         assertEquals("Bearer tok", here.request!!.headers["Authorization"])
         assertEquals(OrgNavigation.Window.Nothing, OrgNavigation.window(strut, link, from, personActed = false))
-        // The page then shows another app: the title is its workspace; the first app's own title is back on going Back.
-        assertTrue(strut.showsAnotherApp(here.url))
-        assertEquals("Acme", strut.title(showingAnotherApp = true))
-        assertFalse(strut.showsAnotherApp(from))
-        assertEquals("Board", strut.title(showingAnotherApp = false))
-        // The same app at another view is not another app.
-        assertFalse(strut.showsAnotherApp("https://acme.sphinx.chat:3355/lab/?app=x&input=v%3D2&solo=1"))
     }
 
     @Test fun `a link to the orgs peers app, a run or a file is not followed`() {

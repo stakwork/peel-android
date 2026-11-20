@@ -70,12 +70,16 @@ class OrgPageScreenUiTest {
 
     private fun client() = shadowOf(webView()).webViewClient as OrgPageClient
 
-    @Test fun `it opens the page with the persons token and titles it by the app`() {
+    @Test fun `it opens the page with the persons token under a bar with no title`() {
         show()
         val web = webView()
         assertEquals(org.url, shadowOf(web).lastLoadedUrl)
         assertEquals("Bearer tok", shadowOf(web).lastAdditionalHttpHeaders["Authorization"])
-        rule.onNodeWithText("Board").assertExists()
+        // Done and Reload, and nothing else: neither the app's title nor the workspace.
+        rule.onNodeWithContentDescription("Done").assertExists()
+        rule.onNodeWithContentDescription("Reload").assertExists()
+        rule.onNodeWithText("Board").assertDoesNotExist()
+        rule.onNodeWithText("Acme").assertDoesNotExist()
     }
 
     @Test fun `done closes and reload loads again with the bearer`() {

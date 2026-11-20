@@ -120,12 +120,6 @@ class PublicPageHostTest {
         assertEquals("The workspace has nothing there (HTTP 404).", controller.problem)
     }
 
-    @Test fun `the title is the host and another app is none`() {
-        controller.sync()
-        assertFalse(controller.showsAnotherApp)
-        assertEquals("shop.example.com", page.title(controller.showsAnotherApp))
-    }
-
     @Test fun `the wallet is offered by default and a missing bridge is no failure`() {
         assertTrue(controller.walletOffered)
         assertNull(controller.wallet)

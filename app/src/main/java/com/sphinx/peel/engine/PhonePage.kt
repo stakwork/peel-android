@@ -42,18 +42,9 @@ interface PhonePage {
     /// The app the page at `current` shows; null for none Peel knows of.
     fun shownApp(current: String): StrutAppHandle?
 
-    /// The page's title.
-    fun title(showingAnotherApp: Boolean): String
-
     /// Who the app wallet's messages are from, from Peel's own record, and where that is as the person reads it.
     val walletScope: WalletScope
     val walletPlace: String
-
-    /// Whether the page `current` shows an app other than the one it opened with: a link in it opened that one here.
-    fun showsAnotherApp(current: String?): Boolean {
-        val shown = current?.let { shownApp(it) } ?: return false
-        return shown != shownApp(url)
-    }
 
     /// How to load the page again where the person went (iOS `OrgPageController.reload`): strut's UI with the page's bearer
     /// (an app at the view it moved to, or another app a link opened), a file opened in place as it is, and the page's own
@@ -76,7 +67,7 @@ interface PhonePage {
 /// docs/app-wallet.md, "Signing in"): Peel loads the box's own address itself, with no credential, and keeps to that origin. The
 /// box's own code is the main frame and may claim anything, so the app wallet trusts only the origin Peel loaded
 /// ([WalletScope.Origin]), keying the connection and naming every sheet by it. The org page's twin ([OrgPageRequest]), with no
-/// token. A stranger's page is no strut UI Peel knows: no app of it is named or opened by Peel, and it is titled by its host.
+/// token. A stranger's page is no strut UI Peel knows: no app of it is named or opened by Peel.
 class PublicPage(val link: PublicAppLink) : PhonePage {
     val id: UUID = UUID.randomUUID()
 
@@ -104,7 +95,6 @@ class PublicPage(val link: PublicAppLink) : PhonePage {
     override fun appLink(other: String, from: String?): StrutAppLink? = null
     override fun request(link: StrutAppLink): OrgRequest? = null
     override fun shownApp(current: String): StrutAppHandle? = null
-    override fun title(showingAnotherApp: Boolean): String = host
 
     override val walletScope: WalletScope get() = WalletScope.Origin(origin)
     override val walletPlace: String get() = host
