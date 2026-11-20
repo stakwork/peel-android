@@ -439,6 +439,8 @@ private fun YouMain(
                 AccountDivider()
                 AccountRow(label = "Diagnostics", onClick = onOpenDiagnostics, chevron = true)
                 AccountDivider()
+                UpdateRow()
+                AccountDivider()
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -717,6 +719,23 @@ private fun SectionHeader(title: String) {
         title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
         color = Theme.colors.secondaryText, modifier = Modifier.padding(start = 8.dp, bottom = 10.dp),
     )
+}
+
+/// "Check for updates" (docs/phases/52-in-app-updates.md): the installed version, then the result of a tap. The update prompt
+/// itself is `UpdateHost`'s; an available version opens it again from here.
+@Composable
+private fun UpdateRow() {
+    val controller = com.sphinx.peel.update.Updates.get(androidx.compose.ui.platform.LocalContext.current)
+    val state by controller.state.collectAsState()
+    AccountRow(
+        label = "Check for updates",
+        value = com.sphinx.peel.update.UpdateText.rowValue(state, com.sphinx.peel.BuildConfig.VERSION_NAME),
+        onClick = { if (state is com.sphinx.peel.update.UpdateState.Available) controller.showPrompt() else controller.checkNow() },
+    )
+    com.sphinx.peel.update.UpdateText.rowDetail(state)?.let {
+        Text(it, style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp))
+    }
 }
 
 @Composable
