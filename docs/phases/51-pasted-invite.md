@@ -8,7 +8,10 @@ Seen 2026-11-19 on stakwork/strut's stadeum.stakwork.ai box: a worker on Graphen
 saw "No chats yet", then the inviter (Stakwork Support), but no Tasks tab and no Tasks page. He reinstalled and got the same.
 Strut's request log showed no load of the join page (`/public/join`) for his invite and no load of the Tasks page its `a=` names,
 in either install: the invite reached Peel without the join page, so it was entered by hand (pasted or scanned into "Paste your
-invite"). He said there was no invite on the clipboard.
+invite"). He said there was no invite on the clipboard. His second install's diagnostics (You › Diagnostics) agree: Peel launched
+at 01:20:39 UTC with nothing to take, was left for 4 minutes (01:22–01:26, no join page loaded meanwhile), came back, and signed
+up at 01:28:14 with no restart in between (`previousRun clean`, no new launch). A minute later adding the inviter failed with
+`send failed: … not enough balance` (below).
 
 The core reads an invite by finding its `d=`/`c=` sections anywhere in the text, so pasting strut's join link
 (`https://<strut>/public/join#action=i&d=…&c=…&a=…`) signs a new account up and adds the inviter. But only a tapped link and the
@@ -17,7 +20,8 @@ clipboard handoff (phases 41, 46) took `a=`: the invite step never looked for it
 
 A reinstall that pastes the same link again also starts the new account with 0 sats: the first install spent the invite, and a
 mixer whose invite price is 0 registers a spent code with no sats and no error (sphinx `mixer/src/routes.rs`,
-`redeem_initial_amt`). That is the mixer's rule, not changed here; a second try needs a new invite.
+`redeem_initial_amt`). That is the mixer's rule, not changed here; a second try needs a new invite. With 0 sats the new account
+cannot pay for its key exchange to the inviter (`not enough balance`), so the inviter shows in Peel but never gets the request.
 
 ## Built
 
@@ -37,6 +41,10 @@ mixer whose invite price is 0 registers a spent code with no sats and no error (
 
 - Why the join page was not used is not known (the worker's word, not checked): a messenger that copies rather than opens
   links, or a browser that did not hand the `intent://` link to Peel.
+- The clipboard is still read once a process, at the first focus (phase 46). A worker who opens Peel first, then goes to copy the
+  link and comes back (the case above) is not filled in by it; pasting now works instead.
+- A reinstall that reuses a spent invite signs up with 0 sats and an inviter it cannot reach, with only the inviter-add toast to
+  say so.
 - `a=` still lives only in memory until signup: a Peel killed between the invite step and the end of signup loses it (the
   account and its invite are kept, so the inviter is still added).
 
