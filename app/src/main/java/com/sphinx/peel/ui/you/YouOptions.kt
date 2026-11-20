@@ -3,6 +3,14 @@ package com.sphinx.peel.ui.you
 /// Pure helpers behind Profile's pickers, kept free of Compose so they can
 /// be unit-tested on the JVM.
 object YouOptions {
+    /// What "Your contact info" shows as a QR and copies: the stored
+    /// `<pubkey>_<lsp_pubkey>_<scid>`, trimmed. Null when it isn't there yet,
+    /// or isn't all three parts (a bare pubkey is refused when adding a contact).
+    fun contactInfoToShare(stored: String?): String? {
+        val text = stored?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return text.takeIf { com.sphinx.peel.engine.PaymentRules.contactInfoParts(it) != null }
+    }
+
     /// One entry in a Profile picker: what is stored and what is shown.
     data class Choice<T>(val value: T, val label: String)
 

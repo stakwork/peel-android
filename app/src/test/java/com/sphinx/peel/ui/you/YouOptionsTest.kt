@@ -33,4 +33,13 @@ class YouOptionsTest {
         assertNull(YouOptions.parseBoostSats(""))
         assertNull(YouOptions.parseBoostSats("1.5"))
     }
+
+    @Test fun contactInfoIsTheFullThreePartString() {
+        assertEquals("02aa_03bb_123", YouOptions.contactInfoToShare(" 02aa_03bb_123\n"))
+        assertNull(YouOptions.contactInfoToShare(null))
+        assertNull(YouOptions.contactInfoToShare("  "))
+        assertNull(YouOptions.contactInfoToShare("02aa"))
+        assertNull(YouOptions.contactInfoToShare("02aa_03bb"))
+        assertNull(YouOptions.contactInfoToShare("02aa_03bb_"))
+    }
 }
