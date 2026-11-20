@@ -45,6 +45,7 @@ sections for code that isn't written yet.
     ZXing) and the in-chat payment and request rows.
   - `engine/MediaPrefetcher.kt`, `AttachmentRules.kt` — engine-owned attachment downloads (bounded, deduped, retried; `Engine.media`) and the
     pure rules behind them (`AutoDownloadPolicy`, `AttachmentFailure`, `RetryBackoff`, `AttachmentCache` naming); `docs/phases/08-attachments.md`.
+  - `StagedAttachments` (in `AttachmentRules.kt`): pure rules for pictures staged in every chat's composer before Send (`docs/phases/08-attachments.md`, "Staged photos"); `ui/dashboard/PendingAttachments.kt` holds them, `agent` flag keeps the model switch/Mac note agent-only.
   - `engine/MessageMarkup.kt`, `Mentions.kt` — message markdown parser (pure, JVM-tested) and
     mention helpers; `ui/components/MessageText.kt` draws it (`docs/phases/18-markdown.md`).
   - `engine/ChatActions.kt` (`MuteLevel`, `ReadToggle`) and `engine/SendRetry.kt` (pure

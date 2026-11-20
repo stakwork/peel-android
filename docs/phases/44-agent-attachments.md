@@ -15,7 +15,7 @@ Status: **built; `./gradlew testDebugUnitTest` and `./gradlew assembleDebug` pas
 - Deleting a sent attachment is the normal message delete. No price, no cache clearing, no second store.
 
 ## Differences from iOS / open
-- **Threads of the agent DM (`ThreadScreen`) are unchanged**: they still send on pick, and send no `vision`. (The agent's DM has no threads of its own in practice.)
+- **Threads**: a thread composer now stages pictures like every chat (Phase 08 journal, "Staged photos"), with the agent rules (4096 px, 32 MB, model switch, Mac note) when the chat is the agent DM. Files and voice notes in a thread still send on pick (no `vision`); the agent's DM has no threads in practice.
 - A pending file's size is checked on the original before conversion and again after.
 - "Add more" is the existing attach (+) menu; the tray does not have its own add button.
 
