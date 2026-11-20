@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.sphinx.peel.ui.str
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -415,9 +416,9 @@ private fun InviterNotice(engine: Engine) {
         engine.inviterOutcome.collect { outcome ->
             when (outcome) {
                 is InviterFlow.Outcome.Failed ->
-                    toast.show(context.getString(com.sphinx.peel.R.string.dash_inviter_failed, outcome.message), com.sphinx.peel.ui.toast.ToastType.Error)
+                    toast.show(context.str(com.sphinx.peel.R.string.dash_inviter_failed, outcome.message), com.sphinx.peel.ui.toast.ToastType.Error)
                 is InviterFlow.Outcome.WillRetry ->
-                    toast.show(context.getString(com.sphinx.peel.R.string.dash_inviter_will_retry), com.sphinx.peel.ui.toast.ToastType.Warning)
+                    toast.show(context.str(com.sphinx.peel.R.string.dash_inviter_will_retry), com.sphinx.peel.ui.toast.ToastType.Warning)
                 else -> {}
             }
         }

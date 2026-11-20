@@ -1774,13 +1774,12 @@ private fun isSameDay(a: Long?, b: Long?): Boolean {
 
 /// "Today", "Yesterday", else a weekday and date — PeelCore's own
 /// `Formatting.dayHeading`.
-@Composable
-private fun dayHeading(timestamp: Long): String {
+private fun dayHeading(timestamp: Long, today: String, yesterday: String): String {
     val now = java.util.Calendar.getInstance()
     val then = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
-    if (isSameDay(now.timeInMillis, timestamp)) return stringResource(R.string.conv_today)
+    if (isSameDay(now.timeInMillis, timestamp)) return today
     now.add(java.util.Calendar.DAY_OF_YEAR, -1)
-    if (isSameDay(now.timeInMillis, timestamp)) return stringResource(R.string.conv_yesterday)
+    if (isSameDay(now.timeInMillis, timestamp)) return yesterday
     return SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(then.time)
 }
 
@@ -1794,7 +1793,7 @@ private fun DayDivider(timestamp: Long) {
     ) {
         HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
         Text(
-            dayHeading(timestamp),
+            dayHeading(timestamp, stringResource(R.string.conv_today), stringResource(R.string.conv_yesterday)),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.secondaryText,
