@@ -47,8 +47,8 @@ Status: built, compiled (`assembleDebug`) and unit-tested; **not run against a s
   removes it. No expiry is known for invites.
 - Crash between clearing the stored invite and publishing the key exchange loses the inviter add (same
   as iOS). A core refusal (`SphinxException`) is the one failure that restores the invite.
-- `handle` results are published only for a live key exchange (type 10, not while restoring); PeelCore
-  publishes every handled result (settle of received payments, pings). Not widened here.
+- `handle` results are published for a live key exchange (type 10, not while restoring) and, since phase 50, for a ping's
+  online answer and a payment's settle (`publishHandled`); PeelCore publishes every handled result.
 - `contact.isNew` (DB v17): set by `Storage.insertMessages(marksNewContacts = true)` for a live/caught-up type-10 message not from us (not while restoring), cleared by `Engine.markRead`; the chat shows in Unread with a NEW tag.
 - Not ported: tribe links in add-contact, waiting-sats accounting. (`deleteContact` is phase 24.)
 - Contact "ready" on Android comes from the core's `listContacts` (`Engine.markPeopleReady`), after an add

@@ -62,7 +62,7 @@ iOS uses for money: `requestInvoice`, `makeInvoice`, `payInvoice`,
 `makeMediaToken*`, and `RunReturn.newBalance`/`invoice`/`payments`/
 `paymentsTotal`/`sentStatus`/`asyncpayTag`. No API was missing, so nothing
 is stubbed behind an interface. What is not used yet: `getTags` (asking
-the server about a tag, for stale pendings), `asyncpayTag`/`ping`, `route`
+the server about a tag, for stale pendings), `asyncpayTag` (`ping`, `fetchPings` and `pingDone` are used since phase 50), `route`
 and `lspHost`.
 
 ## Left
