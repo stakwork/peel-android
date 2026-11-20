@@ -11,4 +11,7 @@
     <!-- A download an org page's own web view saved (OrgDownloads), one folder each, on its way to the share sheet
          (OrgPageHost) and removed when the page closes. -->
     <cache-path name="org_downloads" path="org-downloads/" />
+    <!-- The self-update APK (update/ApkDownload.kt), handed to the system installer as a content:// URI. The folder is emptied
+         before each download and of anything stale at launch. -->
+    <cache-path name="updates" path="updates/" />
 </paths>

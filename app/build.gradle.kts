@@ -24,6 +24,14 @@ val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")?.takeIf { it.is
 val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
 val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.takeIf { it.isNotBlank() }
 val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+// Self-update (docs/phases/53-in-app-updates.md): only a build made by the release workflow (a supplied VERSION_CODE, release
+// type) can update in place. Debug builds (versionCode 1, maybe a .dev id) and unversioned local builds never check or prompt.
+val versionSupplied = propOrEnv("VERSION_CODE") != null
+// Test override: -Ppeel.update.force=true makes a debug build check on launch too (it still can't install over a release: other
+// key, versionCode 1; the signature check says so), and -Ppeel.update.repo=owner/name follows another repo's releases.
+val updateForce = propOrEnv("peel.update.force")?.equals("true", ignoreCase = true) == true
+val updateRepo = propOrEnv("peel.update.repo")?.takeIf { Regex("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+").matches(it) } ?: "stakwork/peel-android"
+
 val hasReleaseSigning = listOf(
     releaseKeystorePath, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword
 ).all { it != null }
@@ -47,6 +55,7 @@ android {
         buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Own app id on the hub (NOT applicationId, which equals the iOS bundle id).
+        buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
         buildConfigField("String", "PUSH_APP_ID", "\"com.sphinx.peel.android\"")
     }
 
@@ -66,6 +75,7 @@ android {
         // and bundle builds all get the right value. -P always overrides.
         val registerOverride = (project.findProperty("peel.push.registerWithHub") as String?)?.toBoolean()
         debug {
+            buildConfigField("boolean", "UPDATES_ENABLED", updateForce.toString())
             buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", (registerOverride ?: hasGoogleServices).toString())
             if (devApp) {
                 applicationIdSuffix = ".dev"
@@ -73,6 +83,7 @@ android {
             }
         }
         release {
+            buildConfigField("boolean", "UPDATES_ENABLED", versionSupplied.toString())
             buildConfigField("boolean", "PUSH_REGISTER_WITH_HUB", (registerOverride ?: false).toString())
             // Release ships arm64-v8a only: x86_64 is only for emulators, and the
             // JNA aar's other ABIs are dropped too. Debug stays unfiltered so debug

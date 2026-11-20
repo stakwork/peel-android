@@ -28,3 +28,4 @@ keystore.properties
 secrets.properties
 google-services.json
 service-account*.json
+.kotlin/

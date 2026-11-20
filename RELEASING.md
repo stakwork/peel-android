@@ -41,3 +41,12 @@ The release APK is arm64-v8a only (debug builds keep x86_64 for emulators). CI v
 ## Play Store (later)
 
 To also produce an AAB for Google Play, uncomment the "Build AAB" step (`./gradlew bundleRelease`) in `release.yml` and add an upload step for `app/build/outputs/bundle/release/*.aab`.
+
+## In-app updates
+
+Peel updates itself from GitHub Releases (`docs/phases/53-in-app-updates.md`); there is no other server.
+
+- The app asks `GET /repos/stakwork/peel-android/releases/latest` and offers a release whose tag code (`major*10000 + minor*100 + patch`) is above its own `versionCode` **and** that has the asset `peel-<version>.apk`. The workflow uploads that asset a few minutes after the release is published; until then the app quietly offers nothing.
+- An update installs over the old app only if it is signed with the **same key**. Every release must be signed from the same `ANDROID_KEYSTORE_*` secrets; a release signed with another key is refused by the app (and by Android) and strands everyone on the old version.
+- Only builds made by this workflow check for updates (`BuildConfig.UPDATES_ENABLED`: release build with `-PVERSION_CODE`). The first release that contains this feature must still be installed by hand; local, debug and `.dev` builds can't update in place.
+- Don't delete or rename the APK asset of the latest release, and don't mark a release as pre-release if people should get it (`/latest` skips drafts and pre-releases).
