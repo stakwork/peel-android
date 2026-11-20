@@ -177,6 +177,21 @@ suspend fun Engine.approveMember(chat: String, member: TribeMember) {
     sendTribeCommand(chat, MEMBER_APPROVE_MESSAGE_TYPE, TribeMembers.answerBody(member), store = true)
 }
 
+/// The owner approves [member] (a key) if the tribes server lists them waiting to join private tribe [chat]: a box's Jamie, in a
+/// tribe the owner linked for it (`BoxJamies`; iOS `Engine.approveWaitingMember`). The server's list is the one place a request
+/// names its key. False when they are not waiting.
+suspend fun Engine.approveWaitingMember(chat: String, member: String): Boolean {
+    val waiting = TribeMembers.waiting(tribeMembers(chat), member) ?: return false
+    approveMember(chat, waiting)
+    return true
+}
+
+/// [approveWaitingMember] as a box's Jamie is approved with ([BoxJamies]).
+val Engine.jamieApprover: JamieApprover get() = JamieApprover { tribe, key -> approveWaitingMember(tribe, key) }
+
+/// Whether a request to join [chat] waits here unanswered (stored, with no approve or reject naming it).
+fun Engine.hasJoinRequest(chat: String): Boolean = TribeMembers.pendingRequests(storage.messages(chat)).isNotEmpty()
+
 /// Turns a join request down (a type-21 message answering it).
 suspend fun Engine.rejectMember(chat: String, member: TribeMember) {
     sendTribeCommand(chat, MEMBER_REJECT_MESSAGE_TYPE, TribeMembers.answerBody(member), store = true)

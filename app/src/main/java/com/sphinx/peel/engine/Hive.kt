@@ -160,8 +160,9 @@ class OkHttpHive(
 }
 
 /// Hive's device-flow API for a strut desktop app (iOS `HiveClient`). Not
-/// ported: Jamie-in-tribes (`jamieLinks`, `linkTribe`, `unlinkTribe`). A call
-/// with Jamie is [startCall].
+/// ported: Jamie-in-tribes (`jamieLinks`, `linkTribe`, `unlinkTribe`): a
+/// tribe's Jamie row offers boxes only (`BoxJamies`, docs/phases/54-jamie-from-a-box.md),
+/// never Hive's orgs. A call with Jamie is [startCall].
 class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkHttpHive()) {
     /// Where one poll of a [Pairing] stands.
     sealed class Poll {

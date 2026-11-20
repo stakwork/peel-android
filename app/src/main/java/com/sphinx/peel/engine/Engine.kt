@@ -222,6 +222,12 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// for `MessageNotifier`.
     @Volatile var onIncoming: ((List<MessageRow>) -> Unit)? = null
 
+    private val incomingFlow = MutableSharedFlow<List<MessageRow>>(extraBufferCapacity = 16)
+
+    /// The same messages [onIncoming] is called with, for whoever else looks at what arrives: a box's Jamie asking to join a tribe
+    /// this account owns (`BoxJamies.requested`). Nothing waits on it.
+    val incoming: SharedFlow<List<MessageRow>> = incomingFlow.asSharedFlow()
+
     private val connectionStateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = connectionStateFlow.asStateFlow()
 
@@ -632,9 +638,10 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         storeMessages(handled)
         if (handled.msgs.isNotEmpty()) {
             Log.d("PeelHistory", "${handled.msgs.size} msgs: core handle+commit ${handledAt - startedAt}ms, store ${SystemClock.elapsedRealtime() - handledAt}ms")
-            onIncoming?.let { notify ->
-                val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe && it.chat != UNFILED_CHAT }
-                if (rows.isNotEmpty()) runCatching { notify(rows) }
+            val rows = handled.msgs.mapNotNull { mapMessage(it, accountKey) }.filter { !it.fromMe && it.chat != UNFILED_CHAT }
+            if (rows.isNotEmpty()) {
+                onIncoming?.let { notify -> runCatching { notify(rows) } }
+                incomingFlow.tryEmit(rows)
             }
         }
         inboundResults.emit(handled)
