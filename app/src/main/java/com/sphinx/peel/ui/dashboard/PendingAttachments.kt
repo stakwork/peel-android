@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.AgentAttachments
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.ModelSight
+import com.sphinx.peel.engine.StagedAttachments
 import com.sphinx.peel.engine.classifyOutgoingFile
 import com.sphinx.peel.ui.components.prepareImageBytes
 import com.sphinx.peel.ui.theme.Theme
@@ -61,10 +62,11 @@ class PendingFile(
     val isPicture: Boolean,
 )
 
-/// The agent DM's pending attachments (peel's `FilesTray` model): what was picked, each picture's "let the model see it" switch ([ModelSight]),
+/// A chat's pending attachments, [agent] for the agent's DM (every other chat stages pictures only, sent as `sendImageAttachment` does today:
+/// 2048 px, no model switch, no Mac note). (peel's `FilesTray` model): what was picked, each picture's "let the model see it" switch ([ModelSight]),
 /// and sending them in order. One per chat, held by `ConversationScreen`; [clear] on leaving drops every temp copy. Android's UI layer: the rules
 /// are in `AgentAttachments`, `ModelSight` and `AttachmentMetadata` (pure, JVM-tested); this needs a device and is untested.
-class PendingAttachments(private val context: Context) {
+class PendingAttachments(private val context: Context, private val agent: Boolean = true) {
     val files = mutableStateListOf<PendingFile>()
     private val sight = ModelSight()
     private var sightTick by mutableIntStateOf(0)
@@ -83,6 +85,7 @@ class PendingAttachments(private val context: Context) {
     /// Whether the "Peel needs to be open on your Mac" note shows (iOS `FilesTray`).
     val showsMacNote: Boolean
         get() {
+            if (!agent) return false
             sightTick
             return AgentAttachments.showsMacNote(files.map { it.isPicture to sight.allows(it.id) })
         }
@@ -123,9 +126,9 @@ class PendingAttachments(private val context: Context) {
                         val n = source.read(buffer)
                         if (n < 0) break
                         copied += n
-                        if (!AgentAttachments.fits(copied)) {
+                        if (!StagedAttachments.fits(copied, agent)) {
                             temp.delete()
-                            return@withContext AgentAttachments.tooLarge(displayName)
+                            return@withContext tooLarge(displayName)
                         }
                         out.write(buffer, 0, n)
                     }
@@ -139,7 +142,8 @@ class PendingAttachments(private val context: Context) {
             val isPicture = ModelSight.isPicture(type, name)
             if (isPicture) {
                 val converted = runCatching {
-                    prepareImageBytes(temp.readBytes(), AgentAttachments.PICTURE_MAX_DIMENSION, 85, flattenOnWhite = true)
+                    if (agent) prepareImageBytes(temp.readBytes(), AgentAttachments.PICTURE_MAX_DIMENSION, 85, flattenOnWhite = true)
+                    else prepareImageBytes(temp.readBytes())
                 }.getOrNull()
                 if (converted != null) {
                     temp.writeBytes(converted)
@@ -150,9 +154,9 @@ class PendingAttachments(private val context: Context) {
                     temp.delete()
                     return@withContext "That doesn't look like an image."
                 } // else: undecodable, sent as it is (peel does the same).
-                if (!AgentAttachments.fits(size)) {
+                if (!StagedAttachments.fits(size, agent)) {
                     temp.delete()
-                    return@withContext AgentAttachments.tooLarge(displayName)
+                    return@withContext tooLarge(displayName)
                 }
             }
             val thumbnail = if (isPicture) thumbnail(temp) else null
@@ -163,6 +167,8 @@ class PendingAttachments(private val context: Context) {
             e.message ?: "That file could not be read."
         }
     }
+
+    private fun tooLarge(name: String): String = if (agent) AgentAttachments.tooLarge(name) else "$name is too large to send."
 
     private fun thumbnail(file: File): Bitmap? = runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -175,19 +181,22 @@ class PendingAttachments(private val context: Context) {
     /// Sends every pending file in order. [caption] goes with the first only; if that file is refused, the text goes on its own. A refused file
     /// stays pending with its switch restored. Returns the refusals (the first is shown) and whether the caption went one way or the other.
     suspend fun sendAll(
-        engine: Engine, chat: String, caption: String, replyUuid: String?, inThread: String?, onSent: suspend () -> Unit,
+        engine: Engine, chat: String, caption: String, isTribe: Boolean, replyUuid: String?, inThread: String?, onSent: suspend () -> Unit,
     ): SendOutcome {
         val errors = mutableListOf<String>()
+        if (files.isEmpty()) return SendOutcome(errors, caption.isBlank())
         var captionSent = caption.isBlank()
         for ((index, file) in files.toList().withIndex()) {
             val allowed = sight.take(file.id)
             sightTick++
             try {
                 val bytes = withContext(Dispatchers.IO) { file.file.readBytes() }
-                engine.sendFileAttachment(
-                    chat, bytes, file.name, file.mediaType, if (index == 0) caption else "", false,
-                    replyUuid, inThread, modelMaySee = file.isPicture && allowed,
-                )
+                val text = StagedAttachments.captionFor(index, caption)
+                if (agent) {
+                    engine.sendFileAttachment(chat, bytes, file.name, file.mediaType, text, isTribe, replyUuid, inThread, modelMaySee = file.isPicture && allowed)
+                } else {
+                    engine.sendImageAttachment(chat, bytes, text, isTribe, replyUuid, inThread)
+                }
                 if (index == 0) captionSent = true
                 files.remove(file)
                 file.file.delete()
@@ -196,6 +205,7 @@ class PendingAttachments(private val context: Context) {
                 sight.restore(file.id, allowed)
                 sightTick++
                 errors += e.message ?: "Could not send ${file.name}."
+                if (!agent) break // order kept: the rest stay staged behind the one that failed, the caption stays with the first.
             }
         }
         return SendOutcome(errors, captionSent)
@@ -206,7 +216,7 @@ class PendingAttachments(private val context: Context) {
 
 /// The pending files above the composer: a thumbnail or the name, an x, and under a picture the "let the model see it" switch; then the note.
 @Composable
-fun PendingTray(pending: PendingAttachments, modifier: Modifier = Modifier) {
+fun PendingTray(pending: PendingAttachments, modifier: Modifier = Modifier, agent: Boolean = true) {
     if (pending.files.isEmpty()) return
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -240,7 +250,7 @@ fun PendingTray(pending: PendingAttachments, modifier: Modifier = Modifier) {
                             Icon(Icons.Filled.Close, contentDescription = "Remove ${file.name}", tint = Theme.colors.text, modifier = Modifier.size(14.dp))
                         }
                     }
-                    if (file.isPicture) {
+                    if (agent && file.isPicture) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(ModelSight.TITLE, style = MaterialTheme.typography.labelSmall, color = Theme.colors.text, modifier = Modifier.weight(1f))
                             Switch(checked = pending.modelSees(file.id), onCheckedChange = { pending.setModelSees(file.id, it) })
