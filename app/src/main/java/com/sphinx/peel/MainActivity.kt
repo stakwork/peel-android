@@ -243,7 +243,12 @@ private fun PeelApp(
     val kept = (screen as? Screen.Home)?.engine ?: (screen as? Screen.Relock)?.engine
     if (kept != null) KeepConnected(kept, storage)
     when (val current = screen) {
-        Screen.Onboarding -> OnboardingScreen(secretStore, storage, inviteLink, onInviteLinkUsed) { engine ->
+        // A worker's invite pasted or scanned in names its app too (`a=`): it waits to open after signup, marked as a tapped
+        // link's is (docs/phases/51-pasted-invite.md).
+        Screen.Onboarding -> OnboardingScreen(
+            secretStore, storage, inviteLink, onInviteLinkUsed,
+            onInviteApp = { router.open(it, ready = false, invited = true) },
+        ) { engine ->
             screen = if (engine.restoreProgress.value.restoring) Screen.Restoring(engine) else Screen.Home(engine)
         }
         Screen.Lock -> LockScreen(secretStore, storage) { engine -> screen = Screen.Home(engine) }
