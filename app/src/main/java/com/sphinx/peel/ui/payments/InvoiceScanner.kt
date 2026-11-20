@@ -130,7 +130,7 @@ fun CodeScanner(
         stringResource(R.string.scan_label_contact), stringResource(R.string.scan_label_tribe),
         stringResource(R.string.scan_label_invoice), { context.str(R.string.scan_label_invoice_amount, it) },
     )
-    val scanLocale = context.resources.configuration.locales[0]
+    val scanLocale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]
     var done by remember { mutableStateOf(false) }
     // What the camera last saw, and when (a counter, so each frame restarts the fades).
     var sighting by remember { mutableStateOf<Sighting?>(null) }
