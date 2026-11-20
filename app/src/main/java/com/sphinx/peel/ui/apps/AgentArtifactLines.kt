@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.apps
 
 import androidx.compose.foundation.clickable
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -111,19 +113,19 @@ private fun AgentArtifactLine(artifact: AgentArtifact, inTribe: Boolean, key: In
     ) {
         Icon(Icons.Filled.Description, null, Modifier.size(12.dp), tint = Theme.colors.secondaryText)
         Text(
-            artifact.label?.let { "$it: ${artifact.title}" } ?: artifact.title,
+            artifact.label?.let { stringResource(R.string.misc_apps_label_title, it, artifact.title) } ?: artifact.title,
             style = MaterialTheme.typography.bodySmall, color = Theme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
         place?.let { Text("· $it", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        if (run != null) Text("Open", style = MaterialTheme.typography.bodySmall, color = Theme.colors.link, maxLines = 1)
+        if (run != null) Text(stringResource(R.string.misc_apps_open), style = MaterialTheme.typography.bodySmall, color = Theme.colors.link, maxLines = 1)
     }
     if (asking && run != null) {
         AlertDialog(
             onDismissRequest = { asking = false },
             text = { Text(artifact.tribeAppQuestion(place ?: "")) },
-            confirmButton = { TextButton(onClick = { asking = false; run() }) { Text("Open app") } },
-            dismissButton = { TextButton(onClick = { asking = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { asking = false; run() }) { Text(stringResource(R.string.misc_apps_open_app)) } },
+            dismissButton = { TextButton(onClick = { asking = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 }

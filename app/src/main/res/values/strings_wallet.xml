@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wallet_sign_in">Sign in</string>
+    <string name="wallet_it_may">It may</string>
+    <string name="wallet_hear_payments">Hear when its own payments land</string>
+    <string name="wallet_spending_limit">Spending limit</string>
+    <string name="wallet_none">None</string>
+    <string name="wallet_over_limit">Over the limit</string>
+    <string name="wallet_inside_limit">Inside it, apps pay without asking you. Change it or take it back in You › Connected apps.</string>
+    <string name="wallet_decline">Decline</string>
+    <string name="wallet_to_named">To %1$s · %2$s</string>
+    <string name="wallet_to_unknown">To %1$s, not a contact</string>
+    <string name="wallet_message">Message: %1$s</string>
+    <string name="wallet_memo">Memo: %1$s</string>
+    <string name="wallet_fee_async">Fee added on top, with 1 sat to reach them</string>
+    <string name="wallet_fee">Fee added on top</string>
+    <string name="wallet_limit_spent">%1$s of its %2$s limit spent</string>
+    <string name="wallet_app_says">The app says: “%1$s”</string>
+    <string name="wallet_cancel">Cancel</string>
+    <string name="wallet_pay">Pay</string>
+    <string name="wallet_pay_amount">Pay %1$s</string>
+    <string name="wallet_runs">Runs %1$s</string>
+    <string name="wallet_buys">Buys %1$s</string>
+    <string name="wallet_server_says">The server says: “%1$s”</string>
+</resources>

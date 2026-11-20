@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.payments
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -61,17 +63,18 @@ internal fun PaymentDetailScreen(storage: Storage, id: String, onBack: () -> Uni
         PaymentItem.build(storage.payments(Int.MAX_VALUE), storage.invoices(), contactOf = storage::contact, messageOf = storage::messageByPaymentHash)
             .firstOrNull { it.id == id }
     }
-    val myAlias = remember { storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You" }
+    val you = stringResource(R.string.pay_you)
+    val myAlias = remember { storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: you }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.pay_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(12.dp))
-            Text("Payment", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+            Text(stringResource(R.string.pay_payment), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
         }
         if (item == null) {
-            Text("This payment is gone.", color = Theme.colors.secondaryText, modifier = Modifier.padding(20.dp))
+            Text(stringResource(R.string.pay_gone), color = Theme.colors.secondaryText, modifier = Modifier.padding(20.dp))
             return@Column
         }
         Column(
@@ -79,8 +82,8 @@ internal fun PaymentDetailScreen(storage: Storage, id: String, onBack: () -> Uni
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Top(item, onOpenChat)
-            item.quotedMessage?.let { QuotedCard("Your message", it, myAlias) }
-                ?: item.note?.let { NoteCard(if (item.kind == PaymentItem.Kind.INVOICE) "Memo" else "Note", it) }
+            item.quotedMessage?.let { QuotedCard(stringResource(R.string.pay_your_message), it, myAlias) }
+                ?: item.note?.let { NoteCard(stringResource(if (item.kind == PaymentItem.Kind.INVOICE) R.string.pay_fact_memo else R.string.pay_note), it) }
             Facts(item)
         }
     }
@@ -108,7 +111,7 @@ private fun Top(item: PaymentItem, onOpenChat: (String) -> Unit) {
         }
         item.chat?.let { chat ->
             OutlinedButton(onClick = { onOpenChat(chat) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                Text(if (item.isTribe) "Open #${item.chatName.orEmpty()}" else "Open chat with ${item.chatName ?: "them"}")
+                Text(if (item.isTribe) stringResource(R.string.pay_open_tribe, item.chatName.orEmpty()) else stringResource(R.string.pay_open_chat_with, item.chatName ?: stringResource(R.string.pay_them)))
             }
         }
     }
@@ -134,7 +137,7 @@ private fun NoteCard(label: String, text: String) = Card(label) {
 @Composable
 private fun QuotedCard(label: String, message: MessageRow, myAlias: String) = Card(label) {
     val sender = if (message.fromMe) myAlias else
-        message.sender?.let { runCatching { org.json.JSONObject(it).optString("alias") }.getOrNull() }?.takeIf { it.isNotEmpty() } ?: "Someone"
+        message.sender?.let { runCatching { org.json.JSONObject(it).optString("alias") }.getOrNull() }?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.pay_someone)
     val text = message.body?.let { runCatching { org.json.JSONObject(it).optString("content") }.getOrNull() }.orEmpty()
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row {
@@ -150,29 +153,34 @@ private fun QuotedCard(label: String, message: MessageRow, myAlias: String) = Ca
 @Composable
 private fun Facts(item: PaymentItem) {
     val context = LocalContext.current
+    val hashLabel = stringResource(R.string.pay_fact_hash)
+    val hashCopied = stringResource(R.string.pay_hash_copied)
     val (statusText, statusIcon, settled) = when (item.status) {
-        PaymentItem.Status.COMPLETE -> Triple(if (item.incoming) "Received" else "Settled", Icons.Filled.Check, true)
+        PaymentItem.Status.COMPLETE -> Triple(stringResource(if (item.incoming) R.string.pay_status_received else R.string.pay_status_settled), Icons.Filled.Check, true)
         PaymentItem.Status.PENDING ->
-            Triple(if (item.isToContact) "Waiting for ${item.chatName ?: "them"} to come online, can't be cancelled" else "Pending", Icons.Filled.Schedule, false)
+            Triple(if (item.isToContact) stringResource(R.string.pay_waiting_online, item.chatName ?: stringResource(R.string.pay_them)) else stringResource(R.string.pay_status_pending), Icons.Filled.Schedule, false)
         PaymentItem.Status.FAILED ->
-            Triple(if (item.incoming) item.error ?: "Not received" else "Failed${item.error?.let { ": $it" } ?: ""}, nothing was sent", Icons.Filled.Close, false)
+            Triple(
+                if (item.incoming) item.error ?: stringResource(R.string.pay_not_received)
+                else item.error?.let { stringResource(R.string.pay_failed_with, it) } ?: stringResource(R.string.pay_failed_plain),
+                Icons.Filled.Close, false)
     }
     Card("") {
-        FactBlock("Status") {
+        FactBlock(stringResource(R.string.pay_fact_status)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(statusIcon, null, Modifier.size(16.dp), tint = if (settled) Theme.colors.confirmed else Theme.colors.text)
                 Spacer(Modifier.width(6.dp))
                 Text(statusText, color = if (settled) Theme.colors.confirmed else Theme.colors.text)
             }
         }
-        FactBlock("When") { Text(moment(item.ts), color = Theme.colors.text) }
-        FactBlock("Amount") {
+        FactBlock(stringResource(R.string.pay_fact_when)) { Text(moment(item.ts), color = Theme.colors.text) }
+        FactBlock(stringResource(R.string.pay_fact_amount)) {
             Text("${Sats.format(item.amountMsat)} · ${NumberFormat.getIntegerInstance().format(item.amountMsat)} msat", color = Theme.colors.text)
         }
-        FactBlock("Payment hash") {
+        FactBlock(hashLabel) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(PaymentItem.shortKey(item.rhash), fontFamily = FontFamily.Monospace, color = Theme.colors.text, modifier = Modifier.weight(1f))
-                OutlinedButton(onClick = { copy(context, item.rhash) }) { Text("Copy") }
+                OutlinedButton(onClick = { copy(context, item.rhash, hashLabel, hashCopied) }) { Text(stringResource(R.string.pay_copy)) }
             }
         }
     }
@@ -196,8 +204,8 @@ internal fun moment(ts: Long, locale: Locale = Locale.getDefault(), zone: java.u
     return "$date at $time"
 }
 
-private fun copy(context: Context, text: String) {
+private fun copy(context: Context, text: String, label: String, copied: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("Payment hash", text))
-    Toast.makeText(context, "Payment hash copied", Toast.LENGTH_SHORT).show()
+    cm.setPrimaryClip(ClipData.newPlainText(label, text))
+    Toast.makeText(context, copied, Toast.LENGTH_SHORT).show()
 }

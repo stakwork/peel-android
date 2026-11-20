@@ -30,6 +30,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.ErrorText
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.engine.ConnectionState
@@ -52,23 +56,24 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
     val connection by engine.connectionState.collectAsState()
     val progress by engine.restoreProgress.collectAsState()
     val finished = progress.outcome is RestoreOutcome.Finished
-    val failed = (progress.outcome as? RestoreOutcome.Failed)?.message
+    val context = LocalContext.current
+    val failed = (progress.outcome as? RestoreOutcome.Failed)?.message?.let { ErrorText.text(context, it, R.string.err_restoring_stopped) }
 
     val lines = listOf(
         Line(
-            title = "Account",
+            title = stringResource(R.string.restore_account),
             detail = when (connection) {
-                ConnectionState.Idle -> "Waiting"
-                ConnectionState.Connecting -> "Connecting…"
-                ConnectionState.Connected -> "Connected"
-                is ConnectionState.Offline -> "Offline, retrying in ${(connection as ConnectionState.Offline).retryInSeconds}s…"
-                is ConnectionState.Failed -> (connection as ConnectionState.Failed).message
+                ConnectionState.Idle -> stringResource(R.string.restore_waiting)
+                ConnectionState.Connecting -> stringResource(R.string.restore_connecting)
+                ConnectionState.Connected -> stringResource(R.string.restore_connected)
+                is ConnectionState.Offline -> stringResource(R.string.restore_offline, (connection as ConnectionState.Offline).retryInSeconds)
+                is ConnectionState.Failed -> ErrorText.text(context, (connection as ConnectionState.Failed).message, R.string.err_could_not_connect)
             },
             state = if (connection == ConnectionState.Connected) LineState.DONE else LineState.ACTIVE,
         ),
         Line(
-            title = "Contacts & Tribes",
-            detail = label(progress.contacts, finished, noun = "checked"),
+            title = stringResource(R.string.restore_contacts_tribes),
+            detail = label(progress.contacts, finished, noun = stringResource(R.string.restore_noun_checked)),
             state = when {
                 finished || progress.messages != null ||
                     progress.contacts?.let { it.end != null && it.reached >= it.end } == true -> LineState.DONE
@@ -78,13 +83,13 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
             fraction = progress.contacts?.fraction,
         ),
         Line(
-            title = "Messages",
+            title = stringResource(R.string.restore_messages),
             // The cursor moves past a page the core refused part of by design
             // (HistoryPage.readablePart), so a finished restore can still be
             // short of its own total -- said here rather than left to look
             // like a stall or a silent loss.
-            detail = label(progress.messages, finished, noun = "received") +
-                if (progress.messagesSkipped > 0) " (${progress.messagesSkipped} skipped)" else "",
+            detail = label(progress.messages, finished, noun = stringResource(R.string.restore_noun_received)) +
+                if (progress.messagesSkipped > 0) " " + stringResource(R.string.restore_skipped, progress.messagesSkipped) else "",
             state = when {
                 finished -> LineState.DONE
                 progress.messages != null -> LineState.ACTIVE
@@ -95,10 +100,10 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
     )
 
     Column(Modifier.fillMaxSize().padding(20.dp)) {
-        Text("Restoring your account", style = MaterialTheme.typography.headlineSmall, color = Theme.colors.text)
+        Text(stringResource(R.string.restore_title), style = MaterialTheme.typography.headlineSmall, color = Theme.colors.text)
         Spacer(Modifier.height(8.dp))
         Text(
-            "You can start now while older messages arrive.",
+            stringResource(R.string.restore_detail),
             style = MaterialTheme.typography.bodyMedium,
             color = Theme.colors.secondaryText,
         )
@@ -120,7 +125,7 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
             Spacer(Modifier.height(16.dp))
             Text(failed, color = Theme.colors.destructive, style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(8.dp))
-            TextButton(onClick = { engine.resumeRestoreIfNeeded() }) { Text("Resume") }
+            TextButton(onClick = { engine.resumeRestoreIfNeeded() }) { Text(stringResource(R.string.restore_resume)) }
         }
 
         Spacer(Modifier.weight(1f))
@@ -128,7 +133,7 @@ fun RestoringAccountScreen(engine: Engine, onOpen: () -> Unit) {
             onClick = onOpen,
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
-        ) { Text("Open Peel") }
+        ) { Text(stringResource(R.string.restore_open)) }
     }
 }
 
@@ -175,15 +180,16 @@ private fun StateIndicator(state: LineState) {
     }
 }
 
-private val numberFormat: NumberFormat = NumberFormat.getIntegerInstance()
+private val numberFormat: NumberFormat get() = NumberFormat.getIntegerInstance()
 
 /// "120 of 300", "35 checked", or before any, "Waiting" ("None" once
 /// finished). Ported from PeelUI's `RestoreProgress.label`.
+@Composable
 private fun label(count: RestoreCount?, finished: Boolean, noun: String): String {
-    if (count == null) return if (finished) "None" else "Waiting"
+    if (count == null) return stringResource(if (finished) R.string.restore_none else R.string.restore_waiting)
     val end = count.end
     return if (end != null) {
-        "${numberFormat.format(count.reached)} of ${numberFormat.format(end)}"
+        stringResource(R.string.restore_of, numberFormat.format(count.reached), numberFormat.format(end))
     } else {
         "${numberFormat.format(count.reached)} $noun"
     }

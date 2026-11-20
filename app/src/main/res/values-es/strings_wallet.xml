@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wallet_sign_in">Iniciar sesión</string>
+    <string name="wallet_it_may">Puede</string>
+    <string name="wallet_hear_payments">Enterarse cuando lleguen sus propios pagos</string>
+    <string name="wallet_spending_limit">Límite de gasto</string>
+    <string name="wallet_none">Ninguno</string>
+    <string name="wallet_over_limit">Al superar el límite</string>
+    <string name="wallet_inside_limit">Dentro del límite, las apps pagan sin preguntarte. Cámbialo o quítalo en Tú › Apps conectadas.</string>
+    <string name="wallet_decline">Rechazar</string>
+    <string name="wallet_to_named">Para %1$s · %2$s</string>
+    <string name="wallet_to_unknown">Para %1$s, no es un contacto</string>
+    <string name="wallet_message">Mensaje: %1$s</string>
+    <string name="wallet_memo">Nota: %1$s</string>
+    <string name="wallet_fee_async">Comisión aparte, con 1 sat para que les llegue</string>
+    <string name="wallet_fee">Comisión aparte</string>
+    <string name="wallet_limit_spent">%1$s de su límite de %2$s gastados</string>
+    <string name="wallet_app_says">La app dice: “%1$s”</string>
+    <string name="wallet_cancel">Cancelar</string>
+    <string name="wallet_pay">Pagar</string>
+    <string name="wallet_pay_amount">Pagar %1$s</string>
+    <string name="wallet_runs">Ejecuta %1$s</string>
+    <string name="wallet_buys">Compra %1$s</string>
+    <string name="wallet_server_says">El servidor dice: “%1$s”</string>
+</resources>

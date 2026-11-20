@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -43,6 +45,7 @@ import com.sphinx.peel.engine.AgentAttachments
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.ModelSight
 import com.sphinx.peel.engine.StagedAttachments
+import com.sphinx.peel.ui.str
 import com.sphinx.peel.engine.classifyOutgoingFile
 import com.sphinx.peel.ui.components.prepareImageBytes
 import com.sphinx.peel.ui.theme.Theme
@@ -118,7 +121,7 @@ class PendingAttachments(private val context: Context, private val agent: Boolea
         try {
             // Copied with a cap: a huge file is refused without being held whole.
             var copied = 0L
-            val input = resolver.openInputStream(uri) ?: return@withContext "That file could not be read."
+            val input = resolver.openInputStream(uri) ?: return@withContext context.getString(R.string.dash_attach_unreadable)
             input.use { source ->
                 temp.outputStream().use { out ->
                     val buffer = ByteArray(64 * 1024)
@@ -152,7 +155,7 @@ class PendingAttachments(private val context: Context, private val agent: Boolea
                     type = "image/jpg"
                 } else if (picked) {
                     temp.delete()
-                    return@withContext "That doesn't look like an image."
+                    return@withContext context.getString(R.string.dash_attach_not_image)
                 } // else: undecodable, sent as it is (peel does the same).
                 if (!StagedAttachments.fits(size, agent)) {
                     temp.delete()
@@ -164,11 +167,11 @@ class PendingAttachments(private val context: Context, private val agent: Boolea
             null
         } catch (e: Exception) {
             temp.delete()
-            e.message ?: "That file could not be read."
+            e.message ?: context.getString(R.string.dash_attach_unreadable)
         }
     }
 
-    private fun tooLarge(name: String): String = if (agent) AgentAttachments.tooLarge(name) else "$name is too large to send."
+    private fun tooLarge(name: String): String = if (agent) context.str(R.string.dash_attach_too_large_agent, name) else context.str(R.string.dash_attach_too_large, name)
 
     private fun thumbnail(file: File): Bitmap? = runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -204,7 +207,7 @@ class PendingAttachments(private val context: Context, private val agent: Boolea
             } catch (e: Exception) {
                 sight.restore(file.id, allowed)
                 sightTick++
-                errors += e.message ?: "Could not send ${file.name}."
+                errors += e.message ?: context.getString(R.string.dash_attach_send_failed, file.name)
                 if (!agent) break // order kept: the rest stay staged behind the one that failed, the caption stays with the first.
             }
         }
@@ -247,7 +250,7 @@ fun PendingTray(pending: PendingAttachments, modifier: Modifier = Modifier, agen
                             onClick = { pending.remove(file) },
                             modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).size(24.dp).clip(CircleShape).background(Theme.colors.fieldFill),
                         ) {
-                            Icon(Icons.Filled.Close, contentDescription = "Remove ${file.name}", tint = Theme.colors.text, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.dash_attach_remove, file.name), tint = Theme.colors.text, modifier = Modifier.size(14.dp))
                         }
                     }
                     if (agent && file.isPicture) {

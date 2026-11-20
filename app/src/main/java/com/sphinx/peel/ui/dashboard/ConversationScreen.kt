@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.dashboard
 
+import com.sphinx.peel.ui.str
 import com.sphinx.peel.engine.AgentMessages
 import com.sphinx.peel.engine.StagedAttachments
 import com.sphinx.peel.engine.ChatSearch
@@ -296,7 +297,7 @@ fun ConversationScreen(
             for (uri in uris.take(room)) {
                 pending.addPicture(uri)?.let { error = it }
             }
-            if (uris.size > room) error = StagedAttachments.tooMany()
+            if (uris.size > room) error = context.str(R.string.dash_attach_too_many, StagedAttachments.MAX_PICTURES)
         }
     }
 
@@ -315,7 +316,7 @@ fun ConversationScreen(
     fun sendFile(uri: android.net.Uri) {
         if (isAgent) { addPending(uri, picture = false); return }
         scope.launch {
-            sendingLabel = "Sending file…"
+            sendingLabel = context.str(R.string.conv_sending_file)
             error = null
             try {
                 val (bytes, pickedName, mediaType) = withContext(Dispatchers.Default) {
@@ -325,7 +326,7 @@ fun ConversationScreen(
                         if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
                     } ?: uri.lastPathSegment ?: "file"
                     val data = resolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: throw IllegalStateException("That file could not be read.")
+                        ?: throw IllegalStateException(context.str(R.string.conv_file_unreadable))
                     Triple(data, name, resolver.getType(uri))
                 }
                 val caption = draft
@@ -336,7 +337,7 @@ fun ConversationScreen(
                 engine.sendFileAttachment(chat, bytes, pickedName, mediaType, caption, isTribe, replyUuid, inThread)
                 reload()
             } catch (e: Exception) {
-                error = e.message ?: "Could not send that file."
+                error = e.message ?: context.str(R.string.conv_err_file)
             } finally {
                 sendingLabel = null
             }
@@ -352,7 +353,7 @@ fun ConversationScreen(
 
     fun sendVoice(wav: ByteArray) {
         scope.launch {
-            sendingLabel = "Sending voice message…"
+            sendingLabel = context.str(R.string.conv_sending_voice)
             error = null
             try {
                 val replyUuid = replyTo?.uuid
@@ -361,7 +362,7 @@ fun ConversationScreen(
                 engine.sendVoiceMessage(chat, wav, isTribe, replyUuid, inThread)
                 reload()
             } catch (e: Exception) {
-                error = e.message ?: "Could not send that voice message."
+                error = e.message ?: context.str(R.string.conv_err_voice)
             } finally {
                 sendingLabel = null
             }
@@ -390,7 +391,7 @@ fun ConversationScreen(
                 engine.sendBoost(chat, targetUuid, isTribe)
                 reload()
             } catch (e: Exception) {
-                error = e.message ?: "Could not send that boost."
+                error = e.message ?: context.str(R.string.conv_err_boost)
             }
         }
     }
@@ -403,7 +404,7 @@ fun ConversationScreen(
                 engine.deleteMessage(chat, targetUuid, isTribe)
                 reload()
             } catch (e: Exception) {
-                error = e.message ?: "Could not delete that message."
+                error = e.message ?: context.str(R.string.conv_err_delete)
             }
         }
     }
@@ -422,9 +423,9 @@ fun ConversationScreen(
                 reload()
                 val server = engine.callServer()
                 val link = server?.let { CallLink.inMessage(previewContent(row), isCallType = true, server = it) }
-                if (link != null) onJoinCall(chat, title, link, !audioOnly) else error = "Could not start a call."
+                if (link != null) onJoinCall(chat, title, link, !audioOnly) else error = context.str(R.string.conv_err_call)
             } catch (e: Exception) {
-                error = e.message ?: "Could not start a call."
+                error = e.message ?: context.str(R.string.conv_err_call)
             } finally {
                 startingCall = false
             }
@@ -474,7 +475,7 @@ fun ConversationScreen(
                 engine.pinMessage(chat, uuid)
                 pinned = uuid
             } catch (e: Exception) {
-                error = e.message ?: "Could not pin that message."
+                error = e.message ?: context.str(R.string.conv_err_pin)
             }
         }
     }
@@ -485,14 +486,15 @@ fun ConversationScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Theme.colors.text)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.conv_back), tint = Theme.colors.text)
             }
             // The name opens the chat's details: a tribe's or a contact's.
-            val detailsLabel = if (isTribe) "Tribe details" else "Contact details"
+            val detailsLabel = if (isTribe) stringResource(R.string.conv_tribe_details) else stringResource(R.string.conv_contact_details)
+            val detailsDescription = stringResource(R.string.conv_details_description, title, detailsLabel)
             Row(
                 Modifier.weight(1f)
                     .clickable(enabled = detailsConversation != null, onClickLabel = detailsLabel) { showDetails = true }
-                    .semantics { contentDescription = "$title, $detailsLabel" },
+                    .semantics { contentDescription = detailsDescription },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f, fill = false)) {
@@ -526,11 +528,11 @@ fun ConversationScreen(
             var chatMenuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { chatMenuOpen = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "More", tint = Theme.colors.text)
+                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.conv_more), tint = Theme.colors.text)
                 }
                 DropdownMenu(expanded = chatMenuOpen, onDismissRequest = { chatMenuOpen = false }) {
                     DropdownMenuItem(
-                        text = { Text("Search") },
+                        text = { Text(stringResource(R.string.conv_search)) },
                         onClick = {
                             chatMenuOpen = false
                             // Already searching: focus the field again.
@@ -547,15 +549,15 @@ fun ConversationScreen(
                 var callMenuOpen by remember { mutableStateOf(false) }
                 Box {
                     IconButton(onClick = { callMenuOpen = true }, enabled = !startingCall) {
-                        Icon(Icons.Filled.Call, contentDescription = "Start a call", tint = Theme.colors.text)
+                        Icon(Icons.Filled.Call, contentDescription = stringResource(R.string.conv_start_call), tint = Theme.colors.text)
                     }
                     DropdownMenu(expanded = callMenuOpen, onDismissRequest = { callMenuOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text("Start an audio call") },
+                            text = { Text(stringResource(R.string.conv_start_audio_call)) },
                             onClick = { callMenuOpen = false; startCall(audioOnly = true) },
                         )
                         DropdownMenuItem(
-                            text = { Text("Start a video call") },
+                            text = { Text(stringResource(R.string.conv_start_video_call)) },
                             onClick = { callMenuOpen = false; startCall(audioOnly = false) },
                         )
                     }
@@ -580,7 +582,7 @@ fun ConversationScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Pinned: ${previewContent(pinnedRow).ifBlank { "message" }}",
+                    stringResource(R.string.conv_pinned, previewContent(pinnedRow).ifBlank { stringResource(R.string.conv_message_word) }),
                     style = MaterialTheme.typography.bodySmall,
                     color = Theme.colors.secondaryText,
                     maxLines = 2,
@@ -588,7 +590,7 @@ fun ConversationScreen(
                     modifier = Modifier.weight(1f),
                 )
                 if (isTribeOwner) {
-                    TextButton(onClick = { setPin(null) }) { Text("Unpin", color = Theme.colors.accent) }
+                    TextButton(onClick = { setPin(null) }) { Text(stringResource(R.string.conv_unpin), color = Theme.colors.accent) }
                 }
             }
         }
@@ -611,15 +613,17 @@ fun ConversationScreen(
         // surviving message, not the root itself - so a thread that just
         // got a reply jumps to where that reply would sit, same as an
         // active chat bumping to the bottom.
-        val threads = remember(messages, isTribe, myAlias, myPhotoUrl) { if (isTribe) threadSummaries(messages, myAlias, myPhotoUrl) else emptyMap() }
+        val attachmentLabel = stringResource(R.string.conv_attachment)
+        val threads = remember(messages, isTribe, myAlias, myPhotoUrl, attachmentLabel) { if (isTribe) threadSummaries(messages, myAlias, myPhotoUrl, attachmentLabel) else emptyMap() }
         val sortedMessages = remember(messages, threads) {
             messages.filter { it.type != BOOST_MESSAGE_TYPE && it.type != DELETE_MESSAGE_TYPE && it.type !in HIDDEN_MONEY_TYPES && it.threadUuid?.let { root -> !threads.containsKey(root) } ?: true }
                 .sortedBy { row -> rowSortKey(row, threads) }
         }
         // Control messages in a direct message (docs/phases/40-control-messages.md; iOS `ChatRow.rows`): a quiet line, a request's one row or
         // nothing at all, never a bubble.
-        val controlPlan = remember(sortedMessages, isTribe, isAgent, title) {
-            ControlPlan.of(sortedMessages, inTribe = isTribe, agentDM = isAgent) { if (it.fromMe) "You" else title }
+        val youLabel = stringResource(R.string.conv_you)
+        val controlPlan = remember(sortedMessages, isTribe, isAgent, title, youLabel) {
+            ControlPlan.of(sortedMessages, inTribe = isTribe, agentDM = isAgent) { if (it.fromMe) youLabel else title }
         }
         val displayedMessages = remember(sortedMessages, controlPlan) { sortedMessages.filter { it.id !in controlPlan.hidden } }
 
@@ -758,7 +762,7 @@ fun ConversationScreen(
             text = draft,
             onTextChange = { draft = it },
             members = mentionMembers,
-            placeholder = if (isAgent) "Ask Peel" else "Message $title",
+            placeholder = if (isAgent) stringResource(R.string.conv_ask_peel) else stringResource(R.string.conv_message_to, title),
             replyTarget = replyTo?.let { target -> (if (target.fromMe) myAlias else senderAlias(target)) to MessageMarkup.plainText(previewContent(target)) },
             onCancelReply = { replyTo = null },
             onPickPhoto = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -790,7 +794,7 @@ fun ConversationScreen(
                     error = null
                     newAfterIndex = null
                     scope.launch {
-                        sendingLabel = "Sending…"
+                        sendingLabel = context.str(R.string.conv_sending)
                         try {
                             val outcome = pending.sendAll(engine, chat, toSend, isTribe, replyUuid, inThreadOfReply) { reload() }
                             if (!outcome.captionSent && !isAgent) {
@@ -809,7 +813,7 @@ fun ConversationScreen(
                             outcome.errors.firstOrNull()?.let { error = it }
                             reload()
                         } catch (e: Exception) {
-                            error = e.message ?: "Could not send that."
+                            error = e.message ?: context.str(R.string.conv_err_send)
                         } finally {
                             sendingLabel = null
                         }
@@ -830,7 +834,7 @@ fun ConversationScreen(
                         engine.sendMessage(chat, toSend, isTribe, replyUuid, inThread)
                         reload()
                     } catch (e: Exception) {
-                        error = e.message ?: "Could not send that."
+                        error = e.message ?: context.str(R.string.conv_err_send)
                     }
                 }
             },
@@ -903,7 +907,7 @@ private fun ThreadScreen(
             for (uri in uris.take(room)) {
                 pending.addPicture(uri)?.let { error = it }
             }
-            if (uris.size > room) error = StagedAttachments.tooMany()
+            if (uris.size > room) error = context.str(R.string.dash_attach_too_many, StagedAttachments.MAX_PICTURES)
         }
     }
 
@@ -917,7 +921,7 @@ private fun ThreadScreen(
 
     fun sendFile(uri: android.net.Uri) {
         scope.launch {
-            sendingLabel = "Sending file…"
+            sendingLabel = context.str(R.string.conv_sending_file)
             error = null
             try {
                 val (bytes, pickedName, mediaType) = withContext(Dispatchers.Default) {
@@ -927,7 +931,7 @@ private fun ThreadScreen(
                         if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
                     } ?: uri.lastPathSegment ?: "file"
                     val data = resolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: throw IllegalStateException("That file could not be read.")
+                        ?: throw IllegalStateException(context.str(R.string.conv_file_unreadable))
                     Triple(data, name, resolver.getType(uri))
                 }
                 val caption = draft
@@ -935,7 +939,7 @@ private fun ThreadScreen(
                 engine.sendFileAttachment(chat, bytes, pickedName, mediaType, caption, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
                 onSent()
             } catch (e: Exception) {
-                error = e.message ?: "Could not send that file."
+                error = e.message ?: context.str(R.string.conv_err_file)
             } finally {
                 sendingLabel = null
             }
@@ -951,13 +955,13 @@ private fun ThreadScreen(
 
     fun sendVoice(wav: ByteArray) {
         scope.launch {
-            sendingLabel = "Sending voice message…"
+            sendingLabel = context.str(R.string.conv_sending_voice)
             error = null
             try {
                 engine.sendVoiceMessage(chat, wav, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
                 onSent()
             } catch (e: Exception) {
-                error = e.message ?: "Could not send that voice message."
+                error = e.message ?: context.str(R.string.conv_err_voice)
             } finally {
                 sendingLabel = null
             }
@@ -991,7 +995,7 @@ private fun ThreadScreen(
                 engine.sendBoost(chat, targetUuid, isTribe)
                 onSent()
             } catch (e: Exception) {
-                error = e.message ?: "Could not send that boost."
+                error = e.message ?: context.str(R.string.conv_err_boost)
             }
         }
     }
@@ -1004,7 +1008,7 @@ private fun ThreadScreen(
                 engine.deleteMessage(chat, targetUuid, isTribe)
                 onSent()
             } catch (e: Exception) {
-                error = e.message ?: "Could not delete that message."
+                error = e.message ?: context.str(R.string.conv_err_delete)
             }
         }
     }
@@ -1015,11 +1019,11 @@ private fun ThreadScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Thread", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
+                Text(stringResource(R.string.conv_thread), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
                 Text("#$chatName", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText, maxLines = 1)
             }
             IconButton(onClick = onBack) {
-                Icon(Icons.Filled.Close, contentDescription = "Close", tint = Theme.colors.secondaryText)
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.conv_close), tint = Theme.colors.secondaryText)
             }
         }
 
@@ -1092,7 +1096,7 @@ private fun ThreadScreen(
             } else {
                 item(key = "root-missing") {
                     Text(
-                        "Original message not available",
+                        stringResource(R.string.conv_original_unavailable),
                         style = MaterialTheme.typography.bodyMedium,
                         color = Theme.colors.secondaryText,
                         modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp),
@@ -1130,7 +1134,7 @@ private fun ThreadScreen(
             text = draft,
             onTextChange = { draft = it },
             members = mentionMembers,
-            placeholder = "Reply",
+            placeholder = stringResource(R.string.conv_reply),
             replyTarget = null,
             onCancelReply = {},
             onPickPhoto = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -1155,7 +1159,7 @@ private fun ThreadScreen(
                 error = null
                 if (pending.files.isNotEmpty()) {
                     scope.launch {
-                        sendingLabel = "Sending…"
+                        sendingLabel = context.str(R.string.conv_sending)
                         try {
                             val outcome = pending.sendAll(engine, chat, toSend, isTribe, threadRootUuid, threadRootUuid) { onSent() }
                             if (!outcome.captionSent) draft = toSend
@@ -1163,7 +1167,7 @@ private fun ThreadScreen(
                             onSent()
                         } catch (e: Exception) {
                             draft = toSend
-                            error = e.message ?: "Could not send that."
+                            error = e.message ?: context.str(R.string.conv_err_send)
                         } finally {
                             sendingLabel = null
                         }
@@ -1175,7 +1179,7 @@ private fun ThreadScreen(
                         engine.sendMessage(chat, toSend, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
                         onSent()
                     } catch (e: Exception) {
-                        error = e.message ?: "Could not send that."
+                        error = e.message ?: context.str(R.string.conv_err_send)
                     }
                 }
             },
@@ -1373,7 +1377,7 @@ private data class ThreadSummaryData(
 /// isTribe` only), so callers pass an empty map for a DM instead of
 /// calling this — which is also why `senderDisplay` is always called
 /// with `isTribe = true` here, never `false`.
-private fun threadSummaries(messages: List<MessageRow>, myAlias: String, myPhotoUrl: String?): Map<String, ThreadSummaryData> {
+private fun threadSummaries(messages: List<MessageRow>, myAlias: String, myPhotoUrl: String?, attachmentLabel: String): Map<String, ThreadSummaryData> {
     val byRoot = mutableMapOf<String, MutableList<MessageRow>>()
     for (row in messages) {
         val root = row.threadUuid ?: continue
@@ -1396,7 +1400,7 @@ private fun threadSummaries(messages: List<MessageRow>, myAlias: String, myPhoto
         val last = replies.maxByOrNull { it.timestamp ?: 0L }
         val lastReply = last?.let {
             val (name, _, hueKey) = senderDisplay(it, myAlias, myPhotoUrl, isTribe = true)
-            val text = MessageMarkup.plainText(previewContent(it)).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) "Attachment" else "" }
+            val text = MessageMarkup.plainText(previewContent(it)).ifBlank { if (it.type == ATTACHMENT_MESSAGE_TYPE) attachmentLabel else "" }
             ThreadLastReply(name, hueKey, text)
         }
         ThreadSummaryData(
@@ -1505,7 +1509,7 @@ private fun MessageRowView(
                                 Spacer(Modifier.width(2.dp))
                                 Icon(
                                     Icons.Filled.Bolt,
-                                    contentDescription = "Delivered",
+                                    contentDescription = stringResource(R.string.conv_delivered),
                                     tint = Theme.colors.confirmed,
                                     modifier = Modifier.size(14.dp),
                                 )
@@ -1521,7 +1525,7 @@ private fun MessageRowView(
             }
             if (row.deleted) {
                 Text(
-                    "This message has been deleted",
+                    stringResource(R.string.conv_message_deleted),
                     style = MaterialTheme.typography.bodyMedium.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
                     color = Theme.colors.secondaryText,
                 )
@@ -1578,31 +1582,31 @@ private fun MessageRowView(
         // above), so nothing here needs to re-check that.
         val linkToCopy = callLink?.url ?: MessageMarkup.firstLink(content)
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(text = { Text("Reply") }, onClick = { menuOpen = false; onReply() })
+            DropdownMenuItem(text = { Text(stringResource(R.string.conv_reply)) }, onClick = { menuOpen = false; onReply() })
             if (onBoost != null) {
                 // Just "Boost", not "Boost N sats" — the user's own
                 // choice, unlike PeelCore's own menu
                 // (`model.quickBoostLabel`), which does name the amount.
-                DropdownMenuItem(text = { Text("Boost") }, onClick = { menuOpen = false; onBoost() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.conv_boost)) }, onClick = { menuOpen = false; onBoost() })
             }
             if (content.isNotBlank()) {
                 DropdownMenuItem(
-                    text = { Text("Copy") },
+                    text = { Text(stringResource(R.string.conv_copy)) },
                     onClick = { menuOpen = false; com.sphinx.peel.ClipboardUtil.copySensitive(clipboardContext, "message", content) },
                 )
             }
             if (linkToCopy != null) {
                 DropdownMenuItem(
-                    text = { Text("Copy link") },
+                    text = { Text(stringResource(R.string.conv_copy_link)) },
                     onClick = { menuOpen = false; com.sphinx.peel.ClipboardUtil.copySensitive(clipboardContext, "link", linkToCopy) },
                 )
             }
             if (onPin != null) {
-                DropdownMenuItem(text = { Text(if (pinned) "Unpin" else "Pin") }, onClick = { menuOpen = false; onPin() })
+                DropdownMenuItem(text = { Text(if (pinned) stringResource(R.string.conv_unpin) else stringResource(R.string.conv_pin)) }, onClick = { menuOpen = false; onPin() })
             }
             if (onDelete != null && canDelete(row, deleteReplyCount)) {
                 DropdownMenuItem(
-                    text = { Text("Delete", color = Theme.colors.destructive) },
+                    text = { Text(stringResource(R.string.conv_delete), color = Theme.colors.destructive) },
                     onClick = { menuOpen = false; onDelete() },
                 )
             }
@@ -1630,6 +1634,7 @@ private fun CallBlock(link: CallLink, engine: Engine, timestamp: Long?, onJoinCa
         if (recent) engine.callPresence(link).collect { presence = it }
     }
     val people = if (recent) presence.people().orEmpty() else emptyList()
+    val showParticipantsDescription = stringResource(R.string.conv_on_call_show, people.size)
     var showParticipants by remember(link.room) { mutableStateOf(false) }
     if (showParticipants && people.isNotEmpty()) {
         ModalBottomSheet(
@@ -1637,7 +1642,7 @@ private fun CallBlock(link: CallLink, engine: Engine, timestamp: Long?, onJoinCa
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
             Text(
-                "${people.size} on the call",
+                stringResource(R.string.conv_on_call, people.size),
                 style = MaterialTheme.typography.titleMedium,
                 color = Theme.colors.text,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1645,7 +1650,7 @@ private fun CallBlock(link: CallLink, engine: Engine, timestamp: Long?, onJoinCa
             LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
                 items(people.size) { i ->
                     val person = people[i]
-                    val name = person.nickname.ifEmpty { "Guest" }
+                    val name = person.nickname.ifEmpty { stringResource(R.string.conv_guest) }
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1673,21 +1678,21 @@ private fun CallBlock(link: CallLink, engine: Engine, timestamp: Long?, onJoinCa
                     contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(if (link.audioOnly) "Audio call" else "Video call", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                Text(if (link.audioOnly) stringResource(R.string.conv_audio_call) else stringResource(R.string.conv_video_call), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
             }
             when {
-                !recent -> Text("Call ended", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                !recent -> Text(stringResource(R.string.conv_call_ended), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
                 people.isNotEmpty() -> Row(
                     Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .clickable { showParticipants = true }
-                        .semantics { contentDescription = "${people.size} on the call. Show participants" },
+                        .semantics { contentDescription = showParticipantsDescription },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(Modifier.width((26 + (minOf(people.size, 3) - 1) * 19).dp).height(26.dp)) {
                         people.take(3).forEachIndexed { i, person ->
                             Avatar(
-                                name = person.nickname.ifEmpty { "Guest" },
+                                name = person.nickname.ifEmpty { stringResource(R.string.conv_guest) },
                                 url = person.avatarUrl,
                                 size = 22.dp,
                                 hue = PersonHue.of(person.identity),
@@ -1705,16 +1710,16 @@ private fun CallBlock(link: CallLink, engine: Engine, timestamp: Long?, onJoinCa
                     Spacer(Modifier.width(8.dp))
                     Box(Modifier.size(8.dp).clip(CircleShape).background(Theme.colors.confirmed))
                     Spacer(Modifier.width(6.dp))
-                    Text("${people.size} on the call", style = MaterialTheme.typography.bodySmall, color = Theme.colors.text)
+                    Text(stringResource(R.string.conv_on_call, people.size), style = MaterialTheme.typography.bodySmall, color = Theme.colors.text)
                 }
                 presence is CallPresence.Live ->
-                    Text("No one on the call", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                    Text(stringResource(R.string.conv_no_one_on_call), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
                 presence is CallPresence.Ended ->
-                    Text("Call ended", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                    Text(stringResource(R.string.conv_call_ended), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
                 else -> {}
             }
         }
-        if (recent) OutlinedButton(onClick = { onJoinCall(link) }) { Text("Join") }
+        if (recent) OutlinedButton(onClick = { onJoinCall(link) }) { Text(stringResource(R.string.conv_join)) }
     }
 }
 
@@ -1739,7 +1744,7 @@ private fun ThreadSummaryRow(summary: ThreadSummaryData, onClick: () -> Unit) {
             Spacer(Modifier.width(6.dp))
         }
         Text(
-            if (summary.replyCount == 1) "1 reply" else "${summary.replyCount} replies",
+            LocalContext.current.resources.getQuantityString(R.plurals.conv_replies, summary.replyCount, summary.replyCount),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.accent,
@@ -1779,12 +1784,12 @@ private fun isSameDay(a: Long?, b: Long?): Boolean {
 
 /// "Today", "Yesterday", else a weekday and date — PeelCore's own
 /// `Formatting.dayHeading`.
-private fun dayHeading(timestamp: Long): String {
+private fun dayHeading(timestamp: Long, today: String, yesterday: String): String {
     val now = java.util.Calendar.getInstance()
     val then = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
-    if (isSameDay(now.timeInMillis, timestamp)) return "Today"
+    if (isSameDay(now.timeInMillis, timestamp)) return today
     now.add(java.util.Calendar.DAY_OF_YEAR, -1)
-    if (isSameDay(now.timeInMillis, timestamp)) return "Yesterday"
+    if (isSameDay(now.timeInMillis, timestamp)) return yesterday
     return SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(then.time)
 }
 
@@ -1798,7 +1803,7 @@ private fun DayDivider(timestamp: Long) {
     ) {
         HorizontalDivider(Modifier.weight(1f), thickness = 0.5.dp, color = Theme.colors.divider)
         Text(
-            dayHeading(timestamp),
+            dayHeading(timestamp, stringResource(R.string.conv_today), stringResource(R.string.conv_yesterday)),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Theme.colors.secondaryText,
@@ -1850,15 +1855,15 @@ private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPl
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Theme.colors.secondaryText)
         }
         is AttachmentState.AwaitsDownload -> DownloadMediaTile(declaredKind, startDownload)
-        is AttachmentState.Retryable -> DownloadMediaTile(declaredKind, startDownload, "Couldn't download yet \u2013 tap to retry")
+        is AttachmentState.Retryable -> DownloadMediaTile(declaredKind, startDownload, stringResource(R.string.conv_download_retry))
         is AttachmentState.Waiting -> AttachmentPlaceholder {
-            Text("Waiting to download", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+            Text(stringResource(R.string.conv_waiting_download), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
         }
         is AttachmentState.Loading -> AttachmentPlaceholder {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Theme.colors.secondaryText)
             Spacer(Modifier.width(8.dp))
             Text(
-                current.fraction?.let { "Downloading ${(it * 100).toInt()}%" } ?: "Downloading\u2026",
+                current.fraction?.let { stringResource(R.string.conv_downloading_pct, (it * 100).toInt()) } ?: stringResource(R.string.conv_downloading),
                 style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText,
             )
         }
@@ -1868,9 +1873,9 @@ private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPl
             Column {
                 Text(
                     when (declaredKind) {
-                        AttachmentKind.VIDEO -> "Video not available"
-                        AttachmentKind.IMAGE -> "Image not available"
-                        else -> "Not available"
+                        AttachmentKind.VIDEO -> stringResource(R.string.conv_video_unavailable)
+                        AttachmentKind.IMAGE -> stringResource(R.string.conv_image_unavailable)
+                        else -> stringResource(R.string.conv_unavailable)
                     },
                     style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive,
                 )
@@ -1886,9 +1891,9 @@ private fun AttachmentView(row: MessageRow, engine: Engine, audioPlayer: AudioPl
 @Composable
 private fun DownloadMediaTile(kind: AttachmentKind, onClick: () -> Unit, labelOverride: String? = null) {
     val label = labelOverride ?: when (kind) {
-        AttachmentKind.VIDEO -> "Download video"
-        AttachmentKind.IMAGE -> "Download image"
-        else -> "Download"
+        AttachmentKind.VIDEO -> stringResource(R.string.conv_download_video)
+        AttachmentKind.IMAGE -> stringResource(R.string.conv_download_image)
+        else -> stringResource(R.string.conv_download)
     }
     Column(
         Modifier
@@ -1943,7 +1948,7 @@ private fun AttachmentContent(attachment: DownloadedAttachment, audioPlayer: Aud
         }
         AsyncImage(
             model = attachment.file,
-            contentDescription = attachment.fileName ?: "Image",
+            contentDescription = attachment.fileName ?: stringResource(R.string.conv_image),
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .mediaBubble(aspect)
@@ -2021,7 +2026,7 @@ private fun AudioAttachmentRow(attachment: DownloadedAttachment, audioPlayer: Au
         ) {
             Icon(
                 if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = if (playing) "Pause" else "Play",
+                contentDescription = if (playing) stringResource(R.string.conv_pause) else stringResource(R.string.conv_play),
                 tint = Color.White,
             )
         }
@@ -2105,7 +2110,7 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
     val shape = RoundedCornerShape(8.dp)
     if (parent == null) {
         Text(
-            "Original message not available",
+            stringResource(R.string.conv_original_unavailable),
             style = MaterialTheme.typography.labelSmall,
             color = Theme.colors.secondaryText,
             modifier = Modifier
@@ -2127,7 +2132,7 @@ private fun QuoteBox(parent: MessageRow?, myAlias: String) {
     ) {
         Text(name, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = PersonHue.of(hueKey).fill)
         Text(
-            if (parent.deleted) "Message deleted" else MessageMarkup.plainText(previewContent(parent)),
+            if (parent.deleted) stringResource(R.string.conv_message_deleted_short) else MessageMarkup.plainText(previewContent(parent)),
             style = MaterialTheme.typography.labelSmall,
             color = Theme.colors.secondaryText,
             maxLines = 1,
@@ -2151,7 +2156,7 @@ private fun BoostChip(boosts: BoostSummary) {
         Modifier
             .clip(RoundedCornerShape(10.dp))
             .background(Theme.colors.fieldFill)
-            .clickable(onClickLabel = "Show who boosted") { showing = true }
+            .clickable(onClickLabel = stringResource(R.string.conv_show_boosters)) { showing = true }
             .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2191,8 +2196,8 @@ private fun BoostersDialog(boosts: BoostSummary, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = {
             Column {
-                Text("Boosts")
-                Text(boostSummaryLine(boosts), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.conv_boosts))
+                Text(LocalContext.current.resources.getQuantityString(R.plurals.conv_boosts_summary, boosts.count, formattedSats(boosts.totalMsat), boosts.count), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
             }
         },
         text = {
@@ -2213,7 +2218,7 @@ private fun BoostersDialog(boosts: BoostSummary, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text(stringResource(R.string.conv_done)) } },
     )
 }
 
@@ -2225,7 +2230,7 @@ private fun formattedSats(msat: Long): String =
 @Composable
 private fun AgentTag() {
     Text(
-        "AGENT",
+        stringResource(R.string.conv_agent_tag),
         style = MaterialTheme.typography.labelSmall,
         color = Theme.colors.secondaryText,
         modifier = Modifier
@@ -2329,7 +2334,7 @@ private fun Composer(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Replying to $name",
+                        stringResource(R.string.conv_replying_to, name),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = Theme.colors.text,
@@ -2343,7 +2348,7 @@ private fun Composer(
                     )
                 }
                 IconButton(onClick = onCancelReply, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.Close, contentDescription = "Stop replying", tint = Theme.colors.secondaryText)
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.conv_stop_replying), tint = Theme.colors.secondaryText)
                 }
             }
         }
@@ -2365,17 +2370,17 @@ private fun Composer(
             if (field.text != text) field = TextFieldValue(text, TextRange(text.length))
             Box {
                 IconButton(onClick = { attachMenuOpen = true }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Add, contentDescription = "Attach", tint = Theme.colors.secondaryText)
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.conv_attach), tint = Theme.colors.secondaryText)
                 }
                 DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
-                    DropdownMenuItem(text = { Text("Photo") }, onClick = { attachMenuOpen = false; onPickPhoto() })
-                    DropdownMenuItem(text = { Text("Camera") }, onClick = { attachMenuOpen = false; onTakePhoto() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.conv_photo)) }, onClick = { attachMenuOpen = false; onPickPhoto() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.conv_camera)) }, onClick = { attachMenuOpen = false; onTakePhoto() })
                     // Any file, including a video — PeelCore's own iPhone
                     // app has no dedicated video picker either; a video
                     // reaches the send path through this same option there.
-                    DropdownMenuItem(text = { Text("File") }, onClick = { attachMenuOpen = false; onPickFile() })
-                    if (onSendSats != null) DropdownMenuItem(text = { Text("Send sats") }, onClick = { attachMenuOpen = false; onSendSats() })
-                    if (onRequestSats != null) DropdownMenuItem(text = { Text("Request sats") }, onClick = { attachMenuOpen = false; onRequestSats() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.conv_file)) }, onClick = { attachMenuOpen = false; onPickFile() })
+                    if (onSendSats != null) DropdownMenuItem(text = { Text(stringResource(R.string.conv_send_sats)) }, onClick = { attachMenuOpen = false; onSendSats() })
+                    if (onRequestSats != null) DropdownMenuItem(text = { Text(stringResource(R.string.conv_request_sats)) }, onClick = { attachMenuOpen = false; onRequestSats() })
                 }
             }
             Box(
@@ -2400,7 +2405,7 @@ private fun Composer(
                         )
                         Spacer(Modifier.weight(1f))
                         Text(
-                            if (recorder.isCancelling) "Release to cancel" else "‹ Slide to cancel",
+                            if (recorder.isCancelling) stringResource(R.string.conv_release_to_cancel) else stringResource(R.string.conv_slide_to_cancel),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (recorder.isCancelling) Theme.colors.destructive else Theme.colors.secondaryText,
                         )
@@ -2440,7 +2445,7 @@ private fun Composer(
                         .clickable(onClick = onSend),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.ArrowUpward, contentDescription = "Send", tint = Theme.colors.buttonText)
+                    Icon(Icons.Filled.ArrowUpward, contentDescription = stringResource(R.string.conv_send), tint = Theme.colors.buttonText)
                 }
             } else {
                 // Press and hold to record, release to send, slide left
@@ -2478,7 +2483,7 @@ private fun Composer(
                 ) {
                     Icon(
                         Icons.Filled.Mic,
-                        contentDescription = "Record a voice message",
+                        contentDescription = stringResource(R.string.conv_record_voice),
                         tint = if (recorder.isRecording) Theme.colors.buttonText else Theme.colors.secondaryText,
                     )
                 }

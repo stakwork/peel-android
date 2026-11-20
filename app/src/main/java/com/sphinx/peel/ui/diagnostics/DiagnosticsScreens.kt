@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.diagnostics
 
 import androidx.compose.foundation.background
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -70,17 +72,17 @@ fun DiagnosticsNotice(storage: Storage, modifier: Modifier = Modifier) {
             Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = Theme.colors.attention, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(10.dp))
             Text(
-                "Peel recorded a problem from the last run. The record stays on this phone.",
+                stringResource(R.string.misc_diag_notice),
                 style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text,
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(
-                "Show record", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.accent,
+                stringResource(R.string.misc_diag_show_record), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.accent,
                 modifier = Modifier.clickable { scope.launch { DiagnosticsModel.showRecord(storage) } },
             )
             Text(
-                "Dismiss", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
+                stringResource(R.string.misc_diag_dismiss), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
                 modifier = Modifier.clickable { DiagnosticsModel.notice = false },
             )
         }
@@ -98,19 +100,19 @@ fun DiagnosticRecordSheet() {
     Dialog(onDismissRequest = DiagnosticsModel::closeRecord, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Theme.colors.background).padding(horizontal = 16.dp)) {
             Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
-                Text("Problem record", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+                Text(stringResource(R.string.misc_diag_problem_record), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
                 Box(Modifier.align(Alignment.CenterEnd).size(44.dp).clip(CircleShape).clickable(onClick = DiagnosticsModel::closeRecord), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = Theme.colors.text)
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.misc_close), tint = Theme.colors.text)
                 }
             }
             MonoText(text, Modifier.weight(1f))
-            Caption("Names, amounts, keys and paths are removed where Peel could find them. Nothing has been sent.")
+            Caption(stringResource(R.string.misc_diag_redacted))
             Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SecondaryAction(if (copied) "Copied" else "Copy", Modifier.weight(1f)) {
+                SecondaryAction(if (copied) stringResource(R.string.misc_copied) else stringResource(R.string.misc_copy), Modifier.weight(1f)) {
                     DiagnosticsExport.copy(context, text)
                     copied = true
                 }
-                SecondaryAction("Delete", Modifier.weight(1f)) { DiagnosticsModel.deleteRecord() }
+                SecondaryAction(stringResource(R.string.misc_delete), Modifier.weight(1f)) { DiagnosticsModel.deleteRecord() }
             }
         }
     }
@@ -136,38 +138,37 @@ fun DiagnosticsScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
-            Text("Diagnostics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+            Text(stringResource(R.string.misc_diag_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
             Row(Modifier.fillMaxWidth()) { com.sphinx.peel.ui.you.BackButton(onBack) }
         }
         MonoText(text, Modifier.weight(1f))
         Caption(
-            "Enums and numbers only: no names, messages, amounts or keys. The record stays on this phone; " +
-                "Copy and Share are yours to use, nothing is sent automatically.",
+            stringResource(R.string.misc_diag_caption),
         )
         Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SecondaryAction("Refresh", Modifier.weight(1f)) { scope.launch { load() } }
-            SecondaryAction(if (copied) "Copied" else "Copy", Modifier.weight(1f)) {
+            SecondaryAction(stringResource(R.string.misc_refresh), Modifier.weight(1f)) { scope.launch { load() } }
+            SecondaryAction(if (copied) stringResource(R.string.misc_copied) else stringResource(R.string.misc_copy), Modifier.weight(1f)) {
                 DiagnosticsExport.copy(context, text)
                 copied = true
             }
-            SecondaryAction("Share", Modifier.weight(1f)) { DiagnosticsExport.share(context, text) }
-            SecondaryAction("Clear", Modifier.weight(1f)) { confirmingClear = true }
+            SecondaryAction(stringResource(R.string.misc_share), Modifier.weight(1f)) { DiagnosticsExport.share(context, text) }
+            SecondaryAction(stringResource(R.string.misc_clear), Modifier.weight(1f)) { confirmingClear = true }
         }
     }
 
     if (confirmingClear) {
         AlertDialog(
             onDismissRequest = { confirmingClear = false },
-            title = { Text("Clear the event record?") },
-            text = { Text("Crash records are kept.") },
+            title = { Text(stringResource(R.string.misc_diag_clear_title)) },
+            text = { Text(stringResource(R.string.misc_diag_clear_body)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingClear = false
                     Diagnostics.clearEvents()
                     scope.launch { load() }
-                }) { Text("Clear", color = Theme.colors.destructive) }
+                }) { Text(stringResource(R.string.misc_clear), color = Theme.colors.destructive) }
             },
-            dismissButton = { TextButton(onClick = { confirmingClear = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmingClear = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 }

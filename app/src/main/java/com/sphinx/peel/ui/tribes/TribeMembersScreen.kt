@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.tribes
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -51,13 +54,19 @@ fun TribeMembersScreen(engine: Engine, chat: String, tribeName: String, isOwner:
     var kicking by remember(chat) { mutableStateOf<TribeMember?>(null) }
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
+    val readFailedText = stringResource(R.string.ppl_members_read_failed)
+    val didNotGoThroughText = stringResource(R.string.ppl_didnt_go_through)
+    val approvedText = stringResource(R.string.ppl_approved)
+    val rejectedText = stringResource(R.string.ppl_rejected)
+    val removedText = stringResource(R.string.ppl_removed)
+    val thisMemberText = stringResource(R.string.ppl_this_member)
 
     LaunchedEffect(chat, reload) {
         try {
             members = engine.tribeMembers(chat)
             problem = null
         } catch (e: Exception) {
-            problem = e.message ?: "Could not read the members."
+            problem = e.message ?: readFailedText
         }
     }
 
@@ -69,14 +78,14 @@ fun TribeMembersScreen(engine: Engine, chat: String, tribeName: String, isOwner:
                 toast.show(done, ToastType.Success)
                 reload++
             } catch (e: Exception) {
-                problem = e.message ?: "That did not go through."
+                problem = e.message ?: didNotGoThroughText
             } finally {
                 busy = false
             }
         }
     }
 
-    PageFrame("Members of #$tribeName", onBack) {
+    PageFrame(stringResource(R.string.ppl_members_of, tribeName), onBack) {
         problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
         val shown = members
         if (shown == null) {
@@ -85,26 +94,26 @@ fun TribeMembersScreen(engine: Engine, chat: String, tribeName: String, isOwner:
             val pending = shown.filter { it.pending }
             val joined = shown.filter { !it.pending }
             if (pending.isNotEmpty()) {
-                Text("Waiting to join", style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText, modifier = Modifier.padding(vertical = 8.dp))
+                Text(stringResource(R.string.ppl_waiting_to_join), style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText, modifier = Modifier.padding(vertical = 8.dp))
                 for (member in pending) {
                     MemberRow(member) {
                         if (isOwner) {
-                            OutlinedButton(enabled = !busy, onClick = { act("Approved.") { engine.approveMember(chat, member) } }) { Text("Approve") }
+                            OutlinedButton(enabled = !busy, onClick = { act(approvedText) { engine.approveMember(chat, member) } }) { Text(stringResource(R.string.ppl_approve)) }
                             Spacer(Modifier.width(8.dp))
-                            OutlinedButton(enabled = !busy, onClick = { act("Rejected.") { engine.rejectMember(chat, member) } }) { Text("Reject") }
+                            OutlinedButton(enabled = !busy, onClick = { act(rejectedText) { engine.rejectMember(chat, member) } }) { Text(stringResource(R.string.ppl_reject)) }
                         }
                     }
                 }
                 Spacer(Modifier.height(16.dp))
             }
-            Text("Members", style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText, modifier = Modifier.padding(vertical = 8.dp))
+            Text(stringResource(R.string.ppl_members), style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText, modifier = Modifier.padding(vertical = 8.dp))
             if (joined.isEmpty()) {
-                Text("No members to show yet.", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.ppl_no_members), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
             }
             for (member in joined) {
                 MemberRow(member) {
                     if (isOwner && member.pubkey != engine.accountKey) {
-                        TextButton(enabled = !busy, onClick = { kicking = member }) { Text("Remove", color = Theme.colors.destructive) }
+                        TextButton(enabled = !busy, onClick = { kicking = member }) { Text(stringResource(R.string.ppl_remove), color = Theme.colors.destructive) }
                     }
                 }
             }
@@ -114,21 +123,22 @@ fun TribeMembersScreen(engine: Engine, chat: String, tribeName: String, isOwner:
     kicking?.let { member ->
         AlertDialog(
             onDismissRequest = { kicking = null },
-            title = { Text("Remove ${member.alias ?: "this member"}?") },
-            text = { Text("They are taken out of #$tribeName.") },
+            title = { Text(stringResource(R.string.ppl_remove_member_title, member.alias ?: thisMemberText)) },
+            text = { Text(stringResource(R.string.ppl_remove_member_body, tribeName)) },
             confirmButton = {
-                TextButton(onClick = { kicking = null; act("Removed.") { engine.kickMember(chat, member.pubkey) } }) {
-                    Text("Remove", color = Theme.colors.destructive)
+                TextButton(onClick = { kicking = null; act(removedText) { engine.kickMember(chat, member.pubkey) } }) {
+                    Text(stringResource(R.string.ppl_remove), color = Theme.colors.destructive)
                 }
             },
-            dismissButton = { TextButton(onClick = { kicking = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { kicking = null }) { Text(stringResource(R.string.ppl_cancel)) } },
         )
     }
 }
 
 @Composable
 private fun MemberRow(member: TribeMember, actions: @Composable () -> Unit) {
-    val name = member.alias ?: member.pubkey.take(12).ifEmpty { "Someone" }
+    val someone = stringResource(R.string.ppl_someone)
+    val name = member.alias ?: member.pubkey.take(12).ifEmpty { someone }
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Avatar(name, member.photoUrl, 40.dp, PersonHue.of(member.pubkey.ifEmpty { name }))
         Spacer(Modifier.width(12.dp))

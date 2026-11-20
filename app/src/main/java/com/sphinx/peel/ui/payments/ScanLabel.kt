@@ -11,34 +11,53 @@ import java.util.Locale
 
 /// The short name the scanner's pill shows for what the camera read (the iOS Camera's
 /// "Open in Safari" pill): a host for a web address, a word for the links Peel knows.
+/// The words a pill label is made of; [English] is what the JVM tests read, the scanner passes string resources.
+class ScanWords(
+    val openInPeel: String,
+    val openHostInPeel: (String) -> String,
+    val linkBox: String,
+    val invite: String,
+    val contact: String,
+    val tribe: String,
+    val invoice: String,
+    val invoiceAmount: (String) -> String,
+) {
+    companion object {
+        val English = ScanWords(
+            "Open in Peel", { "Open $it in Peel" }, "Link a box", "Sphinx invite", "Contact", "Tribe",
+            "Lightning invoice", { "Lightning invoice · $it" },
+        )
+    }
+}
+
 object ScanLabel {
     private const val LONGEST = 30
     private val BOLT11 = Regex("^ln(?:bcrt|bc|tb|sb)([0-9]*)([munp]?)1[a-z0-9]{20,}$")
 
-    fun of(raw: String, locale: Locale = Locale.getDefault()): String {
+    fun of(raw: String, locale: Locale = Locale.getDefault(), words: ScanWords = ScanWords.English): String {
         val text = raw.trim()
         val lower = text.lowercase()
         if (lower.startsWith("peel://open")) {
             val host = param(text, "url")?.let { Seller.host(it) ?: web(it) }
-            return if (host == null) "Open in Peel" else "Open $host in Peel"
+            return if (host == null) words.openInPeel else words.openHostInPeel(host)
         }
-        if (lower.startsWith("peel://strut")) return "Link a box"
-        if (InviteLink.fromDeepLink(scheme(text), param(text, "action"), text) != null) return "Sphinx invite"
+        if (lower.startsWith("peel://strut")) return words.linkBox
+        if (InviteLink.fromDeepLink(scheme(text), param(text, "action"), text) != null) return words.invite
         web(text)?.let { return it }
-        invoice(text, locale)?.let { return it }
-        if (ContactCode.contactInfo(text) != null) return "Contact"
-        if (isTribe(text)) return "Tribe"
+        invoice(text, locale, words)?.let { return it }
+        if (ContactCode.contactInfo(text) != null) return words.contact
+        if (isTribe(text)) return words.tribe
         return if (text.length <= LONGEST) text else text.take(LONGEST).trimEnd() + "…"
     }
 
     /// "Lightning invoice", with the amount when the invoice's prefix states one
     /// (`lnbc2500u1…`: 2,500 µBTC), read without the core.
-    private fun invoice(raw: String, locale: Locale): String? {
+    private fun invoice(raw: String, locale: Locale, words: ScanWords): String? {
         var text = raw.trim().lowercase()
         if (text.startsWith("lightning:")) text = text.removePrefix("lightning:")
         if (PaymentInput.parse(text) !is PaymentInput.Bolt11) return null
         val match = BOLT11.matchEntire(text) ?: return null
-        val digits = match.groupValues[1].toBigIntegerOrNull() ?: return "Lightning invoice"
+        val digits = match.groupValues[1].toBigIntegerOrNull() ?: return words.invoice
         val msat = when (match.groupValues[2]) {
             "m" -> digits.multiply(java.math.BigInteger.valueOf(100_000_000))
             "u" -> digits.multiply(java.math.BigInteger.valueOf(100_000))
@@ -46,8 +65,8 @@ object ScanLabel {
             "p" -> digits.divide(java.math.BigInteger.TEN)
             else -> digits.multiply(java.math.BigInteger.valueOf(100_000_000_000))
         }
-        if (msat.signum() <= 0 || msat.bitLength() > 62) return "Lightning invoice"
-        return "Lightning invoice · ${Sats.format(msat.toLong(), locale)}"
+        if (msat.signum() <= 0 || msat.bitLength() > 62) return words.invoice
+        return words.invoiceAmount(Sats.format(msat.toLong(), locale))
     }
 
     /// The host of an http(s) address, without "www.".

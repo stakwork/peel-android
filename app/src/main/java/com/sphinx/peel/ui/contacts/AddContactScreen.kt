@@ -1,5 +1,8 @@
 package com.sphinx.peel.ui.contacts
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -57,10 +60,14 @@ fun AddContactScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) ->
     val clipboard = LocalClipboardManager.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
+    val addedText = stringResource(R.string.ppl_contact_added)
+    val alreadyText = stringResource(R.string.ppl_contact_already)
+    val notConnectedText = stringResource(R.string.ppl_not_connected)
+    val addFailedText = stringResource(R.string.ppl_add_failed)
 
     if (scanning) {
         CodeScanner(
-            prompt = "Point the camera at their contact code.",
+            prompt = stringResource(R.string.ppl_scan_contact_prompt),
             accept = { text -> code = text.trim(); scanning = false; null },
             onCancel = { scanning = false },
         )
@@ -77,50 +84,49 @@ fun AddContactScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) ->
                 val (pubkey, added) = engine.addContactByCode(
                     code, alias = name.ifBlank { null }, confirmedMsat = confirmed, routeHint = routeHint.takeIf { bareKey },
                 )
-                toast.show(if (added) "Added. Their key is on its way." else "They are already your contact.", ToastType.Success)
+                toast.show(if (added) addedText else alreadyText, ToastType.Success)
                 onOpenChat(pubkey)
             } catch (e: PaymentRefused) {
                 val ask = e.confirmMsat
                 if (ask != null) confirmMsat = ask else problem = e.message
             } catch (e: NotConnectedException) {
-                problem = "Not connected. Try again in a moment."
+                problem = notConnectedText
             } catch (e: InviteRefused) {
                 problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not add them."
+                problem = e.message ?: addFailedText
             } finally {
                 working = false
             }
         }
     }
 
-    PageFrame("Add contact", onBack) {
+    PageFrame(stringResource(R.string.ppl_add_contact), onBack) {
         Text(
-            "Paste their contact code, or scan it. Adding them costs ${Sats.format(KEY_EXCHANGE_MSAT)} " +
-                "(and ${Sats.format(PING_MSAT)} for the ping), which they get as you meet.",
+            stringResource(R.string.ppl_add_contact_hint, Sats.format(KEY_EXCHANGE_MSAT), Sats.format(PING_MSAT)),
             style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
         )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
-            value = code, onValueChange = { code = it.take(3_000) }, label = { Text("Contact code") },
+            value = code, onValueChange = { code = it.take(3_000) }, label = { Text(stringResource(R.string.ppl_contact_code)) },
             textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-            OutlinedButton(onClick = { clipboard.getText()?.text?.let { code = it.trim() } }) { Text("Paste") }
-            OutlinedButton(onClick = { scanning = true }) { Text("Scan QR") }
+            OutlinedButton(onClick = { clipboard.getText()?.text?.let { code = it.trim() } }) { Text(stringResource(R.string.ppl_paste)) }
+            OutlinedButton(onClick = { scanning = true }) { Text(stringResource(R.string.ppl_scan_qr)) }
         }
         if (bareKey) {
             OutlinedTextField(
                 value = routeHint, onValueChange = { routeHint = it.trim().take(100) },
-                label = { Text("Route hint (lsp_scid)") }, singleLine = true,
+                label = { Text(stringResource(R.string.ppl_route_hint)) }, singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
         }
         OutlinedTextField(
-            value = name, onValueChange = { name = it.take(100) }, label = { Text("Name (optional)") },
+            value = name, onValueChange = { name = it.take(100) }, label = { Text(stringResource(R.string.ppl_name_optional)) },
             singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
@@ -131,17 +137,17 @@ fun AddContactScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) ->
             modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
         ) {
-            if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text("Add")
+            if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text(stringResource(R.string.ppl_add))
         }
     }
 
     confirmMsat?.let { amount ->
         AlertDialog(
             onDismissRequest = { confirmMsat = null },
-            title = { Text("Add this contact?") },
-            text = { Text("This sends ${Sats.format(amount)} to start the key exchange.") },
-            confirmButton = { TextButton(onClick = { confirmMsat = null; add(amount) }) { Text("Add", color = Theme.colors.accent) } },
-            dismissButton = { TextButton(onClick = { confirmMsat = null }) { Text("Cancel") } },
+            title = { Text(stringResource(R.string.ppl_add_this_title)) },
+            text = { Text(stringResource(R.string.ppl_add_sends, Sats.format(amount))) },
+            confirmButton = { TextButton(onClick = { confirmMsat = null; add(amount) }) { Text(stringResource(R.string.ppl_add), color = Theme.colors.accent) } },
+            dismissButton = { TextButton(onClick = { confirmMsat = null }) { Text(stringResource(R.string.ppl_cancel)) } },
         )
     }
 }

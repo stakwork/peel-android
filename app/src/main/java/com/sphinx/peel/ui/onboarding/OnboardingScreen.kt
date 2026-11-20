@@ -1,5 +1,6 @@
 package com.sphinx.peel.ui.onboarding
 
+import com.sphinx.peel.ui.str
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +38,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.ErrorText
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -104,6 +109,7 @@ fun OnboardingScreen(
     var name by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     androidx.compose.runtime.LaunchedEffect(inviteLink) {
         if (inviteLink != null && (step is Step.Welcome || step is Step.Invite)) {
@@ -144,7 +150,7 @@ fun OnboardingScreen(
     // the keypad would freeze for a second or more.
     fun finishPin() {
         if (confirmation != pin) {
-            problem = "The PINs don't match. Set it again."
+            problem = context.str(R.string.onboarding_pins_dont_match)
             pin = ""
             confirmation = ""
             step = Step.SetPin
@@ -189,7 +195,7 @@ fun OnboardingScreen(
                 pin = ""
                 confirmation = ""
             } catch (e: Exception) {
-                problem = e.message ?: "Could not save the account."
+                problem = ErrorText.text(context, e, R.string.err_could_not_save)
                 confirmation = ""
                 // A signup that ended with no account (no connection, the broker refusing): back to the
                 // invite, which is still filled in; the PIN is asked again after it.
@@ -210,19 +216,19 @@ fun OnboardingScreen(
         )
         Step.Invite -> if (scanning) {
             com.sphinx.peel.ui.payments.CodeScanner(
-                prompt = "Point the camera at the invite's QR code.",
+                prompt = stringResource(R.string.onboarding_scan_prompt),
                 accept = { text ->
                     // Whatever it holds is untrusted text: only an invite is taken.
                     val ok = runCatching { InviteLink.parse(text) }.isSuccess
-                    if (ok) { inviteText = text; scanning = false; null } else "That code isn't a Sphinx invite."
+                    if (ok) { inviteText = text; scanning = false; null } else context.str(R.string.onboarding_not_an_invite_code)
                 },
                 onCancel = { scanning = false },
             )
         } else StepScaffold(
-            title = "Paste your invite",
-            detail = "The link or code someone sent you.",
+            title = stringResource(R.string.onboarding_invite_title),
+            detail = stringResource(R.string.onboarding_invite_detail),
             problem = problem,
-            actionLabel = "Continue",
+            actionLabel = stringResource(R.string.common_continue),
             actionEnabled = inviteText.isNotBlank() && !working,
             working = working,
             stepNumber = 1,
@@ -240,7 +246,7 @@ fun OnboardingScreen(
                         problem = null
                         step = Step.Name
                     } catch (e: Exception) {
-                        problem = e.message ?: "That doesn't look like a Sphinx invite."
+                        problem = ErrorText.text(context, e, R.string.err_not_an_invite)
                     }
                     working = false
                 }
@@ -253,10 +259,10 @@ fun OnboardingScreen(
             )
         }
         Step.Name -> StepScaffold(
-            title = "What should people call you?",
-            detail = invite?.inviterAlias?.let { "$it invited you." },
+            title = stringResource(R.string.onboarding_name_title),
+            detail = invite?.inviterAlias?.let { stringResource(R.string.onboarding_invited_you, it) },
             problem = problem,
-            actionLabel = "Continue",
+            actionLabel = stringResource(R.string.common_continue),
             actionEnabled = name.isNotBlank(),
             stepNumber = 2,
             totalSteps = 3,
@@ -266,16 +272,16 @@ fun OnboardingScreen(
             androidx.compose.material3.OutlinedTextField(
                 value = name,
                 onValueChange = { name = it.take(MAX_NAME_LENGTH) },
-                label = { Text("Name") },
+                label = { Text(stringResource(R.string.onboarding_name_label)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         Step.EnterWords -> StepScaffold(
-            title = "Restore with recovery words",
-            detail = "Type them in order, or paste all twelve.",
+            title = stringResource(R.string.onboarding_restore),
+            detail = stringResource(R.string.onboarding_words_detail),
             problem = problem,
-            actionLabel = "Continue",
+            actionLabel = stringResource(R.string.common_continue),
             actionEnabled = enteredWords.all { it.isNotBlank() },
             stepNumber = 1,
             totalSteps = 2,
@@ -286,14 +292,14 @@ fun OnboardingScreen(
                     problem = null
                     step = Step.SetPin
                 } catch (e: Exception) {
-                    problem = "Those twelve words don't make a valid account. Check each one."
+                    problem = context.str(R.string.onboarding_words_invalid)
                 }
             },
         ) {
             WordEntry(words = enteredWords, onWordsChange = { enteredWords = it })
         }
         Step.SetPin -> StepScaffold(
-            title = "Set a PIN",
+            title = stringResource(R.string.onboarding_set_pin),
             problem = problem,
             hideAction = true,
             stepNumber = if (path == Path.RESTORE) 2 else 3,
@@ -308,7 +314,7 @@ fun OnboardingScreen(
             )
         }
         Step.ConfirmPin -> StepScaffold(
-            title = "Enter your PIN again",
+            title = stringResource(R.string.onboarding_confirm_pin),
             problem = problem,
             hideAction = true,
             working = working,
@@ -344,18 +350,18 @@ private fun InviteField(text: String, onTextChange: (String) -> Unit, onScan: ()
         androidx.compose.material3.OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
-            label = { Text("sphinx.chat://?action=i&d=…") },
+            label = { Text(stringResource(R.string.onboarding_invite_example)) },
             minLines = 2,
             maxLines = 5,
             trailingIcon = {
                 IconButton(onClick = onScan) {
-                    Icon(Icons.Filled.QrCodeScanner, contentDescription = "Scan QR code", tint = Theme.colors.accent)
+                    Icon(Icons.Filled.QrCodeScanner, contentDescription = stringResource(R.string.onboarding_scan_qr), tint = Theme.colors.accent)
                 }
             },
             modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { clipboard.getText()?.text?.let(onTextChange) }) { Text("Paste") }
+            OutlinedButton(onClick = { clipboard.getText()?.text?.let(onTextChange) }) { Text(stringResource(R.string.common_paste)) }
         }
     }
 }
@@ -367,10 +373,10 @@ private fun Welcome(problem: String?, onNewAccount: () -> Unit, onRestore: () ->
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("Welcome to Peel", style = MaterialTheme.typography.headlineMedium, color = Theme.colors.text)
+        Text(stringResource(R.string.onboarding_welcome), style = MaterialTheme.typography.headlineMedium, color = Theme.colors.text)
         Spacer(Modifier.height(10.dp))
         Text(
-            "Private messages, payments, and an assistant that works for you.",
+            stringResource(R.string.onboarding_tagline),
             style = MaterialTheme.typography.bodyLarge,
             color = Theme.colors.secondaryText,
             textAlign = TextAlign.Center,
@@ -381,14 +387,14 @@ private fun Welcome(problem: String?, onNewAccount: () -> Unit, onRestore: () ->
         }
         Spacer(Modifier.height(36.dp))
         Button(onClick = onNewAccount, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText)) {
-            Text("Join with an invite")
+            Text(stringResource(R.string.onboarding_join))
         }
         Spacer(Modifier.height(10.dp))
         OutlinedButton(onClick = onRestore, modifier = Modifier.fillMaxWidth()) {
-            Text("Restore with recovery words")
+            Text(stringResource(R.string.onboarding_restore))
         }
         Spacer(Modifier.height(12.dp))
-        Text("No invite? Ask a friend who uses Peel.", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+        Text(stringResource(R.string.onboarding_no_invite), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
     }
 }
 
@@ -404,7 +410,7 @@ private fun StepScaffold(
     title: String,
     detail: String? = null,
     problem: String? = null,
-    actionLabel: String = "Continue",
+    actionLabel: String = stringResource(R.string.common_continue),
     actionEnabled: Boolean = true,
     hideAction: Boolean = false,
     working: Boolean = false,
@@ -442,7 +448,7 @@ private fun StepScaffold(
                         onClick = onBack,
                         modifier = Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill),
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Theme.colors.text)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back), tint = Theme.colors.text)
                     }
                 }
                 if (stepNumber != null && totalSteps != null) {
@@ -480,6 +486,6 @@ private fun StepProgress(step: Int, totalSteps: Int) {
                 )
             }
         }
-        Text("Step $step of $totalSteps", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+        Text(stringResource(R.string.onboarding_step_of, step, totalSteps), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
     }
 }
