@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.apps
 
 import android.annotation.SuppressLint
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
@@ -825,23 +827,23 @@ fun OrgPageScreen(
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (onClose != null) {
                 Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Done", tint = Theme.colors.text) }
+                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, stringResource(R.string.misc_done), tint = Theme.colors.text) }
                 }
             }
             if (controller.canGoBack) {
                 if (onClose != null) Spacer(Modifier.width(8.dp))
-                IconButton(onClick = { controller.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Theme.colors.text) }
+                IconButton(onClick = { controller.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(if (onClose == null && !controller.canGoBack) 4.dp else 12.dp))
             Text(
                 page.title(controller.showsAnotherApp), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text,
             )
-            IconButton(onClick = { controller.reload() }) { Icon(Icons.Filled.Refresh, "Reload", tint = Theme.colors.secondaryText) }
+            IconButton(onClick = { controller.reload() }) { Icon(Icons.Filled.Refresh, stringResource(R.string.misc_apps_reload), tint = Theme.colors.secondaryText) }
         }
         if (!controller.walletOffered && page.walletScope.visitorHost != null) {
             Text(
-                "This device's web view can't offer Sign in with Sphinx.",
+                stringResource(R.string.misc_apps_no_signin),
                 Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,
             )
         }
@@ -880,10 +882,10 @@ fun OrgPageScreen(
     if (controller.locationSettingsOffer) {
         AlertDialog(
             onDismissRequest = { controller.locationSettingsOffer = false },
-            title = { Text("Location is off for Peel") },
+            title = { Text(stringResource(R.string.misc_apps_location_off)) },
             text = { Text(PageLocation.SETTINGS_NOTE) },
             confirmButton = { TextButton(onClick = { controller.locationSettingsOffer = false; controller.openPhoneSettings() }) { Text(PageLocation.OPEN_SETTINGS) } },
-            dismissButton = { TextButton(onClick = { controller.locationSettingsOffer = false }) { Text("Not now") } },
+            dismissButton = { TextButton(onClick = { controller.locationSettingsOffer = false }) { Text(stringResource(R.string.misc_apps_not_now)) } },
         )
     }
     controller.notice?.let { notice ->

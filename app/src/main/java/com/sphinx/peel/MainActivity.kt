@@ -410,13 +410,14 @@ private fun BoxesHousekeeping(engine: Engine, storage: Storage) {
 @Composable
 private fun InviterNotice(engine: Engine) {
     val toast = com.sphinx.peel.ui.toast.LocalToast.current
+    val context = LocalContext.current
     androidx.compose.runtime.LaunchedEffect(engine) {
         engine.inviterOutcome.collect { outcome ->
             when (outcome) {
                 is InviterFlow.Outcome.Failed ->
-                    toast.show("Adding the person who invited you didn't work: ${outcome.message}", com.sphinx.peel.ui.toast.ToastType.Error)
+                    toast.show(context.getString(com.sphinx.peel.R.string.dash_inviter_failed, outcome.message), com.sphinx.peel.ui.toast.ToastType.Error)
                 is InviterFlow.Outcome.WillRetry ->
-                    toast.show("Adding the person who invited you didn't work yet. Peel will try again.", com.sphinx.peel.ui.toast.ToastType.Warning)
+                    toast.show(context.getString(com.sphinx.peel.R.string.dash_inviter_will_retry), com.sphinx.peel.ui.toast.ToastType.Warning)
                 else -> {}
             }
         }

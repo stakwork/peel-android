@@ -1,6 +1,7 @@
 package com.sphinx.peel.push
 
 import android.content.Context
+import com.sphinx.peel.R
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.sphinx.peel.engine.ControlMessages
@@ -51,9 +52,9 @@ internal fun deliver(context: Context, storage: Storage, row: MessageRow, nowMs:
     when (row.type) {
         0 -> if (content.isNotBlank()) Notifications.showMessage(context, row.chat, name, content)
         ATTACHMENT_MESSAGE_TYPE ->
-            Notifications.showMessage(context, row.chat, name, content.ifBlank { "Sent an attachment" })
-        2 -> Notifications.showPayment(context, name, "Requested sats", row.chat)
-        5 -> Notifications.showPayment(context, name, "Sent you sats", row.chat)
+            Notifications.showMessage(context, row.chat, name, content.ifBlank { context.getString(R.string.misc_notif_attachment) })
+        2 -> Notifications.showPayment(context, name, context.getString(R.string.misc_notif_requested), row.chat)
+        5 -> Notifications.showPayment(context, name, context.getString(R.string.misc_notif_sent_sats), row.chat)
         CALL_MESSAGE_TYPE -> Notifications.showIncomingCall(context, row.chat, name)
     }
 }

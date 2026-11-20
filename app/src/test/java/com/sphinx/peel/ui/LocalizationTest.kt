@@ -21,24 +21,27 @@ class LocalizationTest {
     private class Res(val strings: Map<String, String>, val plurals: Map<String, Map<String, String>>, val untranslatable: Set<String>)
 
     private fun load(dir: String): Res {
-        val file = listOf("src/main/res/$dir/strings.xml", "app/src/main/res/$dir/strings.xml").map(::File).first { it.exists() }
-        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
+        val dirFile = listOf("src/main/res/$dir", "app/src/main/res/$dir").map(::File).first { it.isDirectory }
+        val files = dirFile.listFiles { f -> f.name.startsWith("strings") && f.name.endsWith(".xml") }!!.sortedBy { it.name }
+        val docs = files.map { DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(it) }
         val strings = linkedMapOf<String, String>()
         val skip = mutableSetOf<String>()
-        val nodes = doc.getElementsByTagName("string")
-        for (i in 0 until nodes.length) {
-            val e = nodes.item(i) as Element
-            strings[e.getAttribute("name")] = e.textContent
-            if (e.getAttribute("translatable") == "false") skip += e.getAttribute("name")
-        }
         val plurals = linkedMapOf<String, Map<String, String>>()
-        val pn = doc.getElementsByTagName("plurals")
-        for (i in 0 until pn.length) {
-            val e = pn.item(i) as Element
-            val items = e.getElementsByTagName("item")
-            plurals[e.getAttribute("name")] = (0 until items.length).associate {
-                val item = items.item(it) as Element
-                item.getAttribute("quantity") to item.textContent
+        for (doc in docs) {
+            val nodes = doc.getElementsByTagName("string")
+            for (i in 0 until nodes.length) {
+                val e = nodes.item(i) as Element
+                strings[e.getAttribute("name")] = e.textContent
+                if (e.getAttribute("translatable") == "false") skip += e.getAttribute("name")
+            }
+            val pn = doc.getElementsByTagName("plurals")
+            for (i in 0 until pn.length) {
+                val e = pn.item(i) as Element
+                val items = e.getElementsByTagName("item")
+                plurals[e.getAttribute("name")] = (0 until items.length).associate {
+                    val item = items.item(it) as Element
+                    item.getAttribute("quantity") to item.textContent
+                }
             }
         }
         return Res(strings, plurals, skip)

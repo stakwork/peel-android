@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -115,7 +117,7 @@ class PendingAttachments(private val context: Context) {
         try {
             // Copied with a cap: a huge file is refused without being held whole.
             var copied = 0L
-            val input = resolver.openInputStream(uri) ?: return@withContext "That file could not be read."
+            val input = resolver.openInputStream(uri) ?: return@withContext context.getString(R.string.dash_attach_unreadable)
             input.use { source ->
                 temp.outputStream().use { out ->
                     val buffer = ByteArray(64 * 1024)
@@ -148,7 +150,7 @@ class PendingAttachments(private val context: Context) {
                     type = "image/jpg"
                 } else if (picked) {
                     temp.delete()
-                    return@withContext "That doesn't look like an image."
+                    return@withContext context.getString(R.string.dash_attach_not_image)
                 } // else: undecodable, sent as it is (peel does the same).
                 if (!AgentAttachments.fits(size)) {
                     temp.delete()
@@ -160,7 +162,7 @@ class PendingAttachments(private val context: Context) {
             null
         } catch (e: Exception) {
             temp.delete()
-            e.message ?: "That file could not be read."
+            e.message ?: context.getString(R.string.dash_attach_unreadable)
         }
     }
 
@@ -195,7 +197,7 @@ class PendingAttachments(private val context: Context) {
             } catch (e: Exception) {
                 sight.restore(file.id, allowed)
                 sightTick++
-                errors += e.message ?: "Could not send ${file.name}."
+                errors += e.message ?: context.getString(R.string.dash_attach_send_failed, file.name)
             }
         }
         return SendOutcome(errors, captionSent)
@@ -237,7 +239,7 @@ fun PendingTray(pending: PendingAttachments, modifier: Modifier = Modifier) {
                             onClick = { pending.remove(file) },
                             modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).size(24.dp).clip(CircleShape).background(Theme.colors.fieldFill),
                         ) {
-                            Icon(Icons.Filled.Close, contentDescription = "Remove ${file.name}", tint = Theme.colors.text, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.dash_attach_remove, file.name), tint = Theme.colors.text, modifier = Modifier.size(14.dp))
                         }
                     }
                     if (file.isPicture) {

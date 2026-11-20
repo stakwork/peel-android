@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.call
 
 import android.app.Activity
+import com.sphinx.peel.R
+import androidx.compose.ui.res.stringResource
 import android.content.Context
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
@@ -94,7 +96,7 @@ import kotlinx.coroutines.delay
 fun CallScreen(phase: CallPhase, onHide: () -> Unit, onLeave: () -> Unit, onRetry: () -> Unit) {
     when (phase) {
         is CallPhase.Connecting -> Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
-            CallHeader(title = phase.title, status = "Connecting…", onBack = onHide)
+            CallHeader(title = phase.title, status = stringResource(R.string.misc_connecting), onBack = onHide)
             Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Theme.colors.accent)
             }
@@ -104,7 +106,7 @@ fun CallScreen(phase: CallPhase, onHide: () -> Unit, onLeave: () -> Unit, onRetr
             Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(phase.error, color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = onRetry) { Text("Try again") }
+                    TextButton(onClick = onRetry) { Text(stringResource(R.string.misc_call_try_again)) }
                 }
             }
         }
@@ -144,7 +146,7 @@ private fun CallHeader(title: String, status: String, onBack: () -> Unit) {
     Column {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Back to chats", tint = Theme.colors.text)
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = stringResource(R.string.misc_call_back_to_chats), tint = Theme.colors.text)
             }
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text, maxLines = 1)
@@ -204,7 +206,7 @@ private fun CallTileView(tile: CallTile, session: CallSession, pinned: Boolean, 
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Avatar(
-                    name = tile.person.nickname.ifEmpty { if (tile.isYou) "You" else tile.person.identity },
+                    name = tile.person.nickname.ifEmpty { if (tile.isYou) stringResource(R.string.misc_call_you) else tile.person.identity },
                     url = tile.person.avatarUrl, size = 64.dp, hue = PersonHue.of(tile.person.identity), shape = AvatarShape.CIRCLE,
                 )
             }
@@ -215,16 +217,16 @@ private fun CallTileView(tile: CallTile, session: CallSession, pinned: Boolean, 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (tile.muted) {
-                Icon(Icons.Filled.MicOff, contentDescription = "Muted", tint = Theme.colors.secondaryText, modifier = Modifier.size(12.dp))
+                Icon(Icons.Filled.MicOff, contentDescription = stringResource(R.string.misc_call_muted), tint = Theme.colors.secondaryText, modifier = Modifier.size(12.dp))
                 Spacer(Modifier.width(4.dp))
             }
             if (pinned) {
-                Icon(Icons.Filled.PushPin, contentDescription = "Pinned", tint = Theme.colors.secondaryText, modifier = Modifier.size(12.dp))
+                Icon(Icons.Filled.PushPin, contentDescription = stringResource(R.string.misc_call_pinned), tint = Theme.colors.secondaryText, modifier = Modifier.size(12.dp))
                 Spacer(Modifier.width(4.dp))
             }
-            val who = if (tile.isYou) "You" else tile.person.nickname.ifEmpty { tile.person.identity }
+            val who = if (tile.isYou) stringResource(R.string.misc_call_you) else tile.person.nickname.ifEmpty { tile.person.identity }
             Text(
-                if (tile.isScreen) "$who · screen" else who,
+                if (tile.isScreen) stringResource(R.string.misc_call_tile_screen, who) else who,
                 style = MaterialTheme.typography.labelSmall, color = Theme.colors.text, maxLines = 1,
             )
         }
@@ -290,31 +292,31 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
             }
             RoundControlButton(
                 icon = if (session.micOn) Icons.Filled.Mic else Icons.Filled.MicOff,
-                on = session.micOn, refused = session.micRefused, label = if (session.micOn) "Mute" else "Unmute",
+                on = session.micOn, refused = session.micRefused, label = if (session.micOn) stringResource(R.string.misc_call_mute) else stringResource(R.string.misc_call_unmute),
                 onClick = session::toggleMicrophone,
             )
             RoundControlButton(
                 icon = if (session.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
                 on = session.cameraOn, refused = session.cameraRefused,
-                label = if (session.cameraOn) "Turn camera off" else "Turn camera on",
+                label = if (session.cameraOn) stringResource(R.string.misc_call_camera_off) else stringResource(R.string.misc_call_camera_on),
                 onClick = session::toggleCamera,
             )
             Box {
                 RoundControlButton(
                     icon = if (session.sharing) Icons.Filled.StopScreenShare else Icons.Filled.PresentToAll,
                     on = session.sharing, refused = false,
-                    label = if (session.sharing) "Stop sharing" else "Share",
+                    label = if (session.sharing) stringResource(R.string.misc_call_stop_sharing) else stringResource(R.string.misc_call_share),
                     onClick = { if (session.sharing) session.stopScreenShare() else shareMenu = true },
                 )
                 DropdownMenu(expanded = shareMenu, onDismissRequest = { shareMenu = false }) {
-                    DropdownMenuItem(text = { Text("Share your screen") }, onClick = {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.misc_call_share_screen)) }, onClick = {
                         shareMenu = false
                         val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                         projection.launch(manager.createScreenCaptureIntent())
                     })
                     // A camera as the share (not the one that is your own video).
                     session.cameras().filter { !(session.cameraOn && it.selected) }.forEach { camera ->
-                        DropdownMenuItem(text = { Text("Share ${camera.label.lowercase()}") }, onClick = {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.misc_call_share_camera, camera.label.lowercase())) }, onClick = {
                             shareMenu = false
                             session.startCameraShare(camera.id)
                         })
@@ -322,38 +324,38 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
                 }
             }
             Box {
-                RoundControlButton(icon = Icons.Filled.Chat, on = session.chatOpen, refused = false, label = "Chat", onClick = { session.showChat(!session.chatOpen) })
+                RoundControlButton(icon = Icons.Filled.Chat, on = session.chatOpen, refused = false, label = stringResource(R.string.misc_call_chat), onClick = { session.showChat(!session.chatOpen) })
                 if (session.chatUnread > 0 && !session.chatOpen) {
                     Badge(Modifier.align(Alignment.TopEnd)) { Text(if (session.chatUnread > 9) "9+" else session.chatUnread.toString()) }
                 }
             }
             Box {
-                RoundControlButton(icon = Icons.Filled.MoreHoriz, on = true, refused = false, label = "Devices", onClick = { moreMenu = true })
+                RoundControlButton(icon = Icons.Filled.MoreHoriz, on = true, refused = false, label = stringResource(R.string.misc_call_devices), onClick = { moreMenu = true })
                 DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
                     val cameras = session.cameras()
                     val routes = session.audioRoutes()
                     if (cameras.isNotEmpty()) {
-                        Text("Camera", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                        Text(stringResource(R.string.misc_call_camera), Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
                         cameras.forEach { d ->
                             DropdownMenuItem(
                                 text = { Text(d.label) },
-                                trailingIcon = { if (d.selected) Icon(Icons.Filled.Check, contentDescription = "In use") },
+                                trailingIcon = { if (d.selected) Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.misc_call_in_use)) },
                                 onClick = { moreMenu = false; session.selectCamera(d.id) },
                             )
                         }
                     }
                     if (routes.isNotEmpty()) {
-                        Text("Microphone and speaker", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                        Text(stringResource(R.string.misc_call_mic_speaker), Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
                         routes.forEach { d ->
                             DropdownMenuItem(
                                 text = { Text(d.label) },
-                                trailingIcon = { if (d.selected) Icon(Icons.Filled.Check, contentDescription = "In use") },
+                                trailingIcon = { if (d.selected) Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.misc_call_in_use)) },
                                 onClick = { moreMenu = false; session.selectAudioRoute(d.id) },
                             )
                         }
                     }
                     if (session.cameraOn) {
-                        DropdownMenuItem(text = { Text("Flip camera") }, onClick = { moreMenu = false; session.flipCamera() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.misc_call_flip_camera)) }, onClick = { moreMenu = false; session.flipCamera() })
                     }
                 }
             }
@@ -361,16 +363,17 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
                 onClick = onLeave,
                 modifier = Modifier.size(64.dp, 52.dp).clip(RoundedCornerShape(50)).background(Theme.colors.destructive),
             ) {
-                Icon(Icons.Filled.CallEnd, contentDescription = "Leave the call", tint = Theme.colors.text)
+                Icon(Icons.Filled.CallEnd, contentDescription = stringResource(R.string.misc_call_leave), tint = Theme.colors.text)
             }
         }
         Spacer(Modifier.height(8.dp))
-        val refused = listOfNotNull(
-            "the microphone".takeIf { session.micRefused },
-            "the camera".takeIf { session.cameraRefused },
-        )
-        if (refused.isNotEmpty()) {
-            CallNote("Can't use ${refused.joinToString(" or ")}", action = "Open Settings") {
+        if (session.micRefused || session.cameraRefused) {
+            val cantUse = when {
+                session.micRefused && session.cameraRefused -> stringResource(R.string.misc_call_cant_both)
+                session.micRefused -> stringResource(R.string.misc_call_cant_mic)
+                else -> stringResource(R.string.misc_call_cant_camera)
+            }
+            CallNote(cantUse, action = stringResource(R.string.misc_call_open_settings)) {
                 context.startActivity(
                     android.content.Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
                 )
@@ -385,14 +388,14 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
             }
         }
         if (session.state == CallConnectionState.LOST) {
-            val text = if (session.connectedAtMs == null) "Could not connect to the call" else "Lost the connection to the call"
-            CallNote(text, action = "Rejoin", onAction = onRejoin)
+            val text = if (session.connectedAtMs == null) stringResource(R.string.misc_call_could_not_connect) else stringResource(R.string.misc_call_lost)
+            CallNote(text, action = stringResource(R.string.misc_call_rejoin), onAction = onRejoin)
         }
         if (session.isRecording) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.FiberManualRecord, contentDescription = null, tint = Theme.colors.destructive, modifier = Modifier.size(10.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("This call is being recorded", style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.misc_call_recorded), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
             }
         }
     }

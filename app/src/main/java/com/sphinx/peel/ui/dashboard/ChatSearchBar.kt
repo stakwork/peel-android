@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.dashboard
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -143,7 +145,7 @@ internal fun ChatSearchBar(
                     decorationBox = { inner ->
                         Box(contentAlignment = Alignment.CenterStart) {
                             if (search.text.isEmpty()) {
-                                Text("Search this chat", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
+                                Text(stringResource(R.string.dash_search_this_chat), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.secondaryText)
                             }
                             inner()
                         }
@@ -151,7 +153,7 @@ internal fun ChatSearchBar(
                 )
             }
             IconButton(onClick = onClose) {
-                Icon(Icons.Filled.Close, contentDescription = "Close search", tint = Theme.colors.text)
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.dash_close_search), tint = Theme.colors.text)
             }
         }
         Row(
@@ -173,13 +175,13 @@ internal fun ChatSearchBar(
             }
             // Matches run newest first: up goes to a NEWER match, down to an OLDER one.
             IconButton(onClick = { search.stepNewer()?.let(onJump) }, enabled = search.canStepNewer) {
-                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Newer match", tint = if (search.canStepNewer) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.4f))
+                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = stringResource(R.string.dash_newer_match), tint = if (search.canStepNewer) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.4f))
             }
             IconButton(onClick = { search.stepOlder()?.let(onJump) }, enabled = search.canStepOlder) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Older match", tint = if (search.canStepOlder) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.4f))
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = stringResource(R.string.dash_older_match), tint = if (search.canStepOlder) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.4f))
             }
             IconButton(onClick = { showResults = true }, enabled = search.matches.isNotEmpty()) {
-                Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Search results", tint = if (search.matches.isNotEmpty()) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.4f))
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.dash_search_results), tint = if (search.matches.isNotEmpty()) Theme.colors.text else Theme.colors.secondaryText.copy(alpha = 0.4f))
             }
         }
         HorizontalDivider(color = Theme.colors.divider)
@@ -208,13 +210,13 @@ private fun SearchResultsSheet(
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Theme.colors.background) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Search results",
+                stringResource(R.string.dash_search_results),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Theme.colors.text,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { scope.launch { sheetState.hide(); onDismiss() } }) { Text("Done", color = Theme.colors.accent) }
+            TextButton(onClick = { scope.launch { sheetState.hide(); onDismiss() } }) { Text(stringResource(R.string.dash_done), color = Theme.colors.accent) }
         }
         HorizontalDivider(color = Theme.colors.divider)
         LazyColumn(Modifier.fillMaxWidth()) {
@@ -252,7 +254,7 @@ private fun SearchResultsSheet(
                             )
                             if (row.threadUuid != null) {
                                 Spacer(Modifier.width(6.dp))
-                                Icon(Icons.Filled.Forum, contentDescription = "In a thread", tint = Theme.colors.secondaryText, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Filled.Forum, contentDescription = stringResource(R.string.dash_in_thread), tint = Theme.colors.secondaryText, modifier = Modifier.size(14.dp))
                             }
                             Spacer(Modifier.weight(1f))
                             row.timestamp?.let {

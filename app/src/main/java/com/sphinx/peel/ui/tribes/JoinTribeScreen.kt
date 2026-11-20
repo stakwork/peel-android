@@ -1,5 +1,9 @@
 package com.sphinx.peel.ui.tribes
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
+import com.sphinx.peel.ui.str
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -55,10 +59,15 @@ fun JoinTribeScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) -> 
     val clipboard = LocalClipboardManager.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val lookupFailedText = stringResource(R.string.ppl_lookup_failed)
+    val requestSentText = stringResource(R.string.ppl_request_sent)
+    val notConnectedText = stringResource(R.string.ppl_not_connected)
+    val joinFailedText = stringResource(R.string.ppl_join_failed)
 
     if (scanning) {
         CodeScanner(
-            prompt = "Point the camera at the tribe's QR code.",
+            prompt = stringResource(R.string.ppl_scan_tribe_prompt),
             accept = { scanned -> text = scanned.trim(); offer = null; scanning = false; null },
             onCancel = { scanning = false },
         )
@@ -74,7 +83,7 @@ fun JoinTribeScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) -> 
             } catch (e: TribeRefused) {
                 problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not look that up."
+                problem = e.message ?: lookupFailedText
             } finally {
                 working = false
             }
@@ -89,7 +98,7 @@ fun JoinTribeScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) -> 
             try {
                 val chat = engine.joinTribe(chosen, confirmed)
                 toast.show(
-                    if (chosen.info.isPrivate == true) "Request sent. The owner decides." else "Joined #${chosen.info.name}.",
+                    if (chosen.info.isPrivate == true) requestSentText else context.str(R.string.ppl_joined, chosen.info.name),
                     ToastType.Success,
                 )
                 onOpenChat(chat)
@@ -97,31 +106,31 @@ fun JoinTribeScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) -> 
                 val ask = e.confirmMsat
                 if (ask != null) confirmMsat = ask else problem = e.message
             } catch (e: NotConnectedException) {
-                problem = "Not connected. Try again in a moment."
+                problem = notConnectedText
             } catch (e: TribeRefused) {
                 problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not join."
+                problem = e.message ?: joinFailedText
             } finally {
                 working = false
             }
         }
     }
 
-    PageFrame("Join a tribe", onBack) {
+    PageFrame(stringResource(R.string.ppl_join_tribe), onBack) {
         Text(
-            "Paste a tribe link, a public key (add @host to name its server) or a uuid, or scan its QR code.",
+            stringResource(R.string.ppl_join_hint),
             style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
         )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
-            value = text, onValueChange = { text = it.take(2_000); offer = null }, label = { Text("Tribe link, key or uuid") },
+            value = text, onValueChange = { text = it.take(2_000); offer = null }, label = { Text(stringResource(R.string.ppl_tribe_link_field)) },
             textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-            OutlinedButton(onClick = { clipboard.getText()?.text?.let { text = it.trim(); offer = null } }) { Text("Paste") }
-            OutlinedButton(onClick = { scanning = true }) { Text("Scan QR") }
+            OutlinedButton(onClick = { clipboard.getText()?.text?.let { text = it.trim(); offer = null } }) { Text(stringResource(R.string.ppl_paste)) }
+            OutlinedButton(onClick = { scanning = true }) { Text(stringResource(R.string.ppl_scan_qr)) }
         }
         offer?.let { found ->
             Spacer(Modifier.height(8.dp))
@@ -131,14 +140,15 @@ fun JoinTribeScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) -> 
             }
             val join = ChatDetails.joinPrice(found.info.priceToJoinMsat)
             Text(
-                "To join: ${Sats.format(found.amountMsat)}" + (join.note?.let { " ($it)" } ?: ""),
+                join.note?.let { stringResource(R.string.ppl_to_join_note, Sats.format(found.amountMsat), it) }
+                    ?: stringResource(R.string.ppl_to_join, Sats.format(found.amountMsat)),
                 style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, modifier = Modifier.padding(top = 4.dp),
             )
             if (found.info.isPrivate == true) {
-                Text("The owner approves new members.", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.ppl_owner_approves), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
             }
             if (found.alreadyJoined) {
-                Text("You are already in this tribe.", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.ppl_already_in), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
             }
         }
         problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
@@ -150,17 +160,17 @@ fun JoinTribeScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) -> 
             colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
         ) {
             if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp)
-            else Text(if (offer == null) "Look up" else if (offer?.alreadyJoined == true) "Open" else "Join")
+            else Text(stringResource(if (offer == null) R.string.ppl_look_up else if (offer?.alreadyJoined == true) R.string.ppl_open else R.string.ppl_join))
         }
     }
 
     confirmMsat?.let { amount ->
         AlertDialog(
             onDismissRequest = { confirmMsat = null },
-            title = { Text("Join this tribe?") },
-            text = { Text("Joining sends ${Sats.format(amount)}.") },
-            confirmButton = { TextButton(onClick = { confirmMsat = null; join(amount) }) { Text("Join", color = Theme.colors.accent) } },
-            dismissButton = { TextButton(onClick = { confirmMsat = null }) { Text("Cancel") } },
+            title = { Text(stringResource(R.string.ppl_join_this_title)) },
+            text = { Text(stringResource(R.string.ppl_join_sends, Sats.format(amount))) },
+            confirmButton = { TextButton(onClick = { confirmMsat = null; join(amount) }) { Text(stringResource(R.string.ppl_join), color = Theme.colors.accent) } },
+            dismissButton = { TextButton(onClick = { confirmMsat = null }) { Text(stringResource(R.string.ppl_cancel)) } },
         )
     }
 }

@@ -1,5 +1,7 @@
 package com.sphinx.peel.ui.payments
 
+import androidx.compose.ui.res.stringResource
+import com.sphinx.peel.R
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -76,6 +78,8 @@ fun ReceiveScreen(engine: Engine, storage: Storage, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val couldNotMake = stringResource(R.string.pay_err_make_invoice)
+    val shareTitle = stringResource(R.string.pay_share_invoice)
 
     // Live status: the stored record moves as history arrives.
     LaunchedEffect(record?.paymentHash) {
@@ -86,20 +90,20 @@ fun ReceiveScreen(engine: Engine, storage: Storage, onBack: () -> Unit) {
         }
     }
 
-    PageFrame("Receive", onBack) {
+    PageFrame(stringResource(R.string.pay_receive), onBack) {
         val current = record
         if (current == null) {
-            Text("Make an invoice for the sats you want. Whoever pays it sends them to this account, even while Peel is closed.",
+            Text(stringResource(R.string.pay_receive_intro),
                 style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = amountText, onValueChange = { amountText = it.filter { c -> c.isDigit() || c == ',' } },
-                label = { Text("Amount (sats)") }, singleLine = true,
+                label = { Text(stringResource(R.string.pay_amount_sats)) }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
-                value = memo, onValueChange = { memo = it }, label = { Text("Memo (optional)") }, modifier = Modifier.fillMaxWidth(),
+                value = memo, onValueChange = { memo = it }, label = { Text(stringResource(R.string.pay_memo_optional)) }, modifier = Modifier.fillMaxWidth(),
             )
             problem?.let { Text(it, color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
             Spacer(Modifier.height(16.dp))
@@ -112,7 +116,7 @@ fun ReceiveScreen(engine: Engine, storage: Storage, onBack: () -> Unit) {
                         try {
                             record = engine.createInvoice(msat!!, memo)
                         } catch (e: Exception) {
-                            problem = e.message ?: "Could not make an invoice."
+                            problem = e.message ?: couldNotMake
                         } finally {
                             working = false
                         }
@@ -121,40 +125,41 @@ fun ReceiveScreen(engine: Engine, storage: Storage, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
             ) {
-                if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text("Make invoice")
+                if (working) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp) else Text(stringResource(R.string.pay_make_invoice))
             }
         } else {
             val expired = current.expiresAt?.let { it <= System.currentTimeMillis() } ?: false
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                QrCodeImage(current.bolt11.uppercase(), contentDescription = "QR code of the invoice for ${Sats.format(current.amountMsat)}")
+                QrCodeImage(current.bolt11.uppercase(), contentDescription = stringResource(R.string.pay_qr_desc, Sats.format(current.amountMsat)))
             }
             Spacer(Modifier.height(12.dp))
-            Text("Invoice for ${Sats.format(current.amountMsat)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+            Text(stringResource(R.string.pay_invoice_for, Sats.format(current.amountMsat)), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
             if (current.memo.isNotEmpty()) Text(current.memo, color = Theme.colors.secondaryText)
             Spacer(Modifier.height(8.dp))
             when {
                 current.status == InvoiceRecord.Status.PAID ->
-                    Text("Paid ${Sats.format(current.paidMsat ?: current.amountMsat)}", color = Theme.colors.confirmed, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.pay_paid_amount, Sats.format(current.paidMsat ?: current.amountMsat)), color = Theme.colors.confirmed, fontWeight = FontWeight.SemiBold)
                 current.status == InvoiceRecord.Status.UNDERPAID ->
-                    Text("Partly paid: ${Sats.number(current.paidMsat ?: 0)} of ${Sats.format(current.amountMsat)}. This invoice can't take the rest.", color = Theme.colors.attention)
-                expired -> Text("This invoice has expired. Nothing was paid.", color = Theme.colors.attention)
+                    Text(stringResource(R.string.pay_partly_paid, Sats.number(current.paidMsat ?: 0), Sats.format(current.amountMsat)), color = Theme.colors.attention)
+                expired -> Text(stringResource(R.string.pay_expired_nothing_paid), color = Theme.colors.attention)
                 else -> Text(
-                    "Waiting to be paid" + (current.expiresAt?.let { " · expires ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it))}" } ?: ""),
+                    current.expiresAt?.let { stringResource(R.string.pay_waiting_expires, DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it))) }
+                        ?: stringResource(R.string.pay_waiting),
                     color = Theme.colors.secondaryText,
                 )
             }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = { AndroidClipboardAccess.sensitive(context).copy(current.bolt11, SensitiveClipboard.DEFAULT_CLEAR_MS * 2) }, modifier = Modifier.weight(1f)) { Text("Copy") }
+                OutlinedButton(onClick = { AndroidClipboardAccess.sensitive(context).copy(current.bolt11, SensitiveClipboard.DEFAULT_CLEAR_MS * 2) }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.pay_copy)) }
                 OutlinedButton(
                     onClick = {
                         val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, current.bolt11)
-                        context.startActivity(Intent.createChooser(send, "Share invoice"))
+                        context.startActivity(Intent.createChooser(send, shareTitle))
                     },
                     modifier = Modifier.weight(1f),
-                ) { Text("Share") }
+                ) { Text(stringResource(R.string.pay_share)) }
             }
-            TextButton(onClick = { record = null; amountText = ""; memo = "" }) { Text(if (current.status == InvoiceRecord.Status.PAID) "Done" else "Another invoice", color = Theme.colors.accent) }
+            TextButton(onClick = { record = null; amountText = ""; memo = "" }) { Text(stringResource(if (current.status == InvoiceRecord.Status.PAID) R.string.pay_done else R.string.pay_another_invoice), color = Theme.colors.accent) }
         }
     }
 }
@@ -184,26 +189,26 @@ fun SendScreen(engine: Engine, storage: Storage, prefill: String = "", onBack: (
         PayInvoiceForm(engine, storage, input.bolt11, clear = { text = "" }, onBack = onBack, onReceive = onReceive)
         return
     }
-    PageFrame("Send", onBack) {
-        Text("Pay an invoice", style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText)
+    PageFrame(stringResource(R.string.pay_send), onBack) {
+        Text(stringResource(R.string.pay_pay_an_invoice), style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText)
         OutlinedTextField(
             value = text, onValueChange = { text = it }, placeholder = { Text("lnbc…") },
             textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             minLines = 1, maxLines = 4, modifier = Modifier.fillMaxWidth(),
         )
         when (input) {
-            is PaymentInput.Unsupported -> Text("That's ${input.kind}, which Peel can't pay. Paste a BOLT 11 invoice.", color = Theme.colors.attention, style = MaterialTheme.typography.bodySmall)
-            PaymentInput.Unknown -> Text("That isn't an invoice.", color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall)
+            is PaymentInput.Unsupported -> Text(stringResource(R.string.pay_unsupported, input.kind), color = Theme.colors.attention, style = MaterialTheme.typography.bodySmall)
+            PaymentInput.Unknown -> Text(stringResource(R.string.pay_not_invoice), color = Theme.colors.destructive, style = MaterialTheme.typography.bodySmall)
             else -> {}
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-            OutlinedButton(onClick = { clipboard.getText()?.text?.let { text = it.trim() } }) { Text("Paste") }
-            OutlinedButton(onClick = { scanning = true }) { Text("Scan") }
+            OutlinedButton(onClick = { clipboard.getText()?.text?.let { text = it.trim() } }) { Text(stringResource(R.string.pay_paste)) }
+            OutlinedButton(onClick = { scanning = true }) { Text(stringResource(R.string.pay_scan)) }
         }
         val contacts = remember { storage.conversations().filter { !it.isTribe } }
         if (contacts.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Text("Or send to a contact", style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText)
+            Text(stringResource(R.string.pay_or_send_contact), style = MaterialTheme.typography.labelLarge, color = Theme.colors.secondaryText)
             for (c in contacts) {
                 Text(
                     c.alias?.takeIf { it.isNotEmpty() } ?: c.chat.take(12), color = Theme.colors.text,
@@ -226,6 +231,7 @@ private fun PayInvoiceForm(engine: Engine, storage: Storage, bolt11: String, cle
     var problem by remember(bolt11) { mutableStateOf<String?>(null) }
     var confirming by remember(bolt11) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val couldNotPay = stringResource(R.string.pay_err_pay)
 
     LaunchedEffect(bolt11) {
         try {
@@ -253,48 +259,51 @@ private fun PayInvoiceForm(engine: Engine, storage: Storage, bolt11: String, cle
             } catch (e: PaymentRefused) {
                 if (e.confirmMsat != null) confirming = true else problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not pay."
+                problem = e.message ?: couldNotPay
             } finally {
                 working = false
             }
         }
     }
 
-    PageFrame("Pay an invoice", onBack) {
+    PageFrame(stringResource(R.string.pay_pay_an_invoice), onBack) {
         val inv = invoice
         if (inv == null) {
-            Text(readProblem ?: "Reading the invoice…", color = if (readProblem != null) Theme.colors.destructive else Theme.colors.secondaryText)
-            if (readProblem != null) TextButton(onClick = clear) { Text("Another invoice", color = Theme.colors.accent) }
+            Text(readProblem ?: stringResource(R.string.pay_reading_invoice), color = if (readProblem != null) Theme.colors.destructive else Theme.colors.secondaryText)
+            if (readProblem != null) TextButton(onClick = clear) { Text(stringResource(R.string.pay_another_invoice), color = Theme.colors.accent) }
             return@PageFrame
         }
-        Text("Invoice for", style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
+        Text(stringResource(R.string.pay_invoice_for_label), style = MaterialTheme.typography.labelMedium, color = Theme.colors.secondaryText)
         Text("${Sats.number(inv.amountMsat)} sats", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Theme.colors.text)
         Spacer(Modifier.height(8.dp))
         val contactName = storage.contact(inv.payee)?.alias
-        Fact("To", (contactName?.let { "$it · " } ?: "") + inv.payee.take(12) + if (contactName == null) ", not a contact" else "")
-        if (inv.memo.isNotEmpty()) Fact("Memo", inv.memo)
+        Fact(stringResource(R.string.pay_fact_to), if (contactName != null) stringResource(R.string.pay_payee_named, contactName, inv.payee.take(12)) else stringResource(R.string.pay_payee_unknown, inv.payee.take(12)))
+        if (inv.memo.isNotEmpty()) Fact(stringResource(R.string.pay_fact_memo), inv.memo)
         inv.expiresAtMs?.let {
-            Fact("Expires", (if (inv.isExpired()) "Expired at " else "At ") + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it)))
+            Fact(
+                stringResource(R.string.pay_fact_expires),
+                stringResource(if (inv.isExpired()) R.string.pay_expired_at else R.string.pay_expires_at, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it))),
+            )
         }
         val rec = record
         when {
             rec != null && rec.status == InvoiceRecord.Status.PAID ->
-                Text("Paid ${Sats.format(rec.amountMsat)}", color = Theme.colors.confirmed, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.pay_paid_amount, Sats.format(rec.amountMsat)), color = Theme.colors.confirmed, fontWeight = FontWeight.SemiBold)
             rec != null && (rec.status == InvoiceRecord.Status.PENDING || rec.status == InvoiceRecord.Status.UNSETTLED) ->
-                Text("Paying… It stays pending until the server says how it went, and is never sent twice.", color = Theme.colors.secondaryText)
+                Text(stringResource(R.string.pay_paying_pending), color = Theme.colors.secondaryText)
             blocker != null -> {
                 Text(blocker!!, color = Theme.colors.attention)
-                if (blocker!!.startsWith("That is more than your balance")) TextButton(onClick = onReceive) { Text("Receive sats", color = Theme.colors.accent) }
+                if (blocker!!.startsWith("That is more than your balance")) TextButton(onClick = onReceive) { Text(stringResource(R.string.pay_receive_sats), color = Theme.colors.accent) }
             }
             else -> {
-                if (rec?.status == InvoiceRecord.Status.FAILED) Text("Last try failed (${rec.error ?: "failed"}). Nothing was sent.", color = Theme.colors.attention)
-                Text("The routing fee is added on top.", style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
+                if (rec?.status == InvoiceRecord.Status.FAILED) Text(stringResource(R.string.pay_last_try_failed, rec.error ?: stringResource(R.string.pay_failed_word)), color = Theme.colors.attention)
+                Text(stringResource(R.string.pay_routing_fee), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText)
             }
         }
         problem?.let { Text(it, color = Theme.colors.destructive, modifier = Modifier.padding(top = 8.dp)) }
         Spacer(Modifier.height(16.dp))
         if (rec?.status == InvoiceRecord.Status.PAID) {
-            OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+            OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.pay_done)) }
         } else if (rec?.status != InvoiceRecord.Status.PENDING && rec?.status != InvoiceRecord.Status.UNSETTLED) {
             if (blocker == null) {
                 Button(
@@ -304,9 +313,9 @@ private fun PayInvoiceForm(engine: Engine, storage: Storage, bolt11: String, cle
                     enabled = !working,
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
-                ) { Text(if (working) "Paying…" else "Pay ${Sats.format(inv.amountMsat)}") }
+                ) { Text(if (working) stringResource(R.string.pay_paying) else stringResource(R.string.pay_pay_amount, Sats.format(inv.amountMsat))) }
             }
-            TextButton(onClick = clear, enabled = !working) { Text("Another invoice", color = Theme.colors.accent) }
+            TextButton(onClick = clear, enabled = !working) { Text(stringResource(R.string.pay_another_invoice), color = Theme.colors.accent) }
         }
         if (confirming) {
             ConfirmPaymentDialog(inv.amountMsat, onConfirm = { confirming = false; pay(inv.amountMsat) }, onDismiss = { confirming = false })
@@ -320,10 +329,10 @@ private fun PayInvoiceForm(engine: Engine, storage: Storage, bolt11: String, cle
 fun ConfirmPaymentDialog(amountMsat: Long, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Send ${Sats.format(amountMsat)}?") },
-        text = { Text("This is more than your confirmation limit. Check the amount before you send.") },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Send") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        title = { Text(stringResource(R.string.pay_send_amount_q, Sats.format(amountMsat))) },
+        text = { Text(stringResource(R.string.pay_confirm_limit)) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.pay_send)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.pay_cancel)) } },
     )
 }
 
@@ -338,6 +347,7 @@ private fun SendToContactForm(engine: Engine, storage: Storage, chat: String, on
     val scope = rememberCoroutineScope()
     val name = storage.contact(chat)?.alias?.takeIf { it.isNotEmpty() } ?: chat.take(12)
     val msat = Sats.msat(amountText)
+    val couldNotSend = stringResource(R.string.pay_err_send)
 
     fun send(confirmed: Long?) {
         working = true; problem = null
@@ -348,26 +358,26 @@ private fun SendToContactForm(engine: Engine, storage: Storage, chat: String, on
             } catch (e: PaymentRefused) {
                 if (e.confirmMsat != null) confirming = true else problem = e.message
             } catch (e: Exception) {
-                problem = e.message ?: "Could not send."
+                problem = e.message ?: couldNotSend
             } finally {
                 working = false
             }
         }
     }
 
-    PageFrame("Send to $name", onBack) {
+    PageFrame(stringResource(R.string.pay_send_to, name), onBack) {
         if (sent) {
-            Text("Sent ${Sats.format(msat ?: 0)} to $name.", color = Theme.colors.confirmed, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onDone) { Text("Done", color = Theme.colors.accent) }
+            Text(stringResource(R.string.pay_sent_to, Sats.format(msat ?: 0), name), color = Theme.colors.confirmed, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = onDone) { Text(stringResource(R.string.pay_done), color = Theme.colors.accent) }
             return@PageFrame
         }
         OutlinedTextField(
             value = amountText, onValueChange = { amountText = it.filter { c -> c.isDigit() || c == ',' } },
-            label = { Text("Amount (sats)") }, singleLine = true,
+            label = { Text(stringResource(R.string.pay_amount_sats)) }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text(stringResource(R.string.pay_note_optional)) }, modifier = Modifier.fillMaxWidth())
         problem?.let { Text(it, color = Theme.colors.destructive, modifier = Modifier.padding(top = 8.dp)) }
         Spacer(Modifier.height(16.dp))
         Button(
@@ -375,7 +385,7 @@ private fun SendToContactForm(engine: Engine, storage: Storage, chat: String, on
             onClick = { send(null) },
             modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Theme.colors.button, contentColor = Theme.colors.buttonText),
-        ) { Text(if (working) "Sending…" else "Send") }
+        ) { Text(if (working) stringResource(R.string.pay_sending) else stringResource(R.string.pay_send)) }
         if (confirming && msat != null) {
             ConfirmPaymentDialog(msat, onConfirm = { confirming = false; send(msat) }, onDismiss = { confirming = false })
         }

@@ -1,6 +1,7 @@
 package com.sphinx.peel.push
 
 import android.Manifest
+import androidx.annotation.StringRes
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -18,12 +19,12 @@ import com.sphinx.peel.R
 /// What a notification is about; one channel each, so the system's own
 /// settings can silence them separately (iOS: message, payments thread,
 /// "Started a call", `Notifier.swift`).
-enum class NotificationKind(val channelId: String, val label: String, val importance: Int) {
-    MESSAGES("messages", "Messages", NotificationManager.IMPORTANCE_HIGH),
-    PAYMENTS("payments", "Payments", NotificationManager.IMPORTANCE_HIGH),
-    CALLS("calls", "Calls", NotificationManager.IMPORTANCE_HIGH),
+enum class NotificationKind(val channelId: String, @StringRes val label: Int, val importance: Int) {
+    MESSAGES("messages", R.string.misc_notif_messages, NotificationManager.IMPORTANCE_HIGH),
+    PAYMENTS("payments", R.string.misc_notif_payments, NotificationManager.IMPORTANCE_HIGH),
+    CALLS("calls", R.string.misc_notif_calls, NotificationManager.IMPORTANCE_HIGH),
     /// The quiet, ongoing one a running call holds (`CallService`).
-    ONGOING_CALL("ongoing_call", "Ongoing call", NotificationManager.IMPORTANCE_LOW),
+    ONGOING_CALL("ongoing_call", R.string.misc_notif_ongoing, NotificationManager.IMPORTANCE_LOW),
 }
 
 /// Posts Peel's notifications. Ported from PeelUI's `Notifier.swift` in
@@ -46,7 +47,7 @@ object Notifications {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java)
         for (kind in NotificationKind.values()) {
-            manager.createNotificationChannel(NotificationChannel(kind.channelId, kind.label, kind.importance))
+            manager.createNotificationChannel(NotificationChannel(kind.channelId, context.getString(kind.label), kind.importance))
         }
     }
 
@@ -98,10 +99,10 @@ object Notifications {
     /// CallKit), but it can take the whole screen like one.
     fun showIncomingCall(context: Context, chat: String, who: String) {
         val open = openIntent(context, chat = chat, joinCall = true, requestCode = ("call" + chat).hashCode())
-        post(context, CALL_NOTIFICATION_ID, builder(context, NotificationKind.CALLS, who, "Started a call")
+        post(context, CALL_NOTIFICATION_ID, builder(context, NotificationKind.CALLS, who, context.getString(R.string.misc_notif_started_call))
             .setContentIntent(open)
             .setFullScreenIntent(open, true)
-            .addAction(0, "Join", open)
+            .addAction(0, context.getString(R.string.misc_notif_join), open)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setTimeoutAfter(60_000)
@@ -119,8 +120,8 @@ object Notifications {
 
     /// The notification a push shows when its payload carries nothing but
     /// an encrypted child index: iOS' generic line, "You have new messages".
-    fun showGeneric(context: Context, body: String = "You have new messages") {
-        showPush(context, PushContent(PushContent.TITLE, body, null))
+    fun showGeneric(context: Context, body: String? = null) {
+        showPush(context, PushContent(PushContent.TITLE, body ?: context.getString(R.string.misc_notif_new_messages), null))
     }
 
     /// A push's own notification: the chat's id (and a tap into it) when the
@@ -143,7 +144,7 @@ object Notifications {
         fun action(code: Int, name: String) = PendingIntent.getService(
             context, code, Intent(context, com.sphinx.peel.call.CallService::class.java).setAction(name), flags,
         )
-        val builder = builder(context, NotificationKind.ONGOING_CALL, title, "Call in progress")
+        val builder = builder(context, NotificationKind.ONGOING_CALL, title, context.getString(R.string.misc_notif_call_in_progress))
             .setContentIntent(openIntent(context, chat = chat, requestCode = 2))
             .setOngoing(true)
             .setAutoCancel(false)
@@ -154,15 +155,15 @@ object Notifications {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(NotificationCompat.CATEGORY_CALL)
         if (micOn != null) {
-            builder.addAction(0, if (micOn) "Mute" else "Unmute", action(4, com.sphinx.peel.call.CallService.ACTION_MUTE))
+            builder.addAction(0, context.getString(if (micOn) R.string.misc_call_mute else R.string.misc_call_unmute), action(4, com.sphinx.peel.call.CallService.ACTION_MUTE))
         }
-        return builder.addAction(0, "Leave", action(3, com.sphinx.peel.call.CallService.ACTION_STOP)).build()
+        return builder.addAction(0, context.getString(R.string.misc_notif_leave), action(3, com.sphinx.peel.call.CallService.ACTION_STOP)).build()
     }
 
     /// A call that ended while Peel was in the background (or with the process):
     /// said once, a tap opens the app (which shows the same line as a banner).
     fun callEnded(context: Context, text: String) {
-        post(context, CALL_ENDED_NOTIFICATION_ID, builder(context, NotificationKind.CALLS, "Call ended", text)
+        post(context, CALL_ENDED_NOTIFICATION_ID, builder(context, NotificationKind.CALLS, context.getString(R.string.misc_notif_call_ended), text)
             .setContentIntent(openIntent(context, requestCode = 5))
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .build())
@@ -181,7 +182,7 @@ object Notifications {
     /// The notification a screen share's capture service shows (Android
     /// requires one while the screen is being captured).
     fun sharingScreen(context: Context, title: String): Notification =
-        builder(context, NotificationKind.ONGOING_CALL, title, "Sharing your screen")
+        builder(context, NotificationKind.ONGOING_CALL, title, context.getString(R.string.misc_notif_sharing))
             .setContentIntent(openIntent(context, chat = null, requestCode = 2))
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_CALL)
