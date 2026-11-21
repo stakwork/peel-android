@@ -71,6 +71,22 @@ right that opens the standard view for the rest of the launch (the setting stays
   settle naturally wherever the reducer's own transitions put them (`Listening` at rest, `Hearing` with a kept draft after
   a failed send), and a plain `recognizing` flag (not part of the ported machine, since it is Android's own one-shot-
   session detail) tracks whether the recognizer is literally capturing right now, for the mic's stop-icon/pulsing-rings.
+- 2026-11-21 — Agent turn-state awareness, the narrow slice Android can actually build: `ControlPlan.pendingApproval(nowSeconds)`
+  (`engine/AgentChat.kt`) finds the first open, unanswered, not-yet-expired `AgentRequest` with `asks == true` in the agent's
+  DM — the same thing `AgentRequestLine` already renders as "Waiting for your approval on your Mac" in the standard view.
+  Wired into `VoiceModeScreen`: polled every 5 s (`ConversationScreen`'s own pattern, since a request can pass its expiry
+  with no new message ever arriving) and refreshed on any `engine.incoming` row in the agent's chat; its label — unlocalized,
+  as `AgentRequestLine`'s own string already is, since engine/control text keeps its English — shows in the status area
+  above the ordinary phase label, below `notice` and the muted banner.
+  **Deliberately not built**: iOS's `AppModel.agentUnanswered` (the more general "my last sent message anywhere in this
+  chat has no reply yet", used so a *fresh* Voice Mode session opened mid-turn starts in `Waiting` instead of `Listening`).
+  Android has no `AgentDM.unanswered`/bridge-`replyUUID`-matching port at all — that's a separate, real port of its own,
+  not a small extension of this one. Today Voice Mode only knows about a turn it itself started (via its own phase
+  machine); a turn started from the standard view, with Voice Mode opened afterward, shows no "Thinking…" until *this*
+  screen sends something. The read-only approval card above is real progress on "say something instead of sitting
+  silent," but it is not full turn-state parity.
+  JVM-tested: `ControlPlanTest` gained 4 cases (`pendingApproval` finds the right request; ignores one that does not ask,
+  is already answered, or is expired; is null with nothing pending and skips a quiet line to the next request).
 
 ## Interaction modes
 

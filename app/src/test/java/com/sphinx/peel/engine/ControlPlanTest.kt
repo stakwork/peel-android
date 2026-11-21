@@ -187,4 +187,35 @@ class ControlPlanTest {
         assertEquals("5, 1", AgentToolTitle.asked("""{"limit":5,"z":true}""", "sphinx_read"))
         assertEquals("Read an attachment", AgentRequest("attachments.read", status = null).words)
     }
+
+    /// `ControlPlan.pendingApproval`: so Voice Mode (docs/phases/55-voice-mode.md) can say so instead of sitting silent,
+    /// since the phone never answers one itself (decision 9).
+    @Test fun `pendingApproval finds the first open request asking for your approval`() {
+        val asking = AgentRequest("approve", status = null, asks = true)
+        val plan = ControlPlan(rows = mapOf(1L to ControlRow.Request(asking)), hidden = emptySet())
+        assertEquals(asking, plan.pendingApproval(1_000))
+    }
+
+    @Test fun `pendingApproval ignores a request that does not ask, is already answered, or expired`() {
+        val notAsking = ControlPlan(rows = mapOf(1L to ControlRow.Request(AgentRequest("chats.unseen", status = null, asks = false))), hidden = emptySet())
+        assertNull(notAsking.pendingApproval(1_000))
+
+        val answered = ControlPlan(rows = mapOf(1L to ControlRow.Request(AgentRequest("send", status = ControlEnvelope.Status.DONE, asks = true))), hidden = emptySet())
+        assertNull(answered.pendingApproval(1_000))
+
+        val expired = ControlPlan(rows = mapOf(1L to ControlRow.Request(AgentRequest("send", status = null, asks = true, notAfter = 500))), hidden = emptySet())
+        assertNull(expired.pendingApproval(1_000))
+        // Still open just before its expiry.
+        assertEquals("send", expired.pendingApproval(499)?.kind)
+    }
+
+    @Test fun `pendingApproval is null with nothing pending, and skips a quiet line to the next request`() {
+        assertNull(ControlPlan.NONE.pendingApproval(1_000))
+        val asking = AgentRequest("calendar.create", status = null, asks = true)
+        val plan = ControlPlan(
+            rows = mapOf(1L to ControlRow.Line("you: hi"), 2L to ControlRow.Request(asking)),
+            hidden = emptySet(),
+        )
+        assertEquals(asking, plan.pendingApproval(1_000))
+    }
 }

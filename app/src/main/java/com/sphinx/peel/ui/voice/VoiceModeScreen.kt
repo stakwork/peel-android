@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
+import com.sphinx.peel.engine.AgentRequest
+import com.sphinx.peel.engine.ControlPlan
 import com.sphinx.peel.engine.SpokenText
 import com.sphinx.peel.engine.VoiceAction
 import com.sphinx.peel.engine.VoiceCommand
@@ -106,7 +108,10 @@ import com.sphinx.peel.engine.Linen
 import com.sphinx.peel.engine.VoiceModeText
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.str
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
@@ -183,9 +188,26 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
         } else tts[0]?.stop()
     }
 
+    // A device request already waiting for your approval in the agent's DM (docs/phases/55-voice-mode.md, "turn-state
+    // awareness"): the phone never answers one itself (ControlPlan.pendingApproval's own decision 9), so the only thing
+    // Voice Mode can do here is say so, the way `AgentRequestLine` already does in the standard view.
+    var pendingApproval by remember { mutableStateOf<AgentRequest?>(null) }
+    suspend fun refreshPendingApproval() {
+        val plan = withContext(Dispatchers.Default) {
+            ControlPlan.of(storage.messages(engine.agentPubkey), inTribe = false, agentDM = true) { "You" }
+        }
+        pendingApproval = plan.pendingApproval(System.currentTimeMillis() / 1000)
+    }
+    // Polled too (ConversationScreen's own pattern), since a request can pass its own expiry with no new message ever
+    // arriving -- a push-only refresh would never notice that.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) { refreshPendingApproval(); delay(5_000) }
+    }
+
     // The agent's reply: what the engine receives in its DM (`Engine.incoming`, the same feed the notifier reads).
     androidx.compose.runtime.LaunchedEffect(engine) {
         engine.incoming.collect { rows ->
+            if (rows.any { it.chat == engine.agentPubkey }) refreshPendingApproval()
             rows.firstNotNullOfOrNull { VoiceModeReply.text(it, engine.agentPubkey) }?.let { text ->
                 replyText = text
                 // Nothing to speak: iOS's own controller only ever passes `hasReply: false` to the machine here too -- the
@@ -326,17 +348,19 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
             }
             Box(Modifier.height(64.dp).padding(horizontal = 32.dp, vertical = 8.dp), contentAlignment = Alignment.TopCenter) {
                 // Muted wins over everything else -- it is a deliberate, standing choice, not a passing status. Then
-                // notice (an error or "Sent to Peel"). Then the phase itself, for sending/waiting/speaking, which the
-                // mic's own "Listening…/Tap to talk" line above does not cover and which matters for every mode, not
-                // only the ones with a mic.
+                // notice (an error or "Sent to Peel"). Then a pending approval card (unlocalized, as `AgentRequestLine`'s
+                // own "Waiting for your approval on your Mac" already is -- engine/control text keeps its English).
+                // Then the phase itself, for sending/waiting/speaking, which the mic's own "Listening…/Tap to talk" line
+                // above does not cover and which matters for every mode, not only the ones with a mic.
                 val mutedLabel = if (isMuted) stringResource(R.string.voice_muted) else null
+                val approvalLabel = pendingApproval?.outcomeElsewhere(System.currentTimeMillis() / 1000)
                 val phaseLabel = when (phase) {
                     VoicePhase.Sending -> stringResource(R.string.voice_sending)
                     VoicePhase.Waiting -> stringResource(R.string.voice_thinking)
                     VoicePhase.Speaking -> stringResource(R.string.voice_speaking)
                     else -> null
                 }
-                (mutedLabel ?: notice ?: phaseLabel)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = inkColor().copy(alpha = 0.75f), textAlign = TextAlign.Center) }
+                (mutedLabel ?: notice ?: approvalLabel ?: phaseLabel)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = inkColor().copy(alpha = 0.75f), textAlign = TextAlign.Center) }
             }
             // Text out: the reply as a card (or that it is awaited).
             if (!interaction.speaksReply && (replyText != null || phase == VoicePhase.Waiting)) {
