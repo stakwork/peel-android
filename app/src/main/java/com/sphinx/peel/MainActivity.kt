@@ -23,6 +23,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.sphinx.peel.engine.VoiceModePrefs
+import com.sphinx.peel.engine.VoiceModeRoute
+import com.sphinx.peel.ui.voice.VoiceModeScreen
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -212,6 +216,7 @@ private fun PeelApp(
     deepLink: DeepLink?, onDeepLinkHandled: () -> Unit,
     publicLink: PublicAppLink?, publicLinkInvited: Boolean, onPublicLinkTaken: () -> Unit,
 ) {
+    val appContext = LocalContext.current.applicationContext
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
@@ -266,8 +271,15 @@ private fun PeelApp(
                 router.openWaitingLink()
                 onDispose { router.locked() }
             }
+            // Voice Mode (docs/phases/55-voice-mode.md): the setting opens the voice screen first; the grid button goes to the standard
+            // view for the rest of this launch (kept across rotation), the setting stays on. A tapped link or notification goes to the tabs.
+            val voicePrefs = remember { VoiceModePrefs.of(appContext) }
+            var showedStandard by rememberSaveable { mutableStateOf(false) }
+            androidx.compose.runtime.LaunchedEffect(deepLink) { if (deepLink != null) showedStandard = true }
+            val route = VoiceModeRoute.initial(voicePrefs.enabled, showedStandard || deepLink != null)
             Box(Modifier.fillMaxSize()) {
-                MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router) { router.reset(); screen = Screen.Onboarding }
+                if (route == VoiceModeRoute.VOICE) VoiceModeScreen(current.engine, storage) { showedStandard = true }
+                else MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router) { router.reset(); screen = Screen.Onboarding }
                 com.sphinx.peel.ui.update.UpdateHost()
                 router.page?.let { link -> val page = remember(link) { PublicPage(link) }; OrgPageScreen(page, current.engine.walletHost, onClose = router::close, locations = storage) }
             }

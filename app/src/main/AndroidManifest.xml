@@ -28,6 +28,10 @@
     <!-- Screen share: the capture runs in LiveKit's own mediaProjection
          service (merged in from the SDK), which needs this permission. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Voice Mode (ui/voice): Android 11+ hides recognition services unless asked for. -->
+    <queries>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
+    </queries>
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- A web page's location (ui/apps/OrgPageHost, engine/PageLocation): asked of the system only when a page asks and the person
          allowed it in Peel's own prompt; never in the background (no ACCESS_BACKGROUND_LOCATION, by design). -->

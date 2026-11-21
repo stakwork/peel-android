@@ -132,6 +132,8 @@ sections for code that isn't written yet.
     (`ApkDownloader`, `UpdateFiles`, `ArchiveCheck`), `UpdateController.kt` (state machine over `ApkInstaller`), `UpdateText.kt`; Android parts only in
     `AndroidUpdate.kt` (OkHttp, prefs, PackageManager, FileProvider install intent, `Updates` singleton). UI: `ui/update/UpdateUi.kt` (`UpdateHost`, in
     `MainActivity`) and You › Check for updates. `BuildConfig.UPDATES_ENABLED` is true only for a release build with a supplied `VERSION_CODE`.
+  - `engine/VoiceMode.kt` (`VoiceModePrefs` key `voiceMode`, `VoiceModeRoute`, `Linen.flecks`, `VoiceModeText`), `ui/voice/VoiceModeScreen.kt` — Voice Mode
+    (`docs/phases/55-voice-mode.md`): a setting (You › Account) that opens a mic-on-linen screen first; speech/typed text goes to the agent's DM via `Engine.sendMessage`; `MainActivity.PeelApp` routes.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

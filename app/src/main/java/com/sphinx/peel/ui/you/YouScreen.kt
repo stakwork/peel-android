@@ -423,6 +423,22 @@ private fun YouMain(
                     onClick = onOpenSiteLocation, chevron = true,
                 )
                 AccountDivider()
+                val voicePrefs = remember { com.sphinx.peel.engine.VoiceModePrefs.of(appContext) }
+                var voiceMode by remember { mutableStateOf(voicePrefs.enabled) }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.voice_setting), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Switch(checked = voiceMode, onCheckedChange = { voiceMode = it; voicePrefs.enabled = it })
+                }
+                Text(
+                    stringResource(R.string.voice_setting_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Theme.colors.secondaryText,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                )
+                AccountDivider()
                 var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
