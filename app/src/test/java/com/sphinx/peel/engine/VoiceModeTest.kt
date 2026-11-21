@@ -50,4 +50,43 @@ class VoiceModeTest {
         assertEquals("hi there", VoiceModeText.clean("  hi there \n"))
         assertNull(VoiceModeText.clean("  \n"))
     }
+
+    @Test fun `interaction mode default and key`() {
+        assertEquals("voiceModeInteraction", VoiceModeInteraction.KEY)
+        assertEquals(VoiceModeInteraction.SPEECH_IN_SPEECH_OUT, VoiceModeInteraction.DEFAULT)
+    }
+
+    @Test fun `interaction mode usesMic`() {
+        assertTrue(VoiceModeInteraction.SPEECH_IN_SPEECH_OUT.usesMic)
+        assertFalse(VoiceModeInteraction.TEXT_IN_TEXT_OUT.usesMic)
+        assertTrue(VoiceModeInteraction.SPEECH_IN_TEXT_OUT.usesMic)
+        assertFalse(VoiceModeInteraction.TEXT_IN_SPEECH_OUT.usesMic)
+    }
+
+    @Test fun `interaction mode speaksReply`() {
+        assertTrue(VoiceModeInteraction.SPEECH_IN_SPEECH_OUT.speaksReply)
+        assertFalse(VoiceModeInteraction.TEXT_IN_TEXT_OUT.speaksReply)
+        assertFalse(VoiceModeInteraction.SPEECH_IN_TEXT_OUT.speaksReply)
+        assertTrue(VoiceModeInteraction.TEXT_IN_SPEECH_OUT.speaksReply)
+    }
+
+    @Test fun `subtitles default and key`() {
+        assertEquals("voiceModeSubtitles", VoiceModeSubtitles.KEY)
+        assertEquals(false, VoiceModeSubtitles.DEFAULT)
+    }
+
+    @Test fun `interaction mode round-trips through wire`() {
+        for (mode in VoiceModeInteraction.entries) assertEquals(mode, VoiceModeInteraction.of(mode.wire))
+        assertEquals(VoiceModeInteraction.DEFAULT, VoiceModeInteraction.of("nonsense"))
+    }
+
+    @Test fun `interaction and subtitles persist`() {
+        val prefs = VoiceModePrefs.of(context)
+        prefs.interaction = VoiceModeInteraction.TEXT_IN_SPEECH_OUT
+        prefs.subtitles = true
+        assertEquals(VoiceModeInteraction.TEXT_IN_SPEECH_OUT, VoiceModePrefs.of(context).interaction)
+        assertTrue(VoiceModePrefs.of(context).subtitles)
+        prefs.interaction = VoiceModeInteraction.DEFAULT
+        prefs.subtitles = false
+    }
 }

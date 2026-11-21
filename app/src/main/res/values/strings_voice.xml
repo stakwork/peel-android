@@ -16,4 +16,13 @@
     <string name="voice_heard_nothing">Didn\'t catch that. Tap the microphone to try again, or type a message.</string>
     <string name="voice_recognition_failed">Speech recognition failed. Try again, or type a message.</string>
     <string name="voice_send_failed">Couldn\'t send: %1$s</string>
+    <string name="voice_interaction_label">Interaction mode</string>
+    <string name="voice_interaction_speech_in_speech_out">Speech in, speech out</string>
+    <string name="voice_interaction_text_in_text_out">Text in, text out</string>
+    <string name="voice_interaction_speech_in_text_out">Speech in, text out</string>
+    <string name="voice_interaction_text_in_speech_out">Text in, speech out</string>
+    <string name="voice_subtitles">Show subtitles</string>
+    <string name="voice_subtitles_note">Show the spoken reply as text while it is read aloud.</string>
+    <string name="voice_reply_waiting">Waiting for reply…</string>
+    <string name="voice_reply_label">Peel\'s reply</string>
 </resources>

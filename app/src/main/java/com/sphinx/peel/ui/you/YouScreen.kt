@@ -76,6 +76,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sphinx.peel.account.Account
+import com.sphinx.peel.ui.voice.labelRes
 import com.sphinx.peel.account.SecretStore
 import com.sphinx.peel.account.LockoutPolicy
 import com.sphinx.peel.account.PinTimeout
@@ -438,6 +439,33 @@ private fun YouMain(
                     color = Theme.colors.secondaryText,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
                 )
+                var interaction by remember { mutableStateOf(voicePrefs.interaction) }
+                var subtitles by remember { mutableStateOf(voicePrefs.subtitles) }
+                var pickingInteraction by remember { mutableStateOf(false) }
+                AccountRow(
+                    label = stringResource(R.string.voice_interaction_label), value = stringResource(interaction.labelRes()),
+                    onClick = { pickingInteraction = true },
+                )
+                androidx.compose.material3.DropdownMenu(expanded = pickingInteraction, onDismissRequest = { pickingInteraction = false }) {
+                    for (mode in com.sphinx.peel.engine.VoiceModeInteraction.entries) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(stringResource(mode.labelRes())) },
+                            onClick = { interaction = mode; voicePrefs.interaction = mode; pickingInteraction = false },
+                        )
+                    }
+                }
+                if (interaction.speaksReply) {
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.voice_subtitles), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                            Text(stringResource(R.string.voice_subtitles_note), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                        }
+                        Switch(checked = subtitles, onCheckedChange = { subtitles = it; voicePrefs.subtitles = it })
+                    }
+                }
                 AccountDivider()
                 var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
                 Row(

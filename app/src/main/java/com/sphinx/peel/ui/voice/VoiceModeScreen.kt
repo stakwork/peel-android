@@ -1,6 +1,18 @@
 package com.sphinx.peel.ui.voice
 
 import android.Manifest
+import android.speech.tts.TextToSpeech
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.FilterChip
+import com.sphinx.peel.engine.VoiceModeInteraction
+import com.sphinx.peel.engine.VoiceModePrefs
+import com.sphinx.peel.engine.VoiceModeReply
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -99,6 +111,31 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     val hasAgent = remember { storage.contact(engine.agentPubkey) != null }
     var notice by remember { mutableStateOf<String?>(null) }
     var listening by remember { mutableStateOf(false) }
+    val prefs = remember { VoiceModePrefs.of(context) }
+    var interaction by remember { mutableStateOf(prefs.interaction) }
+    val subtitles = remember { prefs.subtitles }
+    var replyText by remember { mutableStateOf<String?>(null) }
+    var waiting by remember { mutableStateOf(false) }
+
+    // Speech out: Android's TextToSpeech, made once for the screen and shut down with it.
+    val tts = remember { arrayOf<TextToSpeech?>(null) }
+    DisposableEffect(context) {
+        var engineReady: TextToSpeech? = null
+        engineReady = TextToSpeech(context) { status -> if (status != TextToSpeech.SUCCESS) { engineReady?.shutdown(); tts[0] = null } }
+        tts[0] = engineReady
+        onDispose { tts[0]?.stop(); tts[0]?.shutdown(); tts[0] = null }
+    }
+    androidx.compose.runtime.LaunchedEffect(replyText, interaction) {
+        val reply = replyText ?: return@LaunchedEffect
+        if (interaction.speaksReply) tts[0]?.speak(reply, TextToSpeech.QUEUE_FLUSH, null, "vm_reply") else tts[0]?.stop()
+    }
+
+    // The agent's reply: what the engine receives in its DM (`Engine.incoming`, the same feed the notifier reads).
+    androidx.compose.runtime.LaunchedEffect(engine) {
+        engine.incoming.collect { rows ->
+            rows.firstNotNullOfOrNull { VoiceModeReply.text(it, engine.agentPubkey) }?.let { replyText = it; waiting = false }
+        }
+    }
 
     fun send(text: String) {
         val clean = VoiceModeText.clean(text) ?: return
@@ -106,6 +143,9 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
         scope.launch {
             notice = try {
                 engine.sendMessage(engine.agentPubkey, clean, isTribe = false)
+                tts[0]?.stop()
+                replyText = null
+                waiting = true
                 context.str(R.string.voice_sent)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -137,6 +177,7 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
 
     fun toggleMic() {
         if (listening) { recognizer.stop(); return }
+        tts[0]?.stop()
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (granted) startListening() else askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
@@ -151,19 +192,80 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
             Icon(Icons.Filled.GridView, contentDescription = stringResource(R.string.voice_standard_view), tint = inkColor().copy(alpha = 0.55f), modifier = Modifier.size(22.dp))
         }
 
+        ModePicker(interaction, Modifier.align(Alignment.TopCenter).padding(top = 12.dp, start = 56.dp, end = 56.dp)) {
+            interaction = it
+            prefs.interaction = it
+        }
+
         Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-            MicButton(listening, onClick = ::toggleMic)
-            Text(
-                if (listening) stringResource(R.string.voice_listening) else stringResource(R.string.voice_tap_to_talk),
-                style = MaterialTheme.typography.bodyMedium, color = inkColor().copy(alpha = 0.6f),
-                modifier = Modifier.padding(top = 20.dp),
-            )
+            AnimatedVisibility(interaction.usesMic, enter = fadeIn(), exit = fadeOut()) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    MicButton(listening, onClick = ::toggleMic)
+                    Text(
+                        if (listening) stringResource(R.string.voice_listening) else stringResource(R.string.voice_tap_to_talk),
+                        style = MaterialTheme.typography.bodyMedium, color = inkColor().copy(alpha = 0.6f),
+                        modifier = Modifier.padding(top = 20.dp),
+                    )
+                }
+            }
             Box(Modifier.height(64.dp).padding(horizontal = 32.dp, vertical = 8.dp), contentAlignment = Alignment.TopCenter) {
                 notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = inkColor().copy(alpha = 0.75f), textAlign = TextAlign.Center) }
             }
+            // Text out: the reply as a card (or that it is awaited).
+            if (!interaction.speaksReply && (replyText != null || waiting)) {
+                ReplyCard(replyText ?: stringResource(R.string.voice_reply_waiting), Modifier.padding(horizontal = 24.dp))
+            }
         }
 
-        TypeBox(Modifier.align(Alignment.BottomCenter).imePadding().padding(horizontal = 24.dp, vertical = 20.dp), onSend = ::send)
+        Column(Modifier.align(Alignment.BottomCenter).imePadding().padding(horizontal = 24.dp, vertical = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            // Speech out with subtitles: the spoken words as text.
+            AnimatedVisibility(interaction.speaksReply && subtitles && replyText != null, enter = fadeIn(), exit = fadeOut()) {
+                ReplyCard(replyText.orEmpty(), Modifier.padding(bottom = 12.dp))
+            }
+            TypeBox(Modifier, onSend = ::send)
+        }
+    }
+}
+
+/// The four modes as small chips, each a pair of glyphs (input → output) with a spoken label for TalkBack.
+@Composable
+private fun ModePicker(selected: VoiceModeInteraction, modifier: Modifier, onPick: (VoiceModeInteraction) -> Unit) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
+        for (mode in VoiceModeInteraction.entries) {
+            val label = stringResource(mode.labelRes())
+            FilterChip(
+                selected = mode == selected, onClick = { onPick(mode) },
+                label = { Text(mode.glyphs(), style = MaterialTheme.typography.labelMedium) },
+                modifier = Modifier.semantics { contentDescription = label },
+            )
+        }
+    }
+}
+
+private fun VoiceModeInteraction.glyphs(): String = when (this) {
+    VoiceModeInteraction.SPEECH_IN_SPEECH_OUT -> "\uD83C\uDF99 \u2192 \uD83D\uDD0A"
+    VoiceModeInteraction.TEXT_IN_TEXT_OUT -> "\u2328 \u2192 \uD83D\uDCC4"
+    VoiceModeInteraction.SPEECH_IN_TEXT_OUT -> "\uD83C\uDF99 \u2192 \uD83D\uDCC4"
+    VoiceModeInteraction.TEXT_IN_SPEECH_OUT -> "\u2328 \u2192 \uD83D\uDD0A"
+}
+
+@androidx.annotation.StringRes
+internal fun VoiceModeInteraction.labelRes(): Int = when (this) {
+    VoiceModeInteraction.SPEECH_IN_SPEECH_OUT -> R.string.voice_interaction_speech_in_speech_out
+    VoiceModeInteraction.TEXT_IN_TEXT_OUT -> R.string.voice_interaction_text_in_text_out
+    VoiceModeInteraction.SPEECH_IN_TEXT_OUT -> R.string.voice_interaction_speech_in_text_out
+    VoiceModeInteraction.TEXT_IN_SPEECH_OUT -> R.string.voice_interaction_text_in_speech_out
+}
+
+@Composable
+private fun ReplyCard(text: String, modifier: Modifier = Modifier) {
+    val label = stringResource(R.string.voice_reply_label)
+    Box(
+        modifier.fillMaxWidth().heightIn(max = 240.dp).clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f)).padding(16.dp)
+            .semantics { contentDescription = label },
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.verticalScroll(rememberScrollState()))
     }
 }
 

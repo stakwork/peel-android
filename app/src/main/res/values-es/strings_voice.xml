@@ -16,4 +16,13 @@
     <string name="voice_heard_nothing">No te entendí. Toca el micrófono para intentarlo de nuevo, o escribe un mensaje.</string>
     <string name="voice_recognition_failed">Falló el reconocimiento de voz. Inténtalo de nuevo o escribe un mensaje.</string>
     <string name="voice_send_failed">No se pudo enviar: %1$s</string>
+    <string name="voice_interaction_label">Modo de interacción</string>
+    <string name="voice_interaction_speech_in_speech_out">Hablar y escuchar</string>
+    <string name="voice_interaction_text_in_text_out">Escribir y leer</string>
+    <string name="voice_interaction_speech_in_text_out">Hablar y leer</string>
+    <string name="voice_interaction_text_in_speech_out">Escribir y escuchar</string>
+    <string name="voice_subtitles">Mostrar subtítulos</string>
+    <string name="voice_subtitles_note">Muestra la respuesta hablada como texto mientras se lee en voz alta.</string>
+    <string name="voice_reply_waiting">Esperando respuesta…</string>
+    <string name="voice_reply_label">Respuesta de Peel</string>
 </resources>
