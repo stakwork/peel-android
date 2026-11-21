@@ -87,6 +87,24 @@ right that opens the standard view for the rest of the launch (the setting stays
   silent," but it is not full turn-state parity.
   JVM-tested: `ControlPlanTest` gained 4 cases (`pendingApproval` finds the right request; ignores one that does not ask,
   is already answered, or is expired; is null with nothing pending and skips a quiet line to the next request).
+- 2026-11-21 — `EchoFilter` (`engine/EchoFilter.kt`), ported from peel's `Sources/PeelUI/Voice/EchoFilter.swift`: a
+  transcript is an echo when a run of three of its words (the whole thing if shorter) is a contiguous run of the text
+  being spoken, or spoken in the last 3 s; it still guards for 1.5 s after speech ends (the room's own ring). Pure, a
+  clock parameter (ms since epoch here, `Date`/`TimeInterval` on iOS). JVM-tested (`EchoFilterTest`, ported from
+  `EchoFilterTests.swift`, all 10 cases).
+  **What this actually guards on Android, and why it's narrower than iOS's**: `SpeechRecognizer` is a closed API — the
+  app gets no `AudioRecord` session of its own to attach `AcousticEchoCanceler` to the way iOS's `.voiceChat` audio-session
+  mode gives "best effort" echo cancellation for free, and the recognizer never runs while TTS is speaking in the first
+  place (no continuous listening at all on Android, see the state-machine item above), so the classic "the mic hears
+  Peel's own reply mid-sentence and transcribes it as if the user barged in" scenario iOS has to actively filter for
+  essentially cannot happen here by construction. The one real, narrow risk this filter catches: tapping the mic to
+  interrupt a reply calls `tts.stop()` and starts a fresh one-shot recognition right away, and there is no guarantee the
+  speaker has gone fully silent by the time that capture begins (`TextToSpeech.stop()`'s own audio-buffer-flush latency,
+  not something app code can observe or wait on precisely). `echoFilter.isEcho(text, now)` is checked on every recognizer
+  result and, if it matches, the result is discarded exactly like "heard nothing" rather than sent or parsed as a command.
+  **Real barge-in** — saying "peel stop" out loud while the reply is still playing, with no tap at all — is not possible
+  on Android's `SpeechRecognizer` without a continuously-running, custom `AudioRecord`-based recognizer bypassing the
+  system API entirely; that is a materially bigger, separate piece of work, not an extension of this one.
 
 ## Interaction modes
 

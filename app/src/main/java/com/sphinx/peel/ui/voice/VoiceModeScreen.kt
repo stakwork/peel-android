@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import com.sphinx.peel.engine.AgentRequest
 import com.sphinx.peel.engine.ControlPlan
+import com.sphinx.peel.engine.EchoFilter
 import com.sphinx.peel.engine.SpokenText
 import com.sphinx.peel.engine.VoiceAction
 import com.sphinx.peel.engine.VoiceCommand
@@ -142,6 +143,12 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     // (which Android settles back into between one-shot utterances, with no live capture underneath it).
     var recognizing by remember { mutableStateOf(false) }
 
+    // Echo (docs/phases/55-voice-mode.md, "Echo"): Android's SpeechRecognizer is a black box with no AudioRecord session
+    // of its own to attach AcousticEchoCanceler to, and it never runs while TTS is speaking (no continuous listening to
+    // barge in on at all), so the one real risk this filter guards is narrower than iOS's: the brief window right after
+    // tapping the mic mid-reply, where `tts.stop()` has been asked for but the speaker may not have gone fully silent yet.
+    val echoFilter = remember { EchoFilter() }
+
     // Speech out: Android's TextToSpeech, made once for the screen and shut down with it. The utterance id of the reply's
     // last chunk, so the progress listener (below) knows which `onDone` means "the whole reply finished speaking".
     var lastUtteranceId by remember { mutableStateOf<String?>(null) }
@@ -156,10 +163,10 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
                 override fun onDone(utteranceId: String?) {
                     // SpeechEnded, not Stop: it settles back to Listening (the resting phase, matching iOS), without the
                     // Stop event's "voice mode ended" meaning -- which would also wrongly clear a mute set mid-reply.
-                    if (utteranceId == lastUtteranceId) scope.launch { act(VoiceEvent.SpeechEnded) }
+                    if (utteranceId == lastUtteranceId) scope.launch { act(VoiceEvent.SpeechEnded); echoFilter.speechEnded(System.currentTimeMillis()) }
                 }
                 @Deprecated("Deprecated in the base class") override fun onError(utteranceId: String?) {
-                    if (utteranceId == lastUtteranceId) scope.launch { act(VoiceEvent.SpeechEnded) }
+                    if (utteranceId == lastUtteranceId) scope.launch { act(VoiceEvent.SpeechEnded); echoFilter.speechEnded(System.currentTimeMillis()) }
                 }
             })
         }
@@ -172,6 +179,7 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     fun speak(chunks: List<String>): Boolean {
         if (chunks.isEmpty()) return false
         act(VoiceEvent.SpeechStarted)
+        echoFilter.speechStarted(chunks, System.currentTimeMillis())
         lastUtteranceId = "vm_reply_${chunks.lastIndex}"
         chunks.forEachIndexed { i, chunk ->
             tts[0]?.speak(chunk, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "vm_reply_$i")
@@ -262,6 +270,10 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
                 recognizing = false
                 if (text == null) {
                     notice = context.str(R.string.voice_heard_nothing)
+                } else if (echoFilter.isEcho(text, System.currentTimeMillis())) {
+                    // Caught Peel's own reply bleeding through the mic right after an interrupt (see `echoFilter` above);
+                    // not real speech, so it is never parsed as a command or sent, same as "heard nothing".
+                    notice = context.str(R.string.voice_echo_ignored)
                 } else when (
                     // The command vocabulary (docs/phases/55-voice-mode.md): the one-shot recognizer only ever produces a
                     // transcript in the "dictating" context (there is no live mic while speaking to hear a barge-in
@@ -309,7 +321,7 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
         // top of it (a gap the old ad hoc booleans had).
         if (machine.phase == VoicePhase.Sending || machine.phase == VoicePhase.Waiting) return
         tts[0]?.stop()
-        if (machine.phase == VoicePhase.Speaking) act(VoiceEvent.SpeechEnded)
+        if (machine.phase == VoicePhase.Speaking) { act(VoiceEvent.SpeechEnded); echoFilter.speechEnded(System.currentTimeMillis()) }
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (granted) startListening() else askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
