@@ -6,6 +6,9 @@
     <string name="voice_mic_stop">Dejar de escuchar</string>
     <string name="voice_listening">Escuchando…</string>
     <string name="voice_tap_to_talk">Toca para hablar</string>
+    <string name="voice_sending">Enviando…</string>
+    <string name="voice_thinking">Pensando…</string>
+    <string name="voice_speaking">Hablando…</string>
     <string name="voice_type_hint">Escribe un mensaje…</string>
     <string name="voice_send">Enviar</string>
     <string name="voice_standard_view">Vista estándar</string>

@@ -30,6 +30,26 @@ right that opens the standard view for the rest of the launch (the setting stays
   fits and ends with "That is the short version. Say read it all for the rest." — the full text has nowhere to go yet ("read it
   all" is a voice command, not built here; see the mute/commands item below). JVM-tested (`SpokenTextTest`, ported from
   `SpokenTextTests.swift`, all cases).
+- 2026-11-21 — `VoiceMachine` (`engine/VoiceMachine.kt`), ported from peel's `VoiceModeState.swift`: the same pure reducer
+  (`VoicePhase` idle/listening/hearing/sending/waiting/speaking, `VoiceEvent`, `VoiceEffect`, mute as a flag over the phase,
+  the full `VoiceCommand` vocabulary) in place of the screen's two ad hoc booleans (`listening`, `waiting`). `VoiceModeScreen`
+  now drives the mic, `Engine.sendMessage`, and the TTS lifecycle (`SpeechStarted`/`SpeechEnded` via an `UtteranceProgressListener`
+  on the last queued chunk) through `machine.apply(...)`, and shows "Sending…"/"Thinking…"/"Speaking…" from the phase for every
+  interaction mode, not only the ones with a mic.
+  **A real platform gap, not papered over**: Android's `SpeechRecognizer` (`ACTION_RECOGNIZE_SPEECH`) is one-shot — it captures
+  one utterance and ends on its own, unlike iOS's continuously-running `AVAudioEngine` tap. There is no live, editable draft
+  spanning several pauses yet, and no way to "keep talking" after a failed send; the one-shot result is treated as an implicit
+  `Silence` event (auto-send), and wherever the reducer would otherwise settle back into `Listening` with no live capture
+  underneath it (a failed send, a reply with nothing to speak, the end of TTS), the screen explicitly follows with `Stop` to
+  reach `Idle`, so the next mic tap can fire `Start` again. Reaching true continuous listening (and a real auto-send-after-
+  silence setting, since Android's recognizer behaves as if it were always on) is a bigger, separate piece of work.
+  One upside from the same change: tapping the mic mid-send or mid-wait no longer starts a second recognition session on top
+  of the first (a gap in the old booleans, now blocked by the phase's `isActive` check).
+  `VoiceCommand`/`VoiceContext` exist as the reducer's vocabulary only — no phrase parser yet (`VoiceCommandParser`, the next
+  item) and no mute/command behavior wired into the screen; `VoiceEvent.Command(SEND)` is fired directly by code today (the
+  type box's send button, and the recognizer's implicit end-of-utterance), not by a recognized phrase.
+  JVM-tested (`VoiceMachineTest`, ported from `VoiceModeStateTests.swift`, excluding the `VoiceSettings`/`VoiceDefaults` cases,
+  which belong to the auto-send item).
 
 ## Interaction modes
 

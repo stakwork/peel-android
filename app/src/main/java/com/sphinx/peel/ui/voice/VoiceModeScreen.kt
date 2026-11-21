@@ -2,6 +2,7 @@ package com.sphinx.peel.ui.voice
 
 import android.Manifest
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -11,9 +12,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import com.sphinx.peel.engine.SpokenText
+import com.sphinx.peel.engine.VoiceAction
+import com.sphinx.peel.engine.VoiceCommand
+import com.sphinx.peel.engine.VoiceEvent
+import com.sphinx.peel.engine.VoiceMachine
 import com.sphinx.peel.engine.VoiceModeInteraction
 import com.sphinx.peel.engine.VoiceModePrefs
 import com.sphinx.peel.engine.VoiceModeReply
+import com.sphinx.peel.engine.VoicePhase
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -111,18 +117,36 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     val scope = rememberCoroutineScope()
     val hasAgent = remember { storage.contact(engine.agentPubkey) != null }
     var notice by remember { mutableStateOf<String?>(null) }
-    var listening by remember { mutableStateOf(false) }
     val prefs = remember { VoiceModePrefs.of(context) }
     var interaction by remember { mutableStateOf(prefs.interaction) }
     val subtitles = remember { prefs.subtitles }
     var replyText by remember { mutableStateOf<String?>(null) }
-    var waiting by remember { mutableStateOf(false) }
 
-    // Speech out: Android's TextToSpeech, made once for the screen and shut down with it.
+    // VoiceMachine (docs/phases/55-voice-mode.md, "State machine"), ported from peel's VoiceModeState.swift: the same
+    // idle/listening/hearing/sending/waiting/speaking phases, kept in sync with `phase` so Compose recomposes on a change.
+    val machine = remember { VoiceMachine() }
+    var phase: VoicePhase by remember { mutableStateOf(machine.phase) }
+    fun act(event: VoiceEvent): List<VoiceAction> = machine.apply(event).also { phase = machine.phase }
+
+    // Speech out: Android's TextToSpeech, made once for the screen and shut down with it. The utterance id of the reply's
+    // last chunk, so the progress listener (below) knows which `onDone` means "the whole reply finished speaking".
+    var lastUtteranceId by remember { mutableStateOf<String?>(null) }
     val tts = remember { arrayOf<TextToSpeech?>(null) }
     DisposableEffect(context) {
         var engineReady: TextToSpeech? = null
-        engineReady = TextToSpeech(context) { status -> if (status != TextToSpeech.SUCCESS) { engineReady?.shutdown(); tts[0] = null } }
+        engineReady = TextToSpeech(context) { status ->
+            if (status != TextToSpeech.SUCCESS) { engineReady?.shutdown(); tts[0] = null; return@TextToSpeech }
+            // Callbacks run on the synthesis thread (TextToSpeech's own contract), not Compose's: hop back via `scope`.
+            tts[0]?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                override fun onDone(utteranceId: String?) {
+                    if (utteranceId == lastUtteranceId) scope.launch { act(VoiceEvent.SpeechEnded); act(VoiceEvent.Stop) }
+                }
+                @Deprecated("Deprecated in the base class") override fun onError(utteranceId: String?) {
+                    if (utteranceId == lastUtteranceId) scope.launch { act(VoiceEvent.SpeechEnded); act(VoiceEvent.Stop) }
+                }
+            })
+        }
         tts[0] = engineReady
         onDispose { tts[0]?.stop(); tts[0]?.shutdown(); tts[0] = null }
     }
@@ -132,6 +156,9 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
             // Markdown cleaned to plain sentences and capped (docs/phases/55-voice-mode.md): code/tables/links become a short
             // phrase and a long reply is cut with a spoken note, rather than TextToSpeech reading raw markdown verbatim.
             val chunks = SpokenText(reply).chunks
+            if (chunks.isEmpty()) { act(VoiceEvent.ReplyReady(hasReply = false)); act(VoiceEvent.Stop); return@LaunchedEffect }
+            act(VoiceEvent.SpeechStarted)
+            lastUtteranceId = "vm_reply_${chunks.lastIndex}"
             chunks.forEachIndexed { i, chunk ->
                 tts[0]?.speak(chunk, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "vm_reply_$i")
             }
@@ -141,7 +168,16 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     // The agent's reply: what the engine receives in its DM (`Engine.incoming`, the same feed the notifier reads).
     androidx.compose.runtime.LaunchedEffect(engine) {
         engine.incoming.collect { rows ->
-            rows.firstNotNullOfOrNull { VoiceModeReply.text(it, engine.agentPubkey) }?.let { replyText = it; waiting = false }
+            rows.firstNotNullOfOrNull { VoiceModeReply.text(it, engine.agentPubkey) }?.let { text ->
+                replyText = text
+                if (!interaction.speaksReply) {
+                    // Nothing to speak: iOS's own controller only ever passes `hasReply: false` to the machine here too --
+                    // the phase is about audio timing, not about whether there is text (that is `replyText`, separate). No
+                    // live recognizer is running on Android's one-shot model, so settle straight to idle, not "listening".
+                    act(VoiceEvent.ReplyReady(hasReply = false))
+                    act(VoiceEvent.Stop)
+                }
+            }
         }
     }
 
@@ -153,14 +189,27 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
                 engine.sendMessage(engine.agentPubkey, clean, isTribe = false)
                 tts[0]?.stop()
                 replyText = null
-                waiting = true
+                act(VoiceEvent.SendFinished(sent = true))
                 context.str(R.string.voice_sent)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                act(VoiceEvent.SendFinished(sent = false))
+                // No live recognizer to resume the draft into, unlike iOS's continuous engine: tapping the mic again
+                // starts a fresh Start -> Listening cycle (Android's one-shot SpeechRecognizer has no "keep talking").
+                act(VoiceEvent.Stop)
                 context.str(R.string.voice_send_failed, e.message ?: "")
             }
         }
+    }
+
+    /// The type box has no recognizer session already in flight, so it drives the machine there itself before `send`.
+    fun sendFromTypeBox(text: String) {
+        if (VoiceModeText.clean(text) == null) return
+        if (!machine.phase.isActive) act(VoiceEvent.Start)
+        act(VoiceEvent.Transcript(text))
+        act(VoiceEvent.Command(VoiceCommand.SEND))
+        send(text)
     }
 
     val recognizer = remember { Recognizer(context) }
@@ -169,13 +218,23 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     fun startListening() {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) { notice = context.str(R.string.voice_unavailable); return }
         notice = null
-        listening = true
+        act(VoiceEvent.Start)
         recognizer.start(
             onResult = { text ->
-                listening = false
-                if (text == null) notice = context.str(R.string.voice_heard_nothing) else send(text)
+                if (text == null) {
+                    act(VoiceEvent.Stop)
+                    notice = context.str(R.string.voice_heard_nothing)
+                } else {
+                    act(VoiceEvent.Transcript(text))
+                    // The one-shot recognizer already decided the utterance is over, same as iOS's auto-send-on-silence.
+                    val toSend = act(VoiceEvent.Silence).filterIsInstance<VoiceAction.Send>().firstOrNull()?.text
+                    if (toSend != null) send(toSend) else act(VoiceEvent.Stop)
+                }
             },
-            onFailure = { listening = false; notice = context.str(R.string.voice_recognition_failed) },
+            onFailure = {
+                act(VoiceEvent.Failure("recognition failed"))
+                notice = context.str(R.string.voice_recognition_failed)
+            },
         )
     }
 
@@ -184,10 +243,18 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     }
 
     fun toggleMic() {
-        if (listening) { recognizer.stop(); return }
-        tts[0]?.stop()
-        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        if (granted) startListening() else askMic.launch(Manifest.permission.RECORD_AUDIO)
+        when (machine.phase) {
+            VoicePhase.Listening -> recognizer.stop()
+            VoicePhase.Idle, is VoicePhase.Failed, VoicePhase.Speaking -> {
+                tts[0]?.stop()
+                if (machine.phase == VoicePhase.Speaking) { act(VoiceEvent.SpeechEnded); act(VoiceEvent.Stop) }
+                val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                if (granted) startListening() else askMic.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            // Hearing/Sending/Waiting: busy with the previous utterance or turn; the tap is ignored rather than starting a
+            // second recognition session on top of it (a gap in the ad hoc booleans this phase model replaces).
+            else -> {}
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -208,19 +275,28 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
         Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
             AnimatedVisibility(interaction.usesMic, enter = fadeIn(), exit = fadeOut()) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    MicButton(listening, onClick = ::toggleMic)
+                    MicButton(phase == VoicePhase.Listening, onClick = ::toggleMic)
                     Text(
-                        if (listening) stringResource(R.string.voice_listening) else stringResource(R.string.voice_tap_to_talk),
+                        if (phase == VoicePhase.Listening) stringResource(R.string.voice_listening) else stringResource(R.string.voice_tap_to_talk),
                         style = MaterialTheme.typography.bodyMedium, color = inkColor().copy(alpha = 0.6f),
                         modifier = Modifier.padding(top = 20.dp),
                     )
                 }
             }
             Box(Modifier.height(64.dp).padding(horizontal = 32.dp, vertical = 8.dp), contentAlignment = Alignment.TopCenter) {
-                notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = inkColor().copy(alpha = 0.75f), textAlign = TextAlign.Center) }
+                // notice (an error or "Sent to Peel") wins; otherwise the phase itself, for sending/waiting/speaking, which
+                // the mic's own "Listening…/Tap to talk" line above does not cover and which matters for every mode, not
+                // only the ones with a mic.
+                val phaseLabel = when (phase) {
+                    VoicePhase.Sending -> stringResource(R.string.voice_sending)
+                    VoicePhase.Waiting -> stringResource(R.string.voice_thinking)
+                    VoicePhase.Speaking -> stringResource(R.string.voice_speaking)
+                    else -> null
+                }
+                (notice ?: phaseLabel)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = inkColor().copy(alpha = 0.75f), textAlign = TextAlign.Center) }
             }
             // Text out: the reply as a card (or that it is awaited).
-            if (!interaction.speaksReply && (replyText != null || waiting)) {
+            if (!interaction.speaksReply && (replyText != null || phase == VoicePhase.Waiting)) {
                 ReplyCard(replyText ?: stringResource(R.string.voice_reply_waiting), Modifier.padding(horizontal = 24.dp))
             }
         }
@@ -230,7 +306,7 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
             AnimatedVisibility(interaction.speaksReply && subtitles && replyText != null, enter = fadeIn(), exit = fadeOut()) {
                 ReplyCard(replyText.orEmpty(), Modifier.padding(bottom = 12.dp))
             }
-            TypeBox(Modifier, onSend = ::send)
+            TypeBox(Modifier, onSend = ::sendFromTypeBox)
         }
     }
 }
