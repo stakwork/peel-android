@@ -190,6 +190,8 @@ private class Recognizer(private val context: Context) {
         })
         r.startListening(
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                // Prefer the device's on-device model; avoids sending audio to the cloud (docs/phases/55-voice-mode.md).
+                .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false),
         )
