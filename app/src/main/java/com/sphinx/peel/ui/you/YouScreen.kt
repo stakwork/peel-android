@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -466,6 +467,42 @@ private fun YouMain(
                         Switch(checked = subtitles, onCheckedChange = { subtitles = it; voicePrefs.subtitles = it })
                     }
                 }
+                // Continuous listening's auto-send (docs/phases/55-voice-mode.md, "Silence timeout"), off by default --
+                // "peel send" is the way to send; a pause can cut a driver off mid-thought, as the note below says.
+                var autoSend by remember { mutableStateOf(voicePrefs.autoSend) }
+                var autoSendSeconds by remember { mutableStateOf(voicePrefs.autoSendSeconds) }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.voice_auto_send), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Switch(checked = autoSend, onCheckedChange = { autoSend = it; voicePrefs.autoSend = it })
+                }
+                if (autoSend) {
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            context.str(R.string.voice_auto_send_seconds, autoSendSeconds.toInt()),
+                            style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText, modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = {
+                            autoSendSeconds = (autoSendSeconds - 1).coerceIn(com.sphinx.peel.engine.VoiceAutoSend.RANGE)
+                            voicePrefs.autoSendSeconds = autoSendSeconds
+                        }) { Text("–", style = MaterialTheme.typography.titleMedium, color = Theme.colors.text) }
+                        IconButton(onClick = {
+                            autoSendSeconds = (autoSendSeconds + 1).coerceIn(com.sphinx.peel.engine.VoiceAutoSend.RANGE)
+                            voicePrefs.autoSendSeconds = autoSendSeconds
+                        }) { Text("+", style = MaterialTheme.typography.titleMedium, color = Theme.colors.text) }
+                    }
+                }
+                Text(
+                    stringResource(R.string.voice_auto_send_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Theme.colors.secondaryText,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                )
                 AccountDivider()
                 var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
                 Row(

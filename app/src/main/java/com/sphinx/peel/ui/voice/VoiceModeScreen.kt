@@ -130,6 +130,8 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     val prefs = remember { VoiceModePrefs.of(context) }
     var interaction by remember { mutableStateOf(prefs.interaction) }
     val subtitles = remember { prefs.subtitles }
+    val autoSend = remember { prefs.autoSend }
+    val autoSendSeconds = remember { prefs.autoSendSeconds }
     var replyText by remember { mutableStateOf<String?>(null) }
 
     // VoiceMachine (docs/phases/55-voice-mode.md, "State machine"), ported from peel's VoiceModeState.swift: the same
@@ -137,11 +139,16 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     val machine = remember { VoiceMachine() }
     var phase: VoicePhase by remember { mutableStateOf(machine.phase) }
     var isMuted by remember { mutableStateOf(machine.isMuted) }
-    fun act(event: VoiceEvent): List<VoiceAction> = machine.apply(event).also { phase = machine.phase; isMuted = machine.isMuted }
+    var draftText by remember { mutableStateOf(machine.draft) }
+    fun act(event: VoiceEvent): List<VoiceAction> =
+        machine.apply(event).also { phase = machine.phase; isMuted = machine.isMuted; draftText = machine.draft }
     val commandParser = remember { VoiceCommandParser() }
     // Whether the recognizer is literally capturing audio right now, distinct from the machine's resting `Listening` phase
     // (which Android settles back into between one-shot utterances, with no live capture underneath it).
     var recognizing by remember { mutableStateOf(false) }
+    // A manual mic tap while a session is live (docs/phases/55-voice-mode.md, "Silence timeout"): ends continuous
+    // listening and sends whatever was gathered, rather than letting the chain keep going.
+    var stopRequested by remember { mutableStateOf(false) }
 
     // Echo (docs/phases/55-voice-mode.md, "Echo"): Android's SpeechRecognizer is a black box with no AudioRecord session
     // of its own to attach AcousticEchoCanceler to, and it never runs while TTS is speaking (no continuous listening to
@@ -257,53 +264,93 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
 
     fun toggleMute() { act(VoiceEvent.Command(if (machine.isMuted) VoiceCommand.UNMUTE else VoiceCommand.MUTE)) }
 
+    // Auto-send after a pause (docs/phases/55-voice-mode.md, "Silence timeout"), off by default: restarts on every
+    // partial result because `draftText` is a key -- Compose cancels and relaunches this effect each time the draft
+    // grows, exactly as peel's own controller restarts its timer on every new partial. Never runs while muted, or
+    // outside `Hearing` (so not idle, not listening-with-nothing-yet, not sending/waiting/speaking).
+    androidx.compose.runtime.LaunchedEffect(phase, draftText, isMuted) {
+        if (!autoSend || isMuted || phase != VoicePhase.Hearing) return@LaunchedEffect
+        delay((autoSendSeconds * 1000).toLong())
+        if (phase == VoicePhase.Hearing && !isMuted) {
+            act(VoiceEvent.Silence).filterIsInstance<VoiceAction.Send>().firstOrNull()?.let { send(it.text) }
+        }
+    }
+
     val recognizer = remember { Recognizer(context) }
     DisposableEffect(Unit) { onDispose { recognizer.destroy() } }
 
-    fun startListening() {
+    /// One link of continuous listening (docs/phases/55-voice-mode.md, "Silence timeout"): Android's recognizer is
+    /// one-shot, ending itself after its own short, fixed silence detection, so a longer dictation is many of these
+    /// chained back to back rather than one continuous capture the way iOS's engine tap is. [base] is the text already
+    /// confirmed from earlier links in this chain (empty for the first); captured once per call, read-only within it,
+    /// so a session's own partials never double up against themselves.
+    fun startListening(base: String) {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) { notice = context.str(R.string.voice_unavailable); return }
         notice = null
         if (!machine.phase.isActive) act(VoiceEvent.Start)
         recognizing = true
+
+        fun combined(piece: String?) = listOfNotNull(base.takeIf { it.isNotBlank() }, piece?.takeIf { it.isNotBlank() }).joinToString(" ")
+        fun chainContinues(stopping: Boolean) = !stopping && (machine.phase == VoicePhase.Listening || machine.phase == VoicePhase.Hearing) && !machine.isMuted
+        // A chunk ended with nothing new to add (silence, an echo, or a manual stop): a manual stop with something
+        // already gathered sends it now; otherwise the chain either continues or, for the very first chunk with
+        // nothing at all, ends quietly with a notice.
+        fun finishChunk(stopping: Boolean) {
+            when {
+                stopping && machine.draft.isNotBlank() ->
+                    act(VoiceEvent.Command(VoiceCommand.SEND)).filterIsInstance<VoiceAction.Send>().firstOrNull()?.let { send(it.text) }
+                chainContinues(stopping) -> startListening(base)
+                else -> {}
+            }
+        }
+
         recognizer.start(
+            onPartial = { partial -> combined(partial).takeIf { it.isNotBlank() }?.let { act(VoiceEvent.Transcript(it)) } },
             onResult = { text ->
                 recognizing = false
-                if (text == null) {
-                    notice = context.str(R.string.voice_heard_nothing)
-                } else if (echoFilter.isEcho(text, System.currentTimeMillis())) {
-                    // Caught Peel's own reply bleeding through the mic right after an interrupt (see `echoFilter` above);
-                    // not real speech, so it is never parsed as a command or sent, same as "heard nothing".
-                    notice = context.str(R.string.voice_echo_ignored)
-                } else when (
-                    // The command vocabulary (docs/phases/55-voice-mode.md): the one-shot recognizer only ever produces a
-                    // transcript in the "dictating" context (there is no live mic while speaking to hear a barge-in
-                    // command in, and no wake listener armed outside a chat -- all Android reaches today).
-                    val match = commandParser.parse(text, VoiceContext.DICTATING.accepts)
-                ) {
-                    is VoiceCommandMatch.Command -> {
-                        if (match.textBefore.isNotBlank()) act(VoiceEvent.Transcript(match.textBefore))
-                        val actions = act(VoiceEvent.Command(match.command))
-                        val toSend = actions.filterIsInstance<VoiceAction.Send>().firstOrNull()?.text
-                        when {
-                            toSend != null -> send(toSend)
-                            match.command == VoiceCommand.DEACTIVATE -> onStandardView()
-                            match.command == VoiceCommand.REPEAT_REPLY -> replyText?.let { speak(SpokenText(it).chunks) }
-                            match.command == VoiceCommand.READ_ALL -> replyText?.let { speak(SpokenText(it).full) }
-                            // DISCARD/MUTE/UNMUTE already took effect in the reducer (draft cleared / isMuted flipped);
-                            // STOP_SPEAKING/SKIP/STOP_AGENT are recognized but have no handler yet -- they need a live
-                            // mic while speaking (barge-in) or an engine hook this screen does not have.
-                            else -> {}
-                        }
+                val stopping = stopRequested
+                stopRequested = false
+                when {
+                    text == null -> {
+                        if (base.isBlank() && !stopping) notice = context.str(R.string.voice_heard_nothing)
+                        finishChunk(stopping)
                     }
-                    VoiceCommandMatch.None -> {
-                        act(VoiceEvent.Transcript(text))
-                        // The one-shot recognizer already decided the utterance is over, same as iOS's auto-send-on-silence.
-                        act(VoiceEvent.Silence).filterIsInstance<VoiceAction.Send>().firstOrNull()?.let { send(it.text) }
+                    echoFilter.isEcho(text, System.currentTimeMillis()) -> {
+                        // Caught Peel's own reply bleeding through the mic right after an interrupt (see `echoFilter`
+                        // above); not real speech, so it is never parsed as a command or folded into the draft.
+                        if (base.isBlank() && !stopping) notice = context.str(R.string.voice_echo_ignored)
+                        finishChunk(stopping)
+                    }
+                    else -> when (
+                        // The command vocabulary (docs/phases/55-voice-mode.md): the one-shot recognizer only ever
+                        // produces a transcript in the "dictating" context (there is no live mic while speaking to hear
+                        // a barge-in command in, and no wake listener armed outside a chat -- all Android reaches today).
+                        val match = commandParser.parse(text, VoiceContext.DICTATING.accepts)
+                    ) {
+                        is VoiceCommandMatch.Command -> {
+                            combined(match.textBefore).takeIf { it.isNotBlank() }?.let { act(VoiceEvent.Transcript(it)) }
+                            val actions = act(VoiceEvent.Command(match.command))
+                            val toSend = actions.filterIsInstance<VoiceAction.Send>().firstOrNull()?.text
+                            when {
+                                toSend != null -> send(toSend)
+                                match.command == VoiceCommand.DEACTIVATE -> onStandardView()
+                                match.command == VoiceCommand.REPEAT_REPLY -> replyText?.let { speak(SpokenText(it).chunks) }
+                                match.command == VoiceCommand.READ_ALL -> replyText?.let { speak(SpokenText(it).full) }
+                                // DISCARD/MUTE/UNMUTE already took effect in the reducer (draft cleared / isMuted
+                                // flipped); STOP_SPEAKING/SKIP/STOP_AGENT are recognized but have no handler yet -- they
+                                // need a live mic while speaking (real barge-in) or an engine hook this screen lacks.
+                                else -> if (chainContinues(stopping)) startListening(machine.draft)
+                            }
+                        }
+                        // Plain dictation: folded into the running draft, then the chain continues (or sends, on a
+                        // manual stop) -- not an immediate auto-send the way a single one-shot chunk used to mean.
+                        VoiceCommandMatch.None -> { act(VoiceEvent.Transcript(combined(text))); finishChunk(stopping) }
                     }
                 }
             },
             onFailure = {
                 recognizing = false
+                stopRequested = false
                 act(VoiceEvent.Failure("recognition failed"))
                 notice = context.str(R.string.voice_recognition_failed)
             },
@@ -311,19 +358,19 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     }
 
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startListening() else notice = context.str(R.string.voice_permission_refused)
+        if (granted) startListening("") else notice = context.str(R.string.voice_permission_refused)
     }
 
     fun toggleMic() {
         if (machine.isMuted) return
-        if (recognizing) { recognizer.stop(); return }
+        if (recognizing) { stopRequested = true; recognizer.stop(); return }
         // Sending/Waiting: a turn is in flight; the tap is ignored rather than starting a second recognition session on
         // top of it (a gap the old ad hoc booleans had).
         if (machine.phase == VoicePhase.Sending || machine.phase == VoicePhase.Waiting) return
         tts[0]?.stop()
         if (machine.phase == VoicePhase.Speaking) { act(VoiceEvent.SpeechEnded); echoFilter.speechEnded(System.currentTimeMillis()) }
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        if (granted) startListening() else askMic.launch(Manifest.permission.RECORD_AUDIO)
+        if (granted) startListening("") else askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -436,7 +483,9 @@ private fun ReplyCard(text: String, modifier: Modifier = Modifier) {
 private class Recognizer(private val context: Context) {
     private var recognizer: SpeechRecognizer? = null
 
-    fun start(onResult: (String?) -> Unit, onFailure: () -> Unit) {
+    /// [onPartial] fires as the user keeps talking, growing, before this one-shot session ends on its own and [onResult]
+    /// gives the final text (continuous listening chains several of these -- docs/phases/55-voice-mode.md, "Silence timeout").
+    fun start(onPartial: (String?) -> Unit, onResult: (String?) -> Unit, onFailure: () -> Unit) {
         val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it }
         r.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle?) {
@@ -445,12 +494,14 @@ private class Recognizer(private val context: Context) {
             override fun onError(error: Int) {
                 if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) onResult(null) else onFailure()
             }
+            override fun onPartialResults(partialResults: Bundle?) {
+                onPartial(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let(VoiceModeText::clean))
+            }
             override fun onReadyForSpeech(params: Bundle?) {}
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
-            override fun onPartialResults(partialResults: Bundle?) {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
         r.startListening(
@@ -458,7 +509,8 @@ private class Recognizer(private val context: Context) {
                 // Prefer the device's on-device model; avoids sending audio to the cloud (docs/phases/55-voice-mode.md).
                 .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false),
+                // On, so the draft can be shown and auto-sent against as it grows, not only once this chunk ends.
+                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true),
         )
     }
 
