@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_setting">Modo de voz</string>
+    <string name="voice_setting_note">Abre Peel con un micrófono sobre un lienzo en blanco. Un botón pequeño te lleva a la vista estándar.</string>
+    <string name="voice_mic_start">Hablar con Peel</string>
+    <string name="voice_mic_stop">Dejar de escuchar</string>
+    <string name="voice_listening">Escuchando…</string>
+    <string name="voice_tap_to_talk">Toca para hablar</string>
+    <string name="voice_sending">Enviando…</string>
+    <string name="voice_thinking">Pensando…</string>
+    <string name="voice_speaking">Hablando…</string>
+    <string name="voice_mute">Silenciar</string>
+    <string name="voice_unmute">Dejar de silenciar</string>
+    <string name="voice_muted">Silenciado — toca para dejar de silenciar</string>
+    <string name="voice_type_hint">Escribe un mensaje…</string>
+    <string name="voice_send">Enviar</string>
+    <string name="voice_standard_view">Vista estándar</string>
+    <string name="voice_sent">Enviado a Peel</string>
+    <string name="voice_no_agent">El agente de Peel aún no está configurado en esta cuenta. Abre la vista estándar para configurarlo.</string>
+    <string name="voice_permission_refused">Se rechazó el acceso al micrófono. Puedes escribir un mensaje en su lugar.</string>
+    <string name="voice_unavailable">El reconocimiento de voz no está disponible en este dispositivo. Puedes escribir un mensaje en su lugar.</string>
+    <string name="voice_heard_nothing">No te entendí. Toca el micrófono para intentarlo de nuevo, o escribe un mensaje.</string>
+    <string name="voice_echo_ignored">Eso sonó como la propia voz de Peel. Intenta de nuevo cuando esté en silencio.</string>
+    <string name="voice_recognition_failed">Falló el reconocimiento de voz. Inténtalo de nuevo o escribe un mensaje.</string>
+    <string name="voice_send_failed">No se pudo enviar: %1$s</string>
+    <string name="voice_interaction_label">Modo de interacción</string>
+    <string name="voice_interaction_speech_in_speech_out">Hablar y escuchar</string>
+    <string name="voice_interaction_text_in_text_out">Escribir y leer</string>
+    <string name="voice_interaction_speech_in_text_out">Hablar y leer</string>
+    <string name="voice_interaction_text_in_speech_out">Escribir y escuchar</string>
+    <string name="voice_subtitles">Mostrar subtítulos</string>
+    <string name="voice_subtitles_note">Muestra la respuesta hablada como texto mientras se lee en voz alta.</string>
+    <string name="voice_reply_waiting">Esperando respuesta…</string>
+    <string name="voice_reply_label">Respuesta de Peel</string>
+</resources>

@@ -308,6 +308,14 @@ class ControlPlan(
     /// Whether [row] is drawn as a quiet line or request row rather than a bubble.
     fun isControl(row: MessageRow): Boolean = row.id in rows
 
+    /// The first still-open request asking for your approval, if any: unanswered, needing your yes (`AgentRequest.asks`),
+    /// and not yet past its expiry (`outcomeElsewhere`'s own condition, read back out here). The phone never answers one
+    /// (decision 9): this is only so a caller that has no card of its own -- Voice Mode (docs/phases/55-voice-mode.md) -- can
+    /// say so instead of sitting silent, the way `AgentRequestLine` already shows "Waiting for your approval on your Mac".
+    fun pendingApproval(nowSeconds: Long): AgentRequest? =
+        rows.values.asSequence().filterIsInstance<ControlRow.Request>().map { it.request }
+            .firstOrNull { it.asks && it.status == null && !it.isExpired(nowSeconds) }
+
     companion object {
         val NONE = ControlPlan(emptyMap(), emptySet())
 

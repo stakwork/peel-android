@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_setting">Voice Mode</string>
+    <string name="voice_setting_note">Open Peel on a microphone and a blank canvas. A small button takes you to the standard view.</string>
+    <string name="voice_mic_start">Talk to Peel</string>
+    <string name="voice_mic_stop">Stop listening</string>
+    <string name="voice_listening">Listening…</string>
+    <string name="voice_tap_to_talk">Tap to talk</string>
+    <string name="voice_sending">Sending…</string>
+    <string name="voice_thinking">Thinking…</string>
+    <string name="voice_speaking">Speaking…</string>
+    <string name="voice_mute">Mute</string>
+    <string name="voice_unmute">Unmute</string>
+    <string name="voice_muted">Muted — tap Unmute to continue</string>
+    <string name="voice_type_hint">Type a message…</string>
+    <string name="voice_send">Send</string>
+    <string name="voice_standard_view">Standard view</string>
+    <string name="voice_sent">Sent to Peel</string>
+    <string name="voice_no_agent">Peel\'s agent isn\'t set up on this account yet. Open the standard view to set it up.</string>
+    <string name="voice_permission_refused">Microphone access was refused. You can type a message instead.</string>
+    <string name="voice_unavailable">Speech recognition isn\'t available on this device. You can type a message instead.</string>
+    <string name="voice_heard_nothing">Didn\'t catch that. Tap the microphone to try again, or type a message.</string>
+    <string name="voice_echo_ignored">That sounded like Peel\'s own voice. Try again once it\'s quiet.</string>
+    <string name="voice_recognition_failed">Speech recognition failed. Try again, or type a message.</string>
+    <string name="voice_send_failed">Couldn\'t send: %1$s</string>
+    <string name="voice_interaction_label">Interaction mode</string>
+    <string name="voice_interaction_speech_in_speech_out">Speech in, speech out</string>
+    <string name="voice_interaction_text_in_text_out">Text in, text out</string>
+    <string name="voice_interaction_speech_in_text_out">Speech in, text out</string>
+    <string name="voice_interaction_text_in_speech_out">Text in, speech out</string>
+    <string name="voice_subtitles">Show subtitles</string>
+    <string name="voice_subtitles_note">Show the spoken reply as text while it is read aloud.</string>
+    <string name="voice_reply_waiting">Waiting for reply…</string>
+    <string name="voice_reply_label">Peel\'s reply</string>
+</resources>
