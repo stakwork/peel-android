@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
+import com.sphinx.peel.engine.SpokenText
 import com.sphinx.peel.engine.VoiceModeInteraction
 import com.sphinx.peel.engine.VoiceModePrefs
 import com.sphinx.peel.engine.VoiceModeReply
@@ -127,7 +128,14 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     }
     androidx.compose.runtime.LaunchedEffect(replyText, interaction) {
         val reply = replyText ?: return@LaunchedEffect
-        if (interaction.speaksReply) tts[0]?.speak(reply, TextToSpeech.QUEUE_FLUSH, null, "vm_reply") else tts[0]?.stop()
+        if (interaction.speaksReply) {
+            // Markdown cleaned to plain sentences and capped (docs/phases/55-voice-mode.md): code/tables/links become a short
+            // phrase and a long reply is cut with a spoken note, rather than TextToSpeech reading raw markdown verbatim.
+            val chunks = SpokenText(reply).chunks
+            chunks.forEachIndexed { i, chunk ->
+                tts[0]?.speak(chunk, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "vm_reply_$i")
+            }
+        } else tts[0]?.stop()
     }
 
     // The agent's reply: what the engine receives in its DM (`Engine.incoming`, the same feed the notifier reads).
