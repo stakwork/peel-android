@@ -156,6 +156,29 @@ thing that decides); the reply panel only showing in mic-less modes (Android's o
 `!interaction.speaksReply`, not `!interaction.usesMic`, so both text-out modes already worked); the mode picker's
 emoji labels being translatable strings (Android's `glyphs()` was already a plain Kotlin string, never in the catalog).
 
+## Three fixes from trying it on a device (`voice-mode-ui-fixes` branch)
+
+- 2026-11-22 — **Its own section in You, above Stadeum.** The setting, interaction picker and subtitles toggle were
+  threaded into the middle of the big "Account" box (`AccountDivider()` either side), rather than their own section
+  the way Stadeum gets one. `VoiceModeSection` (`ui/you/YouScreen.kt`) pulls them into their own
+  `SectionHeader`+card, placed right after the Agent row and before Stadeum's.
+- 2026-11-22 — **The grid button returned to the wrong tab.** `MainTabs` owns its tab state (`TabState`) through its
+  own `remember { TabState(hasTasks) }`, created fresh every time it is composed -- and because Voice Mode and the
+  standard view are two different composables swapped in the same slot (`MainActivity.PeelApp`'s `if (route ==
+  VoiceModeRoute.VOICE) VoiceModeScreen(...) else MainTabs(...)`), `MainTabs` is fully torn down and rebuilt each
+  time Voice Mode is turned off, losing which tab was in front and always starting back on Chats. `MainTab` (was
+  `internal`, now public -- a public function, `MainTabs`, needed it in its own signature) is held one level up
+  instead: `PeelApp`'s own `lastMainTab` (`rememberSaveable`), updated by a new `onTabChanged` callback `MainTabs`
+  fires on every tab change, and read back as `TabState`'s new `initialTab` the next time `MainTabs` is built. So
+  turning Voice Mode off from the grid button now returns to Chats, Payments, or You/Profile, whichever was actually
+  in front when Voice Mode took over -- not always Chats.
+- 2026-11-22 — **The four mode chips didn't fit next to the grid button.** `ModePicker` shared the top row with the
+  grid icon, padded in by `start = 56.dp, end = 56.dp` to dodge it; four chips plus that reserved width left too
+  little room, and the last chip's own `FilterChip` wrapped its glyphs onto several lines rather than simply
+  overflowing (seen on a device, not something a JVM/Robolectric layout test would have caught). Moved to its own
+  row below the grid button (`top = 56.dp` instead of `12.dp`, `start = 16.dp, end = 16.dp` instead of `56.dp`), so
+  all four chips have close to the full screen width to themselves.
+
 ## Interaction modes
 
 Four modes (`VoiceModeInteraction`, key `voiceModeInteraction`, default speech in / speech out), picked with a row of chips under the
