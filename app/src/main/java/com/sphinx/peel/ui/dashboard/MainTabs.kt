@@ -110,6 +110,10 @@ data class DeepLink(val chat: String?, val payments: Boolean, val you: Boolean =
 fun MainTabs(
     engine: Engine, storage: Storage, secretStore: SecretStore,
     deepLink: DeepLink? = null, onDeepLinkHandled: () -> Unit = {}, pages: com.sphinx.peel.ui.page.PublicPageRouter = remember { com.sphinx.peel.ui.page.PublicPageRouter() },
+    // The tab shown before Voice Mode last took over the screen, and where a tab change is reported back to remember
+    // for next time (docs/phases/55-voice-mode.md): so its grid button returns to Chats, Payments or You/Profile, not
+    // always Chats, when the screen is shown again (`MainActivity.PeelApp` holds the saved value across the swap).
+    initialTab: MainTab? = null, onTabChanged: (MainTab) -> Unit = {},
     onForgotten: () -> Unit,
 ) {
     // The Tasks tab's pages: the `public_app` rows of strut's `strut/worker`, read again as one is kept or forgotten (and as a
@@ -118,8 +122,9 @@ fun MainTabs(
     val connectionsVersion by storage.walletConnectionsVersion.collectAsState()
     val tasksPages = remember(publicVersion, connectionsVersion) { TasksTab.pages(storage.openedApps()) }
     val hasTasks = tasksPages.isNotEmpty()
-    val tabs = remember { TabState(hasTasks) }
+    val tabs = remember { TabState(hasTasks, initialTab) }
     val tab = MainTab.shown(tabs.tab, hasTasks)
+    LaunchedEffect(tab) { onTabChanged(tab) }
     // An open chat replaces the whole tab area, bar included — PeelCore's
     // `ConversationScreen` hides the tab bar the same way; Back returns to
     // whichever tab was open, not necessarily Chats.

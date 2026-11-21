@@ -351,6 +351,10 @@ private fun YouMain(
             Spacer(Modifier.height(24.dp))
         }
 
+        item { SectionHeader(stringResource(R.string.voice_setting)) }
+        item { VoiceModeSection(appContext) }
+        item { Spacer(Modifier.height(24.dp)) }
+
         item { SectionHeader("Stadeum") }
         item { StadeumSection(Stadeum.model) }
         item { Spacer(Modifier.height(24.dp)) }
@@ -423,49 +427,6 @@ private fun YouMain(
                     label = stringResource(R.string.misc_you_site_location), value = remember(siteVersion) { storage.siteLocations().size }.let { if (it == 0) stringResource(R.string.misc_none) else "$it" },
                     onClick = onOpenSiteLocation, chevron = true,
                 )
-                AccountDivider()
-                val voicePrefs = remember { com.sphinx.peel.engine.VoiceModePrefs.of(appContext) }
-                var voiceMode by remember { mutableStateOf(voicePrefs.enabled) }
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(stringResource(R.string.voice_setting), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
-                    Switch(checked = voiceMode, onCheckedChange = { voiceMode = it; voicePrefs.enabled = it })
-                }
-                Text(
-                    stringResource(R.string.voice_setting_note),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Theme.colors.secondaryText,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                )
-                var interaction by remember { mutableStateOf(voicePrefs.interaction) }
-                var subtitles by remember { mutableStateOf(voicePrefs.subtitles) }
-                var pickingInteraction by remember { mutableStateOf(false) }
-                AccountRow(
-                    label = stringResource(R.string.voice_interaction_label), value = stringResource(interaction.labelRes()),
-                    onClick = { pickingInteraction = true },
-                )
-                androidx.compose.material3.DropdownMenu(expanded = pickingInteraction, onDismissRequest = { pickingInteraction = false }) {
-                    for (mode in com.sphinx.peel.engine.VoiceModeInteraction.entries) {
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = { Text(stringResource(mode.labelRes())) },
-                            onClick = { interaction = mode; voicePrefs.interaction = mode; pickingInteraction = false },
-                        )
-                    }
-                }
-                if (interaction.speaksReply) {
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(stringResource(R.string.voice_subtitles), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
-                            Text(stringResource(R.string.voice_subtitles_note), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
-                        }
-                        Switch(checked = subtitles, onCheckedChange = { subtitles = it; voicePrefs.subtitles = it })
-                    }
-                }
                 AccountDivider()
                 var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
                 Row(
@@ -1165,6 +1126,57 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                     container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
                 )
                 Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+/// You › Voice Mode, its own section (docs/phases/55-voice-mode.md): the setting, which interaction mode, and subtitles
+/// once a speech-out mode is picked.
+@Composable
+private fun VoiceModeSection(context: android.content.Context) {
+    val voicePrefs = remember { com.sphinx.peel.engine.VoiceModePrefs.of(context) }
+    var voiceMode by remember { mutableStateOf(voicePrefs.enabled) }
+    var interaction by remember { mutableStateOf(voicePrefs.interaction) }
+    var subtitles by remember { mutableStateOf(voicePrefs.subtitles) }
+    var pickingInteraction by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(R.string.voice_setting), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+            Switch(checked = voiceMode, onCheckedChange = { voiceMode = it; voicePrefs.enabled = it })
+        }
+        Text(
+            stringResource(R.string.voice_setting_note),
+            style = MaterialTheme.typography.labelSmall,
+            color = Theme.colors.secondaryText,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+        )
+        AccountRow(
+            label = stringResource(R.string.voice_interaction_label), value = stringResource(interaction.labelRes()),
+            onClick = { pickingInteraction = true },
+        )
+        androidx.compose.material3.DropdownMenu(expanded = pickingInteraction, onDismissRequest = { pickingInteraction = false }) {
+            for (mode in com.sphinx.peel.engine.VoiceModeInteraction.entries) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(stringResource(mode.labelRes())) },
+                    onClick = { interaction = mode; voicePrefs.interaction = mode; pickingInteraction = false },
+                )
+            }
+        }
+        if (interaction.speaksReply) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.voice_subtitles), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                    Text(stringResource(R.string.voice_subtitles_note), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+                }
+                Switch(checked = subtitles, onCheckedChange = { subtitles = it; voicePrefs.subtitles = it })
             }
         }
     }

@@ -361,7 +361,9 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
             Icon(Icons.Filled.GridView, contentDescription = stringResource(R.string.voice_turn_off), tint = inkColor().copy(alpha = 0.55f), modifier = Modifier.size(22.dp))
         }
 
-        ModePicker(interaction, Modifier.align(Alignment.TopCenter).padding(top = 12.dp, start = 56.dp, end = 56.dp)) {
+        // Below the grid button, not beside it: four chips plus the grid icon never fit one row at once width-wise,
+        // the last chip squeezed down to a sliver that wrapped its own glyphs onto several lines.
+        ModePicker(interaction, Modifier.align(Alignment.TopCenter).padding(top = 56.dp, start = 16.dp, end = 16.dp)) {
             // Switching away from a speech-out mode stops whatever it was reading right away, rather than leaving it
             // playing under a screen that no longer looks like it is speaking.
             if (!it.speaksReply && phase == VoicePhase.Speaking) { tts[0]?.stop(); act(VoiceEvent.SpeechEnded); echoFilter.speechEnded(System.currentTimeMillis()) }

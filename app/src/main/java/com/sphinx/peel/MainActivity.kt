@@ -284,9 +284,16 @@ private fun PeelApp(
             var showedStandard by rememberSaveable { mutableStateOf(false) }
             androidx.compose.runtime.LaunchedEffect(deepLink) { if (deepLink != null) showedStandard = true }
             val route = VoiceModeRoute.initial(voiceModeOn, showedStandard || deepLink != null)
+            // The tab shown before Voice Mode took over (Chats, Payments, You/Profile, …): MainTabs itself is torn down and
+            // rebuilt across the swap (it's a different composable in this same slot), so its own tab state does not survive
+            // on its own -- held here instead, above both, so the grid button returns to where the person actually was.
+            var lastMainTab by rememberSaveable { mutableStateOf<com.sphinx.peel.ui.dashboard.MainTab?>(null) }
             Box(Modifier.fillMaxSize()) {
                 if (route == VoiceModeRoute.VOICE) VoiceModeScreen(current.engine, storage) { voicePrefs.enabled = false }
-                else MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router) { router.reset(); screen = Screen.Onboarding }
+                else MainTabs(
+                    current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router,
+                    initialTab = lastMainTab, onTabChanged = { lastMainTab = it },
+                ) { router.reset(); screen = Screen.Onboarding }
                 com.sphinx.peel.ui.update.UpdateHost()
                 router.page?.let { link -> val page = remember(link) { PublicPage(link) }; OrgPageScreen(page, current.engine.walletHost, onClose = router::close, locations = storage) }
             }
