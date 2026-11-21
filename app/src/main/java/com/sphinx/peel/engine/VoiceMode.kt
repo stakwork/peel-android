@@ -14,6 +14,18 @@ class VoiceModePrefs(private val prefs: SharedPreferences) {
         get() = prefs.getBoolean(KEY, false)
         set(value) { prefs.edit().putBoolean(KEY, value).apply() }
 
+    /// Calls [onChange] with the new value whenever [enabled] changes, from any `VoiceModePrefs` instance (they all
+    /// share the one SharedPreferences file) -- so the app root's routing can react live, the way iOS's `@AppStorage`
+    /// does, to the setting changing elsewhere (You's own toggle, or Voice Mode's own grid icon turning it off).
+    /// Unregister the returned listener with [removeListener] when done (a `DisposableEffect`'s `onDispose`).
+    fun onEnabledChanged(onChange: (Boolean) -> Unit): SharedPreferences.OnSharedPreferenceChangeListener {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { changed, key -> if (key == KEY) onChange(changed.getBoolean(KEY, false)) }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        return listener
+    }
+
+    fun removeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) = prefs.unregisterOnSharedPreferenceChangeListener(listener)
+
     /// How the person and Peel talk in Voice Mode (see [VoiceModeInteraction]).
     var interaction: VoiceModeInteraction
         get() = VoiceModeInteraction.of(prefs.getString(VoiceModeInteraction.KEY, null))
@@ -94,12 +106,31 @@ object VoiceModeSubtitles {
     const val DEFAULT = false
 }
 
-/// The agent's reply text in a message the engine received: a plain, undeleted text message from the agent's DM that is not a control line.
+/// What Voice Mode shows (or reads) as the agent's reply: the agent's texts since the person's own newest message in
+/// its DM, read from the chat's stored messages rather than a single live-arriving row (docs/phases/55-voice-mode.md,
+/// "What the reply actually is"). Ported from peel's `VoiceModeReply` (`Sources/PeelUI/Voice/VoiceModeScreen.swift`).
 object VoiceModeReply {
-    fun text(row: com.sphinx.peel.storage.MessageRow, agentPubkey: String): String? {
-        if (row.chat != agentPubkey || row.fromMe || row.deleted || row.type != TEXT_MESSAGE_TYPE) return null
-        if (ControlMessages.control(row.type, row.deleted, row.body) != null) return null
-        val content = row.body?.let { runCatching { org.json.JSONObject(it).optString("content") }.getOrNull() }
-        return content?.let(VoiceModeText::clean)
+    /// The agent's texts since the person's newest message, oldest first; empty while it has not answered yet. A
+    /// control line, a deleted message, and the person's own that never went (failed) do not count as a turn.
+    fun latest(messages: List<com.sphinx.peel.storage.MessageRow>, agentPubkey: String): List<com.sphinx.peel.storage.MessageRow> {
+        val replies = mutableListOf<com.sphinx.peel.storage.MessageRow>()
+        for (row in messages.asReversed()) {
+            if (row.chat != agentPubkey || row.deleted) continue
+            if (ControlMessages.control(row.type, row.deleted, row.body) != null) continue
+            if (row.fromMe) {
+                if (row.status == "FAILED") continue
+                break
+            }
+            if (row.type == TEXT_MESSAGE_TYPE) replies.add(row)
+        }
+        return replies.asReversed()
+    }
+
+    /// [replies] as one text, a blank line between them.
+    fun text(replies: List<com.sphinx.peel.storage.MessageRow>): String? {
+        val texts = replies.mapNotNull { row ->
+            row.body?.let { runCatching { org.json.JSONObject(it).optString("content") }.getOrNull() }?.let(VoiceModeText::clean)
+        }
+        return texts.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
     }
 }
