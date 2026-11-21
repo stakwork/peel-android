@@ -132,12 +132,14 @@ sections for code that isn't written yet.
     (`ApkDownloader`, `UpdateFiles`, `ArchiveCheck`), `UpdateController.kt` (state machine over `ApkInstaller`), `UpdateText.kt`; Android parts only in
     `AndroidUpdate.kt` (OkHttp, prefs, PackageManager, FileProvider install intent, `Updates` singleton). UI: `ui/update/UpdateUi.kt` (`UpdateHost`, in
     `MainActivity`) and You › Check for updates. `BuildConfig.UPDATES_ENABLED` is true only for a release build with a supplied `VERSION_CODE`.
-  - `engine/VoiceMode.kt` (`VoiceModePrefs` key `voiceMode`, `VoiceModeRoute`, `Linen.flecks`, `VoiceModeText`), `engine/SpokenText.kt` (reply markdown →
+  - `engine/VoiceMode.kt` (`VoiceModePrefs` key `voiceMode`, with `onEnabledChanged` bridging it live into Compose across screens; `VoiceModeRoute`,
+    `Linen.flecks`, `VoiceModeText`, `VoiceModeReply.latest`/`text` — the agent's replies since the person's own newest message, read fresh from
+    `storage.messages`, ported from peel's `VoiceModeReply`), `engine/SpokenText.kt` (reply markdown →
     sentence-sized, length-capped speech, ported from peel's `SpokenText.swift`), `engine/VoiceMachine.kt` (the idle/listening/hearing/sending/waiting/speaking
     phase reducer, mute and the command vocabulary, ported from peel's `VoiceModeState.swift`), `engine/VoiceCommandParser.kt` (the English phrase table and
     parser — "peel send", "peel mute", … — ported from peel's `VoiceCommand.swift`), `engine/EchoFilter.kt` (tells Peel's own TTS reply apart from the user,
     ported from peel's `EchoFilter.swift` — narrower on Android, see the phase doc), `ui/voice/VoiceModeScreen.kt` — Voice Mode
-    (`docs/phases/55-voice-mode.md`): a setting (You › Account) that opens a mic-on-linen screen first; speech/typed text goes to the agent's DM via `Engine.sendMessage`; `MainActivity.PeelApp` routes.
+    (`docs/phases/55-voice-mode.md`): a setting (You › Account) that opens a mic-on-linen screen first; speech/typed text goes to the agent's DM via `Engine.sendMessage`; `MainActivity.PeelApp` routes, and its grid button turns the setting off rather than hiding the screen for just this launch.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

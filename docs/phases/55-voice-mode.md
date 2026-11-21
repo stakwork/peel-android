@@ -6,7 +6,8 @@ Status (2026-11-21): **built; compiled, lint-clean, JVM/Robolectric-tested (sett
 
 An alternative first screen behind a setting (You › Account › Voice Mode, default off): a mic in the middle of a linen canvas, a small
 "Type a message…" capsule at the bottom that springs up into a multi-line field with a send button, and a small grid button at the top
-right that opens the standard view for the rest of the launch (the setting stays on).
+right that turns the setting off (the standard view comes back; turning it on again, from here or from You, reopens this screen at
+once — `voice-mode-fixes` branch).
 
 ## Decided
 
@@ -105,6 +106,55 @@ right that opens the standard view for the rest of the launch (the setting stays
   **Real barge-in** — saying "peel stop" out loud while the reply is still playing, with no tap at all — is not possible
   on Android's `SpeechRecognizer` without a continuously-running, custom `AudioRecord`-based recognizer bypassing the
   system API entirely; that is a materially bigger, separate piece of work, not an extension of this one.
+
+## What the reply actually is (`voice-mode-fixes` branch)
+
+Peel's iOS side made a pass fixing several things across the modes once it actually ran (commit `dfa01f4`, "make every
+mode work, grid turns it off"). Checked each one against Android; four applied here too, three didn't need to:
+
+- **Replies missed, and only the first of several shown.** `VoiceModeReply.text(row, agentPubkey)` only ever looked at
+  one row from a single `engine.incoming` emission -- a transient, non-replaying `SharedFlow`
+  (`Engine.kt`'s `incomingFlow`). Anything already sitting in storage before this screen started collecting (the app
+  was closed, or Voice Mode simply wasn't the open screen) was never seen, and if the agent sent two messages in the
+  same batch, `rows.firstNotNullOfOrNull { ... }` kept only the first and silently dropped the rest.
+  `VoiceModeReply.latest(messages, agentPubkey)` (`engine/VoiceMode.kt`), ported from peel's own `VoiceModeReply.latest`,
+  walks a fresh `storage.messages(engine.agentPubkey)` read backward from the newest row, collecting every one of the
+  agent's text replies until it hits the person's own last successfully-sent message (a failed send doesn't count as a
+  turn boundary); `VoiceModeReply.text(replies)` joins them with a blank line between, same as peel's. `engine.incoming`
+  is now only the trigger to re-read storage (the same pattern `pendingApproval` already used), not the data itself.
+  This is the same class of bug as iOS's (reply detection tied to a live event stream rather than persisted history),
+  reached by a different route: Android never had iOS's single global "open chat" gate in the first place.
+  JVM-tested: `VoiceModeReplyTest`, ported from peel's `replyIsWhatTheAgentSaidSinceYourNewestMessage`/
+  `replySkipsWhatIsNoTurn`.
+- **A second reply cut the first one off instead of waiting.** Speaking a reply re-chunked and re-spoke the *whole*
+  joined text from scratch on every change with `QUEUE_FLUSH`, so a reply arriving while an earlier one in the same
+  turn was still being read restarted the speech mid-sentence, now retelling the first reply before the second. Fixed
+  by tracking which replies (by row id) have already been queued this turn (`spokenReplyIds`) and speaking only the
+  unqueued remainder, `QUEUE_ADD`-ed after whatever's already playing rather than flushing, whenever `phase` is already
+  `Speaking` (`speak(chunks, flush = ...)`, batched utterance ids so the progress listener still recognises the true
+  end of the whole queued sequence). Unlike iOS, which built a separate `readAloud` path specifically for text-in,
+  speech-out (its regular voice-mode speaking already serialised replies through its own turn machinery), Android's
+  single shared speak-the-reply effect had this gap for *every* speech-out mode, not only that one.
+- **The grid icon had no way back.** It set an in-memory `showedStandard` flag for the rest of the launch; the
+  `voiceMode` setting itself never changed, so turning Voice Mode back on required relaunching the app. The grid
+  button now sets `voicePrefs.enabled = false` directly, and `MainActivity.PeelApp` listens for that setting changing
+  from *any* screen (`VoiceModePrefs.onEnabledChanged`, a `SharedPreferences.OnSharedPreferenceChangeListener` bridged
+  into Compose state -- Android's nearest equivalent to iOS's `@AppStorage`, which every view observes automatically),
+  so re-enabling it from You while already in the standard view reopens Voice Mode at once, not on the next launch.
+  `voice_setting_note` and the grid's own accessibility label (renamed `voice_turn_off`, was `voice_standard_view`)
+  updated to say so, in English and Spanish. The deep-link/notification override (`showedStandard` forced by a tapped
+  link) is untouched -- that's Android already doing better than iOS's own documented gap there, not part of this fix.
+  JVM-tested: `onEnabledChanged` fires across separate `VoiceModePrefs` instances on the same SharedPreferences file.
+- **Subtitles kept showing the previous reply while idle.** The condition was just `replyText != null`, with nothing
+  checking that a reply was actually *being read* right now; once TTS finished and phase settled back to Listening,
+  the subtitle band kept showing the last reply's text until the next send. Added `phase == VoicePhase.Speaking` to
+  the condition.
+
+Not ported, already fine or structurally not applicable on Android: a separate "spoken replies" setting overriding the
+mode's own choice (Android never built a second, conflicting setting -- `VoiceModeInteraction.speaksReply` is the only
+thing that decides); the reply panel only showing in mic-less modes (Android's own condition was already keyed on
+`!interaction.speaksReply`, not `!interaction.usesMic`, so both text-out modes already worked); the mode picker's
+emoji labels being translatable strings (Android's `glyphs()` was already a plain Kotlin string, never in the catalog).
 
 ## Interaction modes
 

@@ -271,14 +271,21 @@ private fun PeelApp(
                 router.openWaitingLink()
                 onDispose { router.locked() }
             }
-            // Voice Mode (docs/phases/55-voice-mode.md): the setting opens the voice screen first; the grid button goes to the standard
-            // view for the rest of this launch (kept across rotation), the setting stays on. A tapped link or notification goes to the tabs.
+            // Voice Mode (docs/phases/55-voice-mode.md): the setting opens the voice screen first; its grid button turns the
+            // setting off (the standard view comes back), and turning it on again -- from here or from You -- opens the
+            // screen again at once, without needing a relaunch (`onEnabledChanged`, like iOS's own `@AppStorage`). A tapped
+            // link or notification goes to the tabs for the rest of this launch regardless of the setting.
             val voicePrefs = remember { VoiceModePrefs.of(appContext) }
+            var voiceModeOn by remember { mutableStateOf(voicePrefs.enabled) }
+            DisposableEffect(voicePrefs) {
+                val listener = voicePrefs.onEnabledChanged { voiceModeOn = it }
+                onDispose { voicePrefs.removeListener(listener) }
+            }
             var showedStandard by rememberSaveable { mutableStateOf(false) }
             androidx.compose.runtime.LaunchedEffect(deepLink) { if (deepLink != null) showedStandard = true }
-            val route = VoiceModeRoute.initial(voicePrefs.enabled, showedStandard || deepLink != null)
+            val route = VoiceModeRoute.initial(voiceModeOn, showedStandard || deepLink != null)
             Box(Modifier.fillMaxSize()) {
-                if (route == VoiceModeRoute.VOICE) VoiceModeScreen(current.engine, storage) { showedStandard = true }
+                if (route == VoiceModeRoute.VOICE) VoiceModeScreen(current.engine, storage) { voicePrefs.enabled = false }
                 else MainTabs(current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router) { router.reset(); screen = Screen.Onboarding }
                 com.sphinx.peel.ui.update.UpdateHost()
                 router.page?.let { link -> val page = remember(link) { PublicPage(link) }; OrgPageScreen(page, current.engine.walletHost, onClose = router::close, locations = storage) }
