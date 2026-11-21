@@ -50,6 +50,27 @@ right that opens the standard view for the rest of the launch (the setting stays
   type box's send button, and the recognizer's implicit end-of-utterance), not by a recognized phrase.
   JVM-tested (`VoiceMachineTest`, ported from `VoiceModeStateTests.swift`, excluding the `VoiceSettings`/`VoiceDefaults` cases,
   which belong to the auto-send item).
+- 2026-11-21 — `VoiceCommandParser` (`engine/VoiceCommandParser.kt`), ported from peel's `VoiceCommand.swift`: the English
+  phrase table (`VoiceCommandPhrases.ENGLISH`), the wake word "peel" and its mishearings ("pill", "peal", "feel"), longest-
+  phrase-wins matching, and `VoiceContext.accepts` (which commands count in which context). JVM-tested
+  (`VoiceCommandParserTest`, ported from `VoiceCommandParserTests.swift`, all cases).
+  Wired into the screen: the one-shot recognizer's final text is parsed (always in the `DICTATING` context — Android has no
+  live mic while speaking to hear a barge-in command, and no wake listener armed outside a chat, so that is the only
+  context it ever reaches) before falling back to plain dictation. Acted on today: **send** (explicit "peel send" or
+  auto-send on the one-shot result, same as before), **discard**, **mute**/**unmute**, **deactivate** (now closes to the
+  standard view, like the grid button), **repeat that** and **read it all** (re-speak the last reply, or its untruncated
+  `SpokenText.full`). Recognized but not yet acted on: **stop speaking** and **skip** (need a live mic while TTS plays —
+  barge-in, the next item), and **stop the agent** (no `stopAgentTurn`-equivalent engine hook on Android yet).
+  Mute is a tappable button too (iOS's panel has one "as the tappable alternative"), not only a spoken command: it dims the
+  mic, blocks a mic tap until unmuted, and shows "Muted — tap Unmute to continue" (highest priority over the phase/notice
+  text, since it is a standing choice, not a passing status). Typed sends are unaffected by mute — mute is specifically
+  about microphone input, as on iOS ("muting is about the user's microphone input: spoken replies still play").
+  The screen no longer forces a `Stop` event to settle "no live recognizer right now" (commit 7d35acd's approach): `Stop`
+  is "voice mode ended" in the reducer and also clears `isMuted`, so doing that between every one-shot utterance would
+  silently un-mute a muted person the moment anything else happened (a reply arriving, TTS finishing). The phases instead
+  settle naturally wherever the reducer's own transitions put them (`Listening` at rest, `Hearing` with a kept draft after
+  a failed send), and a plain `recognizing` flag (not part of the ported machine, since it is Android's own one-shot-
+  session detail) tracks whether the recognizer is literally capturing right now, for the mic's stop-icon/pulsing-rings.
 
 ## Interaction modes
 

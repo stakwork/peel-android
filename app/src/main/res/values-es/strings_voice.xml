@@ -9,6 +9,9 @@
     <string name="voice_sending">Enviando…</string>
     <string name="voice_thinking">Pensando…</string>
     <string name="voice_speaking">Hablando…</string>
+    <string name="voice_mute">Silenciar</string>
+    <string name="voice_unmute">Dejar de silenciar</string>
+    <string name="voice_muted">Silenciado — toca para dejar de silenciar</string>
     <string name="voice_type_hint">Escribe un mensaje…</string>
     <string name="voice_send">Enviar</string>
     <string name="voice_standard_view">Vista estándar</string>

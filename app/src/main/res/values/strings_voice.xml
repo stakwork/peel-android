@@ -9,6 +9,9 @@
     <string name="voice_sending">Sending…</string>
     <string name="voice_thinking">Thinking…</string>
     <string name="voice_speaking">Speaking…</string>
+    <string name="voice_mute">Mute</string>
+    <string name="voice_unmute">Unmute</string>
+    <string name="voice_muted">Muted — tap Unmute to continue</string>
     <string name="voice_type_hint">Type a message…</string>
     <string name="voice_send">Send</string>
     <string name="voice_standard_view">Standard view</string>
