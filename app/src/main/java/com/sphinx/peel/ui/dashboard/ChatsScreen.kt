@@ -126,11 +126,13 @@ private fun ChatListBody(
     onOpenInvite: (String) -> Unit = {},
     onOpenChat: (String) -> Unit = {},
 ) {
-    var conversations by remember { mutableStateOf(emptyList<ConversationRow>()) }
-    var unreadMentions by remember { mutableStateOf(0L) }
-    var unreadThreads by remember { mutableStateOf(0L) }
+    // Held outside the composition: a tab switch keeps the last list and refreshes behind it.
+    val listState = remember(storage) { ChatListState.of(storage) }
+    val conversations = listState.conversations
+    val unreadMentions = listState.unreadMentions
+    val unreadThreads = listState.unreadThreads
     // The invites still waiting (sending, ready, cancelling): a row each at the end of Direct messages.
-    var pendingInvites by remember { mutableStateOf(emptyList<InviteRecord>()) }
+    val pendingInvites = listState.pendingInvites
     var refresh by remember { mutableStateOf(0) }
     var tribesOpen by remember { mutableStateOf(true) }
     var directOpen by remember { mutableStateOf(true) }
@@ -186,13 +188,26 @@ private fun ChatListBody(
     // step, which covers the one real test so far, plus a plain poll as
     // the honest fallback for anything that arrives outside a restore.
     suspend fun reload() {
-        conversations = withContext(Dispatchers.Default) { storage.conversations() }
-        unreadMentions = withContext(Dispatchers.Default) {
-            storage.unreadMentions(storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You")
+        // One background hop for all reads (was five), then publish together so the list never shows half-updated.
+        val alias = storage.value(Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"
+        val read = withContext(Dispatchers.IO) {
+            listOf(
+                storage.conversations(),
+                storage.unreadMentions(alias),
+                storage.unreadThreadCount().toLong(),
+                storage.invites().filter { it.isPending },
+                engine.chatsRecentView() ?: layout.combinedView,
+            )
         }
-        unreadThreads = withContext(Dispatchers.Default) { storage.unreadThreadCount().toLong() }
-        pendingInvites = withContext(Dispatchers.Default) { storage.invites().filter { it.isPending } }
-        recentView = withContext(Dispatchers.Default) { engine.chatsRecentView() ?: layout.combinedView }
+        @Suppress("UNCHECKED_CAST")
+        run {
+            listState.conversations = read[0] as List<ConversationRow>
+            listState.unreadMentions = read[1] as Long
+            listState.unreadThreads = read[2] as Long
+            listState.pendingInvites = read[3] as List<InviteRecord>
+            recentView = read[4] as Boolean
+            listState.loaded = true
+        }
     }
     // `refresh`: a row action (read, unread, mute) just changed something.
     LaunchedEffect(restoreProgress, refresh) { reload() }
@@ -224,7 +239,12 @@ private fun ChatListBody(
         sections.direct.isEmpty() && agentConversation == null && underApps.isEmpty()
 
     Box(modifier) {
-        if (conversations.isEmpty() && !searching) {
+        if (!listState.loaded && conversations.isEmpty()) {
+            // First read still running: never the "No chats yet" placeholder.
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator(color = Theme.colors.secondaryText)
+            }
+        } else if (conversations.isEmpty() && !searching) {
             // Only for a kept public app here: a workspace's Apps row stays where iOS has it, in the list.
             EmptyChats(restoring = restoreProgress.restoring, showsApps = openedApps, pendingInvites = pendingInvites, onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite)
         } else if (noMatches) {
