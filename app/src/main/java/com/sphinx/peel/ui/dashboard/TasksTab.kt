@@ -52,8 +52,9 @@ enum class MainTab {
         /// The tabs in the bar's pill, in order (Search is the circle beside it).
         fun pill(hasTasks: Boolean): List<MainTab> = listOfNotNull(TASKS.takeIf { hasTasks }, CHATS, PAYMENTS, YOU)
 
-        /// The tab Peel opens on.
-        fun start(hasTasks: Boolean): MainTab = if (hasTasks) TASKS else CHATS
+        /// The tab Peel opens on: always Chats, Tasks or not. Tasks is a tap away, and a Tasks link still opens it.
+        @Suppress("UNUSED_PARAMETER")
+        fun start(hasTasks: Boolean): MainTab = CHATS
 
         /// The tab in front: Tasks gone (its last page forgotten) is Chats.
         fun shown(tab: MainTab, hasTasks: Boolean): MainTab = if (tab == TASKS && !hasTasks) CHATS else tab

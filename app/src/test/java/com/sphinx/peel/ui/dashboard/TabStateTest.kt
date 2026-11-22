@@ -19,13 +19,21 @@ class TabStateTest {
         assertEquals(listOf(MainTab.TASKS, MainTab.CHATS, MainTab.PAYMENTS, MainTab.YOU), MainTab.pill(hasTasks = true))
     }
 
-    @Test fun `Peel opens on Tasks while it exists, else on Chats`() {
-        assertEquals(MainTab.TASKS, TabState(hasTasks = true).tab)
+    @Test fun `Peel opens on Chats whether or not Tasks exists`() {
+        assertEquals(MainTab.CHATS, TabState(hasTasks = true).tab)
         assertEquals(MainTab.CHATS, TabState(hasTasks = false).tab)
         // Its last page forgotten while it was in front: Chats.
         assertEquals(MainTab.CHATS, MainTab.shown(MainTab.TASKS, hasTasks = false))
         assertEquals(MainTab.PAYMENTS, MainTab.shown(MainTab.PAYMENTS, hasTasks = false))
         assertEquals(MainTab.TASKS, MainTab.shown(MainTab.TASKS, hasTasks = true))
+    }
+
+    @Test fun `a Tasks link puts Tasks in front of the Chats Peel opened on`() {
+        val tabs = TabState(hasTasks = true)
+        assertEquals(MainTab.CHATS, tabs.tab)
+        tabs.openTasks(acme)
+        assertEquals(MainTab.TASKS, tabs.tab)
+        assertEquals(acme, tabs.chosen)
     }
 
     /// A new worker's signup: no Tasks page yet when the tabs open (Chats), then the invite's `a=` (a Tasks page) waits for the
