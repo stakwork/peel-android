@@ -22,7 +22,8 @@ import com.sphinx.peel.engine.PublicAppLink
 /// docs/phases/49-invite-signs-in.md). The mark is held only in memory, with the waiting link, and never logged.
 ///
 /// An employer's Tasks page (strut's `strut/worker`) opens as any public page does; it is a row in the Apps tab
-/// (docs/phases/48-tasks-tab.md), which replaced the Tasks tab.
+/// (docs/phases/48-tasks-tab.md), which replaced the Tasks tab. Apps is every app's home, so a public page is shown inside it
+/// (`MainTabs`), as is an org page opened from its Apps row ([orgInApps]); an org page from a chat is full screen over everything.
 class PublicPageRouter(private val opened: (link: PublicAppLink, invited: Boolean) -> Unit = { _, _ -> }) {
     /// The stranger's page on screen, if any (iOS `publicPage`).
     var page by mutableStateOf<PublicAppLink?>(null)
@@ -30,6 +31,10 @@ class PublicPageRouter(private val opened: (link: PublicAppLink, invited: Boolea
 
     /// An org's page on screen, if any (iOS `orgPage`): a workspace's app, a deliverable, a tapped Hive link.
     var orgPage by mutableStateOf<OrgPageRequest?>(null)
+        private set
+
+    /// Whether [orgPage] was opened from its row in Apps, and is shown inside that tab (iOS `AppsRoute.org`) rather than over everything.
+    var orgInApps by mutableStateOf(false)
         private set
 
     /// A link that arrived while the account was locked, opened once it unlocks.
@@ -66,9 +71,10 @@ class PublicPageRouter(private val opened: (link: PublicAppLink, invited: Boolea
         page = link
     }
 
-    /// iOS `router.orgPage = request`.
-    fun openOrg(request: OrgPageRequest) {
+    /// iOS `router.orgPage = request`; [inApps]: from its row in Apps (iOS `openInApps`).
+    fun openOrg(request: OrgPageRequest, inApps: Boolean = false) {
         orgPage = request
+        orgInApps = inApps
     }
 
     /// iOS `closeGoneOrgPage` (`.onChange(of: live)` and of the boxes): the org page goes when its workspace is no longer in use,

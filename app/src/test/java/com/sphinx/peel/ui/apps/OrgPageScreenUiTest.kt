@@ -75,18 +75,32 @@ class OrgPageScreenUiTest {
         val web = webView()
         assertEquals(org.url, shadowOf(web).lastLoadedUrl)
         assertEquals("Bearer tok", shadowOf(web).lastAdditionalHttpHeaders["Authorization"])
-        // Done and Reload, and nothing else: neither the app's title nor the workspace.
-        rule.onNodeWithContentDescription("Done").assertExists()
-        rule.onNodeWithContentDescription("Reload").assertExists()
+        // Full screen: Close and More, and nothing else: no Done, no Reload in reach, neither the app's title nor the workspace.
+        rule.onNodeWithContentDescription("Close").assertExists()
+        rule.onNodeWithContentDescription("More").assertExists()
+        rule.onNodeWithContentDescription("Done").assertDoesNotExist()
+        rule.onNodeWithContentDescription("Reload").assertDoesNotExist()
         rule.onNodeWithText("Board").assertDoesNotExist()
         rule.onNodeWithText("Acme").assertDoesNotExist()
     }
 
-    @Test fun `done closes and reload loads again with the bearer`() {
+    @Test fun `close closes and reload in More loads again with the bearer`() {
         show()
-        rule.onNodeWithContentDescription("Reload").performClick()
+        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithText("Reload").performClick()
         assertEquals("Bearer tok", shadowOf(webView()).lastAdditionalHttpHeaders["Authorization"])
-        rule.onNodeWithContentDescription("Done").performClick()
+        rule.onNodeWithContentDescription("Close").performClick()
+        assertEquals(1, closed)
+    }
+
+    @Test fun `inside Apps it is titled by the app and its back returns to Apps`() {
+        rule.setContent { PeelTheme { OrgPageScreen(org, host, onClose = { closed++ }, inApps = true, title = "Board") } }
+        rule.onNodeWithText("Board").assertExists()
+        rule.onNodeWithText("Acme").assertDoesNotExist()
+        rule.onNodeWithContentDescription("Close").assertDoesNotExist()
+        rule.onNodeWithContentDescription("More").assertExists()
+        // Nothing to go back to in the page: back leaves for the list.
+        rule.onNodeWithContentDescription("Apps").performClick()
         assertEquals(1, closed)
     }
 

@@ -5,6 +5,14 @@
 > `engine/AppsListing.kt` (`AppsListing`, JVM-tested) is the merge, `AppsScreen(onBack = null)` the tab. `TasksTab`, `TasksList`, `TabState`
 > and the kept-alive page are gone; a Tasks link (a worker's invite after signup) opens the page itself over the tabs like any public page.
 > Chats no longer has an Apps route; its Apps row only folds the pinned apps. What follows is the history of the Tasks tab.
+>
+> **An app opens inside Apps (2026-11-23).** A tester tapped "Done" at the top of Tasks expecting to finish the task: it closed the
+> page with the photo unsent. Now every public page (a worker's Tasks from its row, an invite or a link) and an org page opened from
+> its Apps row show inside the Apps tab (`MainTabs` `appsPage`, `PublicPageRouter.orgInApps`; iOS `AppsRoute`), with the bottom bar
+> hidden: ← steps back through the page's own history, then to the list (the system Back the same); the title is the app's own
+> (`OpenedApp.title`, or the org page's), never its host; Reload is in ⋮. An org page from a chat (a deliverable, a Hive link) stays
+> full screen over everything with ✕ (no more "Done") and Reload in ⋮. Over Voice Mode, which has no tabs, a public page is full
+> screen. Not run on a device or emulator.
 
 
 Status (2026-11-19): **built; JVM/Robolectric-tested; CI's three Gradle tasks pass locally; not run on a device or emulator.**

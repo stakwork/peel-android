@@ -290,6 +290,20 @@ fun MainTabs(
     val live = Stadeum.live
     val orgPage = pages.orgPage
     val shownPage = orgPage?.takeIf { it.isLive(live) || boxes.shows(it) }
+    // An app shown inside Apps, every app's home (docs/phases/48-tasks-tab.md, "An app opens inside Apps"): any public page (a
+    // worker's Tasks, from its row, an invite or a link), or an org page opened from its Apps row. Titled with the app's own name,
+    // never its host. The tab moves to Apps, so leaving it lands on the list; an open chat stays over the tab and is back on leaving.
+    val publicLink = pages.page
+    val publicPage = remember(publicLink) { publicLink?.let { PublicPage(it) } }
+    val appsPage: com.sphinx.peel.engine.PhonePage? = publicPage ?: shownPage?.takeIf { pages.orgInApps }
+    val appsPageTitle = remember(appsPage) {
+        when {
+            publicLink != null -> storage.openedApps().firstOrNull { it.link.seller == publicLink.seller && it.link.app == publicLink.app }
+                ?.title?.takeIf { it != publicLink.host }
+            else -> shownPage?.title
+        }
+    }
+    LaunchedEffect(appsPage) { if (appsPage != null) tab = MainTab.APPS }
     LaunchedEffect(live.map { it.id }, boxes.links.map { it.url }, orgPage) { pages.workspacesChanged(live, boxes::shows) }
     val talkOpener = remember { com.sphinx.peel.ui.talk.TalkOpener() }
     LaunchedEffect(live.map { it.id }) { talkOpener.workspacesChanged(live) }
@@ -324,11 +338,16 @@ fun MainTabs(
         val route = openRoute
         val inviteCode = openInvite
         // Nothing over the tabs: the bar shows, with the tab in front.
-        val onTabs = !callInFront && chat == null && route == null && inviteCode == null
+        val onTabs = !callInFront && chat == null && route == null && inviteCode == null && appsPage == null
         // One area for the call screen, an open chat or page, and the tab in front.
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (callInFront && phase != null) {
                 CallScreen(phase, onHide = { CallController.callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)
+            } else if (appsPage != null) {
+                com.sphinx.peel.ui.apps.OrgPageScreen(
+                    appsPage, engine.walletHost, onClose = { if (publicLink != null) pages.close() else pages.closeOrg() },
+                    locations = storage, inApps = true, title = appsPageTitle,
+                )
             } else if (inviteCode != null && chat == null) {
                 com.sphinx.peel.ui.invites.InviteDetailScreen(engine, storage, inviteCode, onClose = { openInvite = null })
             } else if (route != null && chat == null) {
@@ -387,7 +406,12 @@ fun MainTabs(
                 )
             } else {
                 when (tab) {
-                    MainTab.APPS -> AppsScreen(storage, onBack = null, onTalk = { home -> talkToJamie(home) }, onOpenPublic = { pages.open(it, ready = true) }, modifier = Modifier.fillMaxSize())
+                    // A workspace's app opened from its row stays inside Apps (iOS `openInApps`).
+                    MainTab.APPS -> androidx.compose.runtime.CompositionLocalProvider(
+                        com.sphinx.peel.ui.apps.LocalPageOpener provides { page: com.sphinx.peel.engine.OrgPageRequest -> pages.openOrg(page, inApps = true) },
+                    ) {
+                        AppsScreen(storage, onBack = null, onTalk = { home -> talkToJamie(home) }, onOpenPublic = { pages.open(it, ready = true) }, modifier = Modifier.fillMaxSize())
+                    }
                     MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }, onOpenInvite = { openInvite = it }) { openChat = it }
                     MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
                     MainTab.YOU -> YouScreen(engine, storage, secretStore, forget)
@@ -398,7 +422,7 @@ fun MainTabs(
         if (onTabs) BottomBar(tab) { tab = it }
     }
     // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
-    shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg, locations = storage) }
+    shownPage?.takeIf { !pages.orgInApps }?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg, locations = storage) }
     // A Talk card's page: a sheet over the call screen (iOS `.sheet(item: $opener.opened)`); the call goes on behind it.
     talkOpener.page?.takeIf { talk.home != null && it.isLive(live) }?.let {
         com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = talkOpener::close, locations = storage)

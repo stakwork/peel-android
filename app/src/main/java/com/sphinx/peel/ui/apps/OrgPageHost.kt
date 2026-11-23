@@ -48,10 +48,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -701,10 +704,16 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
 /// connection leaves with no sheet ([PhoneWalletSheets.toast]) over it. A tap in the page counts for the wallet for
 /// [StrutWallet.GESTURE_WINDOW_MS] and for a link out for [OrgNavigation.TAP_WINDOW_MS]. [sheets] is the person's side of the wallet, made here
 /// unless a test brings its own (closing the page, which a lock does, answers whatever it waits on as a no).
+///
+/// Shown one of two ways, neither of them a browser (docs/phases/48-tasks-tab.md, "An app opens inside Apps"): [inApps], inside the
+/// Apps tab, where ← steps back through the page's own history and then to the list, under the app's [title]; or full screen over
+/// everything (a link or a deliverable from a chat), with ✕ to close. Either way Reload waits in ⋮, out of a thumb's way: one slip
+/// there loses what the page has not sent. [onClose] null is a page with no way out of its own; [shown] false is a page kept alive
+/// behind another screen: it is treated as a page not showing (paused, no prompt, no Back) and gives up the keyboard.
 @Composable
 fun OrgPageScreen(
     page: PhonePage, wallet: WalletHost, onClose: (() -> Unit)?, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null,
-    locations: SiteLocationStore? = null, shown: Boolean = true,
+    locations: SiteLocationStore? = null, shown: Boolean = true, inApps: Boolean = false, title: String? = null,
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -817,18 +826,40 @@ fun OrgPageScreen(
 
     Column(modifier.fillMaxSize().background(Theme.colors.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (onClose != null) {
-                Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, stringResource(R.string.misc_done), tint = Theme.colors.text) }
+            if (inApps) {
+                // One ←: the page's own history first, then back to Apps.
+                val backTo = if (controller.canGoBack) stringResource(R.string.misc_back) else stringResource(R.string.tab_apps)
+                IconButton(onClick = { if (controller.canGoBack) controller.goBack() else onClose?.invoke() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, backTo, tint = Theme.colors.text)
+                }
+                // The app's own title, never its host: a host over the page reads as a browser's address bar.
+                Text(
+                    title.orEmpty(), Modifier.weight(1f).padding(horizontal = 4.dp), style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold, color = Theme.colors.text, maxLines = 1,
+                )
+            } else {
+                if (onClose != null) {
+                    Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
+                        IconButton(onClick = onClose) { Icon(Icons.Filled.Close, stringResource(R.string.misc_close), tint = Theme.colors.text) }
+                    }
+                }
+                if (controller.canGoBack) {
+                    if (onClose != null) Spacer(Modifier.width(8.dp))
+                    IconButton(onClick = { controller.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
+                }
+                Spacer(Modifier.weight(1f))
+            }
+            Box {
+                var more by remember { mutableStateOf(false) }
+                IconButton(onClick = { more = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.misc_more), tint = Theme.colors.secondaryText) }
+                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.misc_apps_reload)) },
+                        leadingIcon = { Icon(Icons.Filled.Refresh, null) },
+                        onClick = { more = false; controller.reload() },
+                    )
                 }
             }
-            if (controller.canGoBack) {
-                if (onClose != null) Spacer(Modifier.width(8.dp))
-                IconButton(onClick = { controller.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
-            }
-            // No title: Close, Back and Reload are the whole bar.
-            Spacer(Modifier.weight(1f))
-            IconButton(onClick = { controller.reload() }) { Icon(Icons.Filled.Refresh, stringResource(R.string.misc_apps_reload), tint = Theme.colors.secondaryText) }
         }
         if (!controller.walletOffered && page.walletScope.visitorHost != null) {
             Text(

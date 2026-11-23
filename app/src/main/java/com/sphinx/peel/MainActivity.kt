@@ -307,7 +307,8 @@ private fun PeelApp(
                     initialTab = lastMainTab, onTabChanged = { lastMainTab = it },
                 ) { router.reset(); screen = Screen.Onboarding }
                 com.sphinx.peel.ui.update.UpdateHost()
-                router.page?.let { link -> val page = remember(link) { PublicPage(link) }; OrgPageScreen(page, current.engine.walletHost, onClose = router::close, locations = storage) }
+                // A public page shows inside Apps (`MainTabs`); over Voice Mode, which has no tabs, it is full screen.
+                if (route == VoiceModeRoute.VOICE) router.page?.let { link -> val page = remember(link) { PublicPage(link) }; OrgPageScreen(page, current.engine.walletHost, onClose = router::close, locations = storage) }
             }
         }
     }

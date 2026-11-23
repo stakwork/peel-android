@@ -67,6 +67,15 @@ class PublicPageRouterTest {
     private val acme = com.sphinx.peel.engine.HivePeer("acme", "https://acme.sphinx.chat:3355/lab", "t", "Acme")
     private val board = com.sphinx.peel.engine.OrgPageRequest("https://acme.sphinx.chat:3355/lab/?app=board&solo=1", "tok", "acme", "Acme", "Board")
 
+    /// An org page opened from its Apps row shows inside Apps; one from anywhere else (a chat, a Hive link) over everything.
+    @Test fun anOrgPageIsInAppsOnlyWhenOpenedFromApps() {
+        val router = PublicPageRouter()
+        router.openOrg(board, inApps = true)
+        assertEquals(true, router.orgInApps)
+        router.openOrg(board)
+        assertEquals(false, router.orgInApps)
+    }
+
     @Test fun aPeelLinkReplacesAnOrgPage() {
         val router = PublicPageRouter()
         router.openOrg(board)

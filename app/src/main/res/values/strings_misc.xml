@@ -157,6 +157,7 @@
     <string name="misc_apps_not_now">Not now</string>
     <string name="misc_apps_reload">Reload</string>
     <string name="misc_close">Close</string>
+    <string name="misc_more">More</string>
     <string name="misc_copy">Copy</string>
     <string name="misc_copied">Copied</string>
     <string name="misc_delete">Delete</string>
