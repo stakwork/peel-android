@@ -110,3 +110,37 @@ object PreferencesMerge {
     /// The date for a value chosen here: now, but always after the version it replaces.
     fun nextDate(nowSeconds: Long, oldDate: Long): Long = maxOf(nowSeconds, oldDate + 1)
 }
+
+/// The agent's name, `peel.agent_name` (iOS `Preference<String>.agentName`), receive-only: the Mac names
+/// the agent, this port shows the name and never chooses or uploads one. Same last-writer-wins rule by
+/// item date as `PreferencesMerge.decide`, minus the upload. Pure, JVM-tested.
+object AgentName {
+    /// What the agent's chat is called until a file gives it a name.
+    const val DEFAULT = "Peel"
+
+    /// A name as it is kept: trimmed, null when nothing is left.
+    fun clean(text: String): String? = text.trim().takeIf { it.isNotEmpty() }
+
+    /// The name stored here and its date in seconds (0 for one without a date).
+    data class Local(val name: String, val date: Long)
+
+    sealed interface Outcome {
+        data object Nothing : Outcome
+        /// Store this name and date here.
+        data class Take(val local: Local) : Outcome
+    }
+
+    /// An item absent from the file, not a string, or blank changes nothing (a name here is never
+    /// replaced by one the file cannot give). Otherwise the file's wins unless the name here is dated
+    /// strictly later, and the same name with the same date is not taken again.
+    fun decide(file: PreferencesFile?, local: Local?): Outcome {
+        val (text, fileDate) = file?.stringEntry(PreferencesFile.AGENT_NAME_KEY) ?: return Outcome.Nothing
+        val incoming = clean(text) ?: return Outcome.Nothing
+        val date = fileDate ?: 0L
+        if (local != null) {
+            if (local.date > date) return Outcome.Nothing
+            if (local.name == incoming && local.date == date) return Outcome.Nothing
+        }
+        return Outcome.Take(Local(incoming, date))
+    }
+}

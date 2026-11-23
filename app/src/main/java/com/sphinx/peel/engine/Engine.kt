@@ -1224,6 +1224,37 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         runCatching { syncPreferences() }
     }
 
+    /// The agent's name as the Mac chose it and a sync took it (`peel.agent_name`); null until one did.
+    /// Receive-only: Android has no way to rename the agent and never uploads a name (it keeps the file's
+    /// item as it came when it uploads other changes).
+    fun agentName(): String? = storage.value(Setting.AGENT_NAME)?.let(AgentName::clean)
+
+    /// What the agent's chat is called: the synced name, else "Peel".
+    val agentNameFlow: StateFlow<String> get() = agentNameMutable.asStateFlow()
+    private val agentNameMutable = MutableStateFlow(storage.value(Setting.AGENT_NAME)?.let(AgentName::clean) ?: AgentName.DEFAULT)
+
+    private fun localAgentName(): AgentName.Local? =
+        storage.value(Setting.AGENT_NAME)?.let(AgentName::clean)?.let {
+            AgentName.Local(it, storage.value(Setting.AGENT_NAME_UPDATED_AT)?.toLongOrNull() ?: 0L)
+        }
+
+    /// Takes the file's agent name where it wins; the file itself is never changed for it.
+    private fun syncAgentName(file: PreferencesFile?) {
+        val local = localAgentName()
+        val outcome = AgentName.decide(file, local) as? AgentName.Outcome.Take ?: return
+        // Only over what was merged against, as the other preferences.
+        if (localAgentName() != local) return
+        storage.apply(
+            Storage.Commit(
+                settings = mapOf(
+                    Setting.AGENT_NAME to outcome.local.name,
+                    Setting.AGENT_NAME_UPDATED_AT to outcome.local.date.toString(),
+                ),
+            ),
+        )
+        agentNameMutable.value = outcome.local.name
+    }
+
     /// Where a synced preference lives here: its value and date settings, and
     /// the stored string for a value in the spec's unit (the boost amount is
     /// kept in msat, the rest as the spec holds them).
@@ -1369,6 +1400,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
             }
         }
         if (syncTimeZones(file, target)) upload = true
+        syncAgentName(file)
         if (upload) {
             uploadPreferencesFile(memes, secret, target)
             if (file == null) markPreferencesFileSeen()

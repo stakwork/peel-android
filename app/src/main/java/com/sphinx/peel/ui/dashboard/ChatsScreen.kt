@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sphinx.peel.engine.AgentName
 import com.sphinx.peel.engine.ConnectionState
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.InviteRecord
@@ -223,6 +224,7 @@ private fun ChatListBody(
     // its own row, first in Direct messages... never in the sections".
     // While searching it's found by name the same way any other chat is.
     // Unread, it is in the Unread section like any chat.
+    val agentName by engine.agentNameFlow.collectAsState()
     val agentConversation = conversations.firstOrNull { it.chat == engine.agentPubkey }
         ?.takeIf { ChatSections.matches(it.name, query) && !it.isUnread }
     val sectionable = if (agentConversation == null) {
@@ -281,6 +283,7 @@ private fun ChatListBody(
                                 onCall = (liveCalls[conversation.chat] ?: 0) > 0,
                                 onLongClick = onLongClick,
                                 isAgent = conversation.chat == engine.agentPubkey,
+                                agentName = agentName,
                             ) { onOpenChat(conversation.chat) }
                         }
                     }
@@ -302,7 +305,7 @@ private fun ChatListBody(
                     agentConversation?.let { agent ->
                         item(key = "agent") {
                             ChatRowActions(agent, engine, onChanged = { refresh++ }) { onLongClick ->
-                                ChatRow(agent, onLongClick = onLongClick, isAgent = true) { onOpenChat(engine.agentPubkey) }
+                                ChatRow(agent, onLongClick = onLongClick, isAgent = true, agentName = agentName) { onOpenChat(engine.agentPubkey) }
                             }
                         }
                     }
@@ -350,7 +353,7 @@ private fun ChatListBody(
                         agentConversation?.let { agent ->
                             item(key = "agent") {
                                 ChatRowActions(agent, engine, onChanged = { refresh++ }) { onLongClick ->
-                                    ChatRow(agent, onLongClick = onLongClick, isAgent = true) { onOpenChat(engine.agentPubkey) }
+                                    ChatRow(agent, onLongClick = onLongClick, isAgent = true, agentName = agentName) { onOpenChat(engine.agentPubkey) }
                                 }
                             }
                         }
@@ -585,6 +588,7 @@ private fun ChatRow(
     onCall: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     isAgent: Boolean = false,
+    agentName: String = AgentName.DEFAULT,
     onClick: () -> Unit,
 ) {
     val unread = conversation.shownUnread
@@ -602,7 +606,7 @@ private fun ChatRow(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (isAgent) "Peel" else conversation.name,
+                    if (isAgent) agentName else conversation.name,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (bold) Theme.colors.text else Theme.colors.secondaryText,

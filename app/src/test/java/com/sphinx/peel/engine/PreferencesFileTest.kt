@@ -79,4 +79,29 @@ class PreferencesFileTest {
         val file = PreferencesFile.parse("""{"items":[{"key":"tip_amount","identifier":"0","date":"4","value":12}]}""")
         assertEquals(12L to 4L, file.tipAmount())
     }
+
+    @Test
+    fun `the agent name is read only as a string`() {
+        val file = PreferencesFile.parse(
+            """{"items":[{"key":"peel.agent_name","identifier":"0","date":"7","value":"Pip"}]}""",
+        )
+        assertEquals("Pip" to 7L, file.stringEntry(PreferencesFile.AGENT_NAME_KEY))
+        val number = PreferencesFile.parse("""{"items":[{"key":"peel.agent_name","identifier":"0","date":"7","value":5}]}""")
+        assertNull(number.stringEntry(PreferencesFile.AGENT_NAME_KEY))
+        assertNull(PreferencesFile.empty().stringEntry(PreferencesFile.AGENT_NAME_KEY))
+    }
+
+    @Test
+    fun `the agent name item survives an upload of another change exactly as it came`() {
+        val name = """{"key":"peel.agent_name","identifier":"0","date":"7","value":" Pip  the Second "}"""
+        val file = PreferencesFile.parse("""{"items":[$name],"other_field":"kept"}""")
+        file.setTipAmount(10, 3)
+        file.setEntry(PreferencesFile.PIN_TIMEOUT_KEY, "4", 9)
+        val out = file.text()
+        assertTrue(out.contains("\"value\":\" Pip  the Second \""))
+        assertTrue(out.contains("\"date\":\"7\""))
+        assertEquals(1, out.split("peel.agent_name").size - 1)
+        assertTrue(out.contains("\"other_field\":\"kept\""))
+        assertEquals(" Pip  the Second " to 7L, file.stringEntry(PreferencesFile.AGENT_NAME_KEY))
+    }
 }

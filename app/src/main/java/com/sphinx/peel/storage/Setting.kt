@@ -147,4 +147,10 @@ enum class Setting(val key: String) {
     /// Unset until chosen here or taken from another device; the layout's own `combinedView` stands until then.
     CHATS_RECENT_VIEW("chatsRecentView"),
     CHATS_RECENT_VIEW_UPDATED_AT("chatsRecentViewUpdatedAt"),
+
+    /// Peel's `peel.agent_name`: what the account's agent is called, as the Mac (which has the agent)
+    /// chose it. Receive-only here: taken from the preferences file, never chosen or uploaded on Android.
+    /// Unset until a file gave one; the agent chat is then titled `AgentName.DEFAULT`.
+    AGENT_NAME("agentName"),
+    AGENT_NAME_UPDATED_AT("agentNameUpdatedAt"),
 }

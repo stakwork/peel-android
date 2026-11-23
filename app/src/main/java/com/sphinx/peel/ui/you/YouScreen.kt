@@ -272,6 +272,7 @@ private fun YouMain(
         }
     }
     val hasAgent = remember { storage.contact(engine.agentPubkey) != null }
+    val agentName by engine.agentNameFlow.collectAsState()
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
@@ -335,7 +336,7 @@ private fun YouMain(
             ) {
                 PeelLogo(size = 32.dp)
                 Spacer(Modifier.width(12.dp))
-                Text("Peel", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                Text(agentName, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
                 Spacer(Modifier.width(8.dp))
                 AgentTag()
                 Spacer(Modifier.weight(1f))

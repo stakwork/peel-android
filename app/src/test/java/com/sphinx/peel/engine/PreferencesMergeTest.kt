@@ -178,4 +178,72 @@ class PreferencesMergeTest {
         assertThrows(IllegalArgumentException::class.java) { PreferencesFile.parse("""{"items":[{"key":"k","identifier":"0","date":5,"value":"1"}]}""") }
         assertThrows(IllegalArgumentException::class.java) { PreferencesFile.parse("""{"nope":1}""") }
     }
+
+    // MARK: peel.agent_name (receive-only)
+
+    private fun name(date: String, value: String) = item("peel.agent_name", date, value)
+
+    @Test
+    fun `an agent name from the file is taken, trimmed`() {
+        val out = AgentName.decide(file(name("200", "  Pip ")), null)
+        assertEquals(AgentName.Outcome.Take(AgentName.Local("Pip", 200)), out)
+    }
+
+    @Test
+    fun `a later agent name replaces an earlier one, an earlier one does not replace a later`() {
+        assertEquals(
+            AgentName.Outcome.Take(AgentName.Local("New", 300)),
+            AgentName.decide(file(name("300", "New")), AgentName.Local("Old", 200)),
+        )
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(file(name("100", "Old")), AgentName.Local("New", 200)))
+    }
+
+    @Test
+    fun `a tie on date takes the file's name, the same name and date is nothing`() {
+        assertEquals(
+            AgentName.Outcome.Take(AgentName.Local("File", 200)),
+            AgentName.decide(file(name("200", "File")), AgentName.Local("Mine", 200)),
+        )
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(file(name("200", "Pip")), AgentName.Local("Pip", 200)))
+        // " Pip " reads as "Pip": not taken again on every sync.
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(file(name("200", " Pip ")), AgentName.Local("Pip", 200)))
+    }
+
+    @Test
+    fun `a file without the item, or no file, never changes the name here`() {
+        val local = AgentName.Local("Pip", 200)
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(file(item("tip_amount", "5", "9")), local))
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(file(), local))
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(null, local))
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(null, null))
+    }
+
+    @Test
+    fun `a blank or non-string agent name is refused and keeps the name here`() {
+        val local = AgentName.Local("Pip", 1)
+        for (value in listOf("", "   ")) {
+            assertEquals(AgentName.Outcome.Nothing, AgentName.decide(file(name("900", value)), local))
+        }
+        val number = PreferencesFile.parse("""{"items":[{"key":"peel.agent_name","identifier":"0","date":"900","value":42}]}""")
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(number, local))
+        val obj = PreferencesFile.parse("""{"items":[{"key":"peel.agent_name","identifier":"0","date":"900","value":{"a":"b"}}]}""")
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(obj, local))
+    }
+
+    @Test
+    fun `an undated agent name is taken once with date 0`() {
+        val undated = PreferencesFile.parse("""{"items":[{"key":"peel.agent_name","identifier":"0","date":"soon","value":"Pip"}]}""")
+        val taken = AgentName.decide(undated, null) as AgentName.Outcome.Take
+        assertEquals(AgentName.Local("Pip", 0), taken.local)
+        assertEquals(AgentName.Outcome.Nothing, AgentName.decide(undated, taken.local))
+    }
+
+    @Test
+    fun `the agent chat is called Peel until a name is given`() {
+        assertEquals("Peel", AgentName.DEFAULT)
+        assertEquals(null, AgentName.clean("  "))
+        assertEquals("Pip", AgentName.clean(" Pip\n"))
+        // Receive-only: it is not one of the synced specs that can upload.
+        assertTrue(PreferencesMerge.SPECS.none { it.key == PreferencesFile.AGENT_NAME_KEY })
+    }
 }

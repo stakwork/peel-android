@@ -47,6 +47,10 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
         /// absent means this device's own choice stands.
         const val CHATS_RECENT_VIEW_KEY = "peel.chats_recent_view"
 
+        /// Peel-only key (iOS `Preference<String>.agentName`): what the personal agent is called, a plain
+        /// string, trimmed, blank refused. The Mac chooses it; Android only takes it (`AgentName`).
+        const val AGENT_NAME_KEY = "peel.agent_name"
+
         fun parse(text: String): PreferencesFile {
             val root = JSONObject(text)
             // PeelCore's `PreferencesFile.init(text:)`: a file the official
@@ -109,6 +113,14 @@ class PreferencesFile private constructor(private val root: JSONObject, private 
             is Int, is Long -> raw.toString()
             else -> return null
         }
+        return value to readDate(item)
+    }
+
+    /// `key`'s value and date, only if the item's value is a JSON string (a number, bool or object is
+    /// not one, as for a name). Null for none or another kind.
+    fun stringEntry(key: String): Pair<String, Long?>? {
+        val item = lastItem(key) ?: return null
+        val value = item.opt("value") as? String ?: return null
         return value to readDate(item)
     }
 

@@ -263,7 +263,8 @@ fun ConversationScreen(
     }
 
     val isTribe = conversation?.isTribe ?: false
-    val title = if (isAgent) "Peel" else (conversation?.name ?: chat.take(12))
+    val agentName by engine.agentNameFlow.collectAsState()
+    val title = if (isAgent) agentName else (conversation?.name ?: chat.take(12))
     // In a tribe, how this account appears there (its own name and photo), else the account's (iOS `me(in:)`).
     val tribeIdentity = if (isTribe) engine.tribeIdentity(chat) else null
     val myAlias = tribeIdentity?.alias ?: storage.value(com.sphinx.peel.storage.Setting.ALIAS)?.takeIf { it.isNotEmpty() } ?: "You"

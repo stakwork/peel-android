@@ -1,5 +1,18 @@
 # Phase 11 — Profile and preferences sync
 
+## Status (2026-11-23): the agent's name, receive-only
+
+`peel.agent_name` (iOS `Preference<String>.agentName`, identifier `"0"`, a plain string, trimmed,
+blank or non-string refused, last writer wins by item date) is taken from the preferences file and
+titles the agent's chat: Chats rows, the conversation header and You › Agent (`Engine.agentNameFlow`,
+fallback `AgentName.DEFAULT` = "Peel"). **Receive-only:** the Mac has the agent and renames it; Android
+has no rename, so `AgentName.decide` (pure, in `PreferencesMerge.kt`) can only `Take`, never upload, and
+a file without the item, or with an unusable one, changes nothing here. The item stays in the file as it
+came when Android uploads other changes (`PreferencesFile` carries every item it does not set; tested).
+Stored as `Setting.AGENT_NAME`/`AGENT_NAME_UPDATED_AT` (settings rows, no schema change). It is a
+string, so it does not go through `PreferencesMerge.Spec` (whole numbers only). Tests: `PreferencesMergeTest`,
+`PreferencesFileTest`. The engine glue (`Engine.syncAgentName`) and the UI are not unit-tested.
+
 ## Status (2026-11-02): sync widened
 
 Syncs now (both directions, `PreferencesMerge` + `Engine.syncPreferences`,
