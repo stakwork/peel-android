@@ -49,8 +49,8 @@ import kotlinx.coroutines.launch
 /// key or a uuid, pasted or scanned. "Look up" reads the tribe's registry entry and shows what
 /// joining costs; "Join" then pays it, through the usual balance and confirmation checks.
 @Composable
-fun JoinTribeScreen(engine: Engine, initialLink: String = "", onBack: () -> Unit, onOpenChat: (String) -> Unit) {
-    var text by remember { mutableStateOf(initialLink) }
+fun JoinTribeScreen(engine: Engine, onBack: () -> Unit, onOpenChat: (String) -> Unit, initialLink: String? = null) {
+    var text by remember { mutableStateOf(initialLink.orEmpty()) }
     var scanning by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
@@ -89,6 +89,9 @@ fun JoinTribeScreen(engine: Engine, initialLink: String = "", onBack: () -> Unit
             }
         }
     }
+
+    // A tribe link that brought us here: looked up at once (a lookup pays nothing); Join still waits for the person's tap.
+    androidx.compose.runtime.LaunchedEffect(initialLink) { if (!initialLink.isNullOrBlank()) lookUp() }
 
     fun join(confirmed: Long?) {
         val chosen = offer ?: return
