@@ -89,4 +89,13 @@
         <item quantity="one">%1$s sats de %2$d boost</item>
         <item quantity="other">%1$s sats de %2$d boosts</item>
     </plurals>
+    <string name="transfer_compressing">Comprimiendo vídeo para subir…</string>
+    <string name="transfer_uploading">Subiendo…</string>
+    <string name="transfer_done">Enviado</string>
+    <string name="transfer_dismiss">Descartar</string>
+    <string name="video_compressing_chip">Comprimiendo %1$s…</string>
+    <string name="video_queued_chip">%1$s se enviará cuando termine la compresión</string>
+    <string name="video_ready_chip">%1$s está listo para enviar</string>
+    <string name="video_busy">Otro vídeo todavía se está preparando.</string>
+    <string name="video_remove">Quitar vídeo</string>
 </resources>

@@ -208,4 +208,6 @@
     <string name="misc_you_contact_info_not_ready">Aún no está listo</string>
     <string name="misc_you_contact_info_qr">Código QR de tu información de contacto</string>
     <string name="misc_you_contact_info_copy">Copiar información de contacto</string>
+    <string name="misc_you_compress_videos">Comprimir vídeos para subir</string>
+    <string name="misc_you_compress_videos_note">Comprime automáticamente los vídeos de más de 100 MB antes de subirlos.</string>
 </resources>

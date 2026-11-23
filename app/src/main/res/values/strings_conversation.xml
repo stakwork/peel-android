@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="conv_sending_photo">Sending photo…</string>
+    <string name="transfer_compressing">Compressing video for upload…</string>
+    <string name="transfer_uploading">Uploading…</string>
+    <string name="transfer_done">Sent</string>
+    <string name="transfer_dismiss">Dismiss</string>
+    <string name="video_compressing_chip">Compressing %1$s…</string>
+    <string name="video_queued_chip">%1$s will send when compression finishes</string>
+    <string name="video_ready_chip">%1$s is ready to send</string>
+    <string name="video_busy">Another video is still being prepared.</string>
+    <string name="video_remove">Remove video</string>
     <string name="conv_sending_file">Sending file…</string>
     <string name="conv_sending_voice">Sending voice message…</string>
     <string name="conv_sending">Sending…</string>

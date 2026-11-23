@@ -31,6 +31,8 @@
     <string name="misc_you_confirm_payments">Confirm payments</string>
     <string name="misc_you_connected_apps">Connected apps</string>
     <string name="misc_you_site_location">Site location</string>
+    <string name="misc_you_compress_videos">Compress videos for upload</string>
+    <string name="misc_you_compress_videos_note">Automatically compress videos larger than 100 MB before uploading.</string>
     <string name="misc_you_auto_download">Auto download media</string>
     <string name="misc_you_auto_download_note">Off: images, videos, voice messages and files wait for a tap.</string>
     <string name="misc_you_diagnostics">Diagnostics</string>

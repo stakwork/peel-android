@@ -182,3 +182,72 @@ object StagedAttachments {
     /// Whether [size] bytes may be staged in a chat ([agent]: the agent's DM).
     fun fits(size: Long, agent: Boolean): Boolean = size <= sendLimit(agent)
 }
+
+/// Local video compression before upload: the pure rules (bitrate, resolution tier, output size).
+/// `VideoCompressor` is the media3 part that applies them. A video over the chat send limit is
+/// re-encoded to fit [TARGET_BYTES]; the original is never touched.
+object VideoCompression {
+    /// The client's send limit for a chat with a person or a tribe (`Engine.ATTACHMENT_LIMIT`).
+    const val SEND_LIMIT = 100_000_000L
+
+    /// What a compressed video aims for: a margin under [SEND_LIMIT] for container overhead and encryption.
+    const val COMPRESSION_TARGET_BYTES = 95L * 1024 * 1024
+
+    /// AAC audio bitrate, bits per second.
+    const val AUDIO_BITRATE = 128_000
+
+    /// Below this video bitrate the picture is not worth sending: the video is "too long to compress".
+    /// Easy to change.
+    const val FLOOR_BITRATE = 500_000
+
+    /// Whether a file of [size] bytes needs compressing before it can be sent.
+    fun needsCompression(size: Long, limit: Long = SEND_LIMIT): Boolean = size > limit
+
+    /// The video bitrate (bits per second) that fits [targetBytes] in [durationMs], after the audio track.
+    fun videoBitrate(durationMs: Long, targetBytes: Long = COMPRESSION_TARGET_BYTES): Long {
+        val seconds = durationMs.coerceAtLeast(1) / 1000.0
+        return (targetBytes * 8 / seconds).toLong() - AUDIO_BITRATE
+    }
+
+    /// The longest side and the shortest side an output may have for [bitrate].
+    data class Tier(val longSide: Int, val shortSide: Int)
+
+    fun tier(bitrate: Long): Tier = when {
+        bitrate >= 6_500_000 -> Tier(1920, 1080)
+        bitrate >= 2_500_000 -> Tier(1280, 720)
+        bitrate >= 750_000 -> Tier(854, 480)
+        else -> Tier(640, 360)
+    }
+
+    /// The upright size to encode, from the stored size and rotation: it keeps the aspect, never scales
+    /// up, fits [tier] in the picture's own orientation, and both sides are even.
+    fun outputSize(width: Int, height: Int, rotationDegrees: Int, tier: Tier): Pair<Int, Int> {
+        val turned = rotationDegrees % 180 != 0
+        val w = if (turned) height else width
+        val h = if (turned) width else height
+        if (w <= 0 || h <= 0) return 2 to 2
+        val landscape = w >= h
+        val maxW = if (landscape) tier.longSide else tier.shortSide
+        val maxH = if (landscape) tier.shortSide else tier.longSide
+        val scale = minOf(1.0, maxW.toDouble() / w, maxH.toDouble() / h)
+        fun even(v: Double) = (Math.round(v).toInt() and 1.inv()).coerceAtLeast(2)
+        return even(w * scale) to even(h * scale)
+    }
+
+    class Plan(val videoBitrate: Int, val width: Int, val height: Int)
+
+    /// The encode for a video of this shape, or null when it is too long to compress under [floor].
+    fun plan(
+        durationMs: Long, width: Int, height: Int, rotationDegrees: Int,
+        targetBytes: Long = COMPRESSION_TARGET_BYTES, floor: Long = FLOOR_BITRATE.toLong(),
+    ): Plan? {
+        val bitrate = videoBitrate(durationMs, targetBytes)
+        if (bitrate < floor) return null
+        val (w, h) = outputSize(width, height, rotationDegrees, tier(bitrate))
+        return Plan(minOf(bitrate, Int.MAX_VALUE.toLong()).toInt(), w, h)
+    }
+
+    const val TOO_LONG = "This video is too long to compress enough to send."
+    const val TOO_LARGE = "That file is too large to send."
+    fun isVideo(mediaType: String?): Boolean = mediaType?.startsWith("video/") == true
+}
