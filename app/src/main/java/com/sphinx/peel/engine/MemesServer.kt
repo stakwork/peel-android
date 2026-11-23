@@ -93,7 +93,7 @@ class MemesServer(private val host: String) {
     /// `POST /file`: the encrypted bytes, as a multipart body (one text
     /// field, then the file) — PeelCore's `upload`/`multipart`. Returns
     /// the muid.
-    suspend fun upload(sealed: ByteArray, fieldName: String, fileName: String, mediaType: String, token: Token, route: String = "file"): String =
+    suspend fun upload(sealed: ByteArray, fieldName: String, fileName: String, mediaType: String, token: Token, route: String = "file", onProgress: ((Long, Long) -> Unit)? = null): String =
         withContext(Dispatchers.IO) {
             val boundary = "peel-${java.util.UUID.randomUUID()}"
             val body = java.io.ByteArrayOutputStream()
@@ -121,7 +121,15 @@ class MemesServer(private val host: String) {
                 readTimeout = 60_000
                 setFixedLengthStreamingMode(bodyBytes.size)
             }
-            connection.outputStream.use { it.write(bodyBytes) }
+            connection.outputStream.use { out ->
+                var written = 0
+                while (written < bodyBytes.size) {
+                    val n = minOf(64 * 1024, bodyBytes.size - written)
+                    out.write(bodyBytes, written, n)
+                    written += n
+                    onProgress?.invoke(written.toLong(), bodyBytes.size.toLong())
+                }
+            }
             val replyText = readText(connection, "the upload")
             val json = runCatching { JSONObject(replyText) }.getOrNull() ?: throw UnreadableException("the upload")
             val muid = json.optString("muid").takeIf { it.isNotEmpty() && MediaToken.isSafeMuid(it) }

@@ -428,6 +428,24 @@ private fun YouMain(
                     onClick = onOpenSiteLocation, chevron = true,
                 )
                 AccountDivider()
+                var compressVideos by remember { mutableStateOf(engine.compressesVideos()) }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.misc_you_compress_videos), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Switch(checked = compressVideos, onCheckedChange = {
+                        compressVideos = it
+                        engine.setCompressesVideos(it)
+                    })
+                }
+                Text(
+                    stringResource(R.string.misc_you_compress_videos_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Theme.colors.secondaryText,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                )
+                AccountDivider()
                 var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),

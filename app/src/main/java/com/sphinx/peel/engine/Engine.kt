@@ -1462,6 +1462,13 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         }
     }
 
+    /// What the pinned transfer bar shows (`ui/dashboard/TransferBar.kt`).
+    val transfer = TransferTracker()
+
+    /// "Compress videos for upload" (`Setting.COMPRESS_VIDEOS`), on unless set to "0".
+    fun compressesVideos(): Boolean = storage.value(Setting.COMPRESS_VIDEOS) != "0"
+    fun setCompressesVideos(on: Boolean) = storage.apply(Storage.Commit(settings = mapOf(Setting.COMPRESS_VIDEOS to if (on) "1" else "0")))
+
     /// Sends a file as an attachment: encrypts it with a fresh key,
     /// uploads it to the memes server, then a type 6 message naming it
     /// — PeelCore's `sendAttachment`, trimmed to no price, no "sell it"
@@ -1488,14 +1495,24 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
         val isAgentChat = chat == agentPubkey
         // The agent's DM takes what the Mac can read: 32 MB, not the 100 MB of a chat with a person.
         val limit = if (isAgentChat) AgentAttachments.SEND_LIMIT else ATTACHMENT_LIMIT
-        if (bytes.size > limit) throw IllegalStateException("That file is too large to send.")
+        if (bytes.size > limit) throw IllegalStateException(VideoCompression.TOO_LARGE)
         val amountMsat = if (isTribe) tribeMessageAmountMsat(chat) else 0L
         val key = MediaCrypto.newKey()
         val sealed = MediaCrypto.encrypt(bytes, key)
         val memes = MemesServer(MEMES_HOST)
-        val muid = withMemes(memes) { auth ->
-            memes.upload(sealed, fieldName = uploadFieldName(mediaType), fileName = fileName, mediaType = mediaType, token = auth)
+        transfer.uploading(0f)
+        val muid = try {
+            withMemes(memes) { auth ->
+                memes.upload(
+                    sealed, fieldName = uploadFieldName(mediaType), fileName = fileName, mediaType = mediaType, token = auth,
+                    onProgress = { done, total -> transfer.uploading(TransferTracker.fraction(done, total)) },
+                )
+            }
+        } catch (e: Exception) {
+            transfer.failed(e.message ?: "The upload failed.")
+            throw e
         }
+        transfer.done()
         val expiry = (System.currentTimeMillis() / 1000 + 365L * 24 * 3600).toUInt()
         val mediaToken = coreMakeMediaToken(seed, clock.next(), StateCodec.encode(state), MEMES_HOST, muid, chat, expiry)
         val body = JSONObject().apply {
@@ -3014,7 +3031,7 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
 
         /// The largest attachment this device downloads — PeelCore's
         /// own `attachmentLimit`.
-        private const val ATTACHMENT_LIMIT = 100_000_000
+        private const val ATTACHMENT_LIMIT = VideoCompression.SEND_LIMIT.toInt() // 100_000_000
 
         /// A received attachment older than this is not prefetched when it arrives (history, not news).
         private const val PREFETCH_MAX_AGE_MS = 24L * 3600 * 1000

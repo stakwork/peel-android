@@ -108,6 +108,10 @@ enum class Setting(val key: String) {
     AUTO_DOWNLOAD_MEDIA("autoDownloadMedia"),
     AUTO_DOWNLOAD_MEDIA_UPDATED_AT("autoDownloadMediaUpdatedAt"),
 
+    /// "Compress videos for upload" ("1"/"0"; this device only, not synced): a video over the send
+    /// limit is re-encoded before sending. Unset = on (`VideoCompression`).
+    COMPRESS_VIDEOS("compressVideos"),
+
     /// The invite a new account signed up with (`Invite.toJson`): kept from
     /// before the first connect until the account is online and its inviter
     /// is added (`Engine.addInviterIfPending`); "" (or absent) once that has

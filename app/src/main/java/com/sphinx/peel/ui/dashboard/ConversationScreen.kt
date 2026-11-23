@@ -3,6 +3,8 @@ package com.sphinx.peel.ui.dashboard
 import com.sphinx.peel.ui.str
 import com.sphinx.peel.engine.AgentMessages
 import com.sphinx.peel.engine.StagedAttachments
+import com.sphinx.peel.engine.VideoCompression
+import com.sphinx.peel.engine.VideoCompressor
 import com.sphinx.peel.engine.ChatSearch
 import com.sphinx.peel.engine.TEXT_MESSAGE_TYPE
 import com.sphinx.peel.engine.AgentExtras
@@ -281,6 +283,20 @@ fun ConversationScreen(
     val pending = remember(chat) { PendingAttachments(context, agent = isAgent) }
     DisposableEffect(chat) { onDispose { pending.clear() } }
 
+    // An oversized video compressing for this chat; Send queues it, it goes when compression is done.
+    val videoScope = rememberCoroutineScope()
+    val videoOutbox = remember(chat) { VideoOutbox(context, engine, videoScope) }
+    DisposableEffect(chat) { onDispose { videoOutbox.cancel() } }
+    videoOutbox.deliver = { file, name, q ->
+        val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+        engine.sendFileAttachment(chat, bytes, name, "video/mp4", q.caption, isTribe, q.replyUuid, q.inThread)
+        reload()
+    }
+    videoOutbox.onFailed = { q, reason ->
+        error = reason
+        if (q != null && draft.isBlank()) draft = q.caption
+    }
+
     fun addPending(uri: android.net.Uri, picture: Boolean) {
         scope.launch {
             error = null
@@ -316,8 +332,16 @@ fun ConversationScreen(
     fun sendFile(uri: android.net.Uri) {
         if (isAgent) { addPending(uri, picture = false); return }
         scope.launch {
-            sendingLabel = context.str(R.string.conv_sending_file)
             error = null
+            // A video over the limit is compressed first (VideoOutbox), unless the setting is off.
+            val picked = withContext(Dispatchers.IO) { pickedFile(context, uri) }
+            if (VideoCompression.isVideo(picked.mediaType) && VideoCompression.needsCompression(picked.size)) {
+                if (!engine.compressesVideos()) { error = VideoCompression.TOO_LARGE; return@launch }
+                if (videoOutbox.active) { error = context.str(R.string.video_busy); return@launch }
+                videoOutbox.start(uri, picked.name)
+                return@launch
+            }
+            sendingLabel = context.str(R.string.conv_sending_file)
             try {
                 val (bytes, pickedName, mediaType) = withContext(Dispatchers.Default) {
                     val resolver = context.contentResolver
@@ -565,6 +589,8 @@ fun ConversationScreen(
             }
         }
 
+        TransferBar(engine)
+
         search?.let { open ->
             ChatSearchBar(
                 search = open, storage = storage, engine = engine,
@@ -781,11 +807,23 @@ fun ConversationScreen(
             sendingLabel = sendingLabel,
             onSendSats = { moneyAction = ChatMoneyAction.SEND }.takeIf { !isTribe && !isAgent },
             onRequestSats = { moneyAction = ChatMoneyAction.REQUEST }.takeIf { !isTribe && !isAgent },
-            tray = ({ PendingTray(pending, Modifier.padding(bottom = 6.dp), agent = isAgent) }),
-            hasPending = pending.files.isNotEmpty(),
+            tray = ({
+                VideoChip(videoOutbox, Modifier.padding(bottom = 6.dp))
+                PendingTray(pending, Modifier.padding(bottom = 6.dp), agent = isAgent)
+            }),
+            hasPending = pending.files.isNotEmpty() || videoOutbox.active,
             onSend = {
                 val toSend = draft
                 val replyUuid = replyTo?.uuid
+                if (videoOutbox.active && pending.files.isEmpty()) {
+                    val request = VideoOutbox.Queued(toSend, replyUuid, replyTo?.let { threadRoot(it) })
+                    draft = ""
+                    replyTo = null
+                    error = null
+                    newAfterIndex = null
+                    videoOutbox.send(request)
+                    return@Composer
+                }
                 if (pending.files.isNotEmpty()) {
                     val repliedTo = replyTo
                     val inThreadOfReply = replyTo?.let { threadRoot(it) }
@@ -924,6 +962,31 @@ private fun ThreadScreen(
             sendingLabel = context.str(R.string.conv_sending_file)
             error = null
             try {
+                // An oversized video is compressed first and sent when done (the thread has no early-send chip).
+                val picked = withContext(Dispatchers.IO) { pickedFile(context, uri) }
+                if (VideoCompression.isVideo(picked.mediaType) && VideoCompression.needsCompression(picked.size)) {
+                    if (!engine.compressesVideos()) throw IllegalStateException(VideoCompression.TOO_LARGE)
+                    val out = java.io.File(context.cacheDir, "outgoing/compressed-${System.currentTimeMillis()}.mp4")
+                    try {
+                        engine.transfer.compressing(0f)
+                        VideoCompressor(context).compress(uri, out) { engine.transfer.compressing(it) }
+                        engine.transfer.idle()
+                        val bytes = withContext(Dispatchers.IO) { out.readBytes() }
+                        val caption = draft
+                        draft = ""
+                        engine.sendFileAttachment(chat, bytes, picked.name, "video/mp4", caption, isTribe, replyTo = threadRootUuid, inThread = threadRootUuid)
+                        onSent()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        engine.transfer.idle()
+                        throw e
+                    } catch (e: Exception) {
+                        engine.transfer.failed(e.message ?: "Couldn't compress this video.")
+                        throw e
+                    } finally {
+                        out.delete()
+                    }
+                    return@launch
+                }
                 val (bytes, pickedName, mediaType) = withContext(Dispatchers.Default) {
                     val resolver = context.contentResolver
                     val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
