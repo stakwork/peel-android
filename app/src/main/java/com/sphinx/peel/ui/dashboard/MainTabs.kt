@@ -28,14 +28,11 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
@@ -96,7 +93,7 @@ data class DeepLink(val chat: String?, val payments: Boolean, val you: Boolean =
     }
 }
 
-/// The tab bar — PeelCore's `MainTabs.swift`: Chats, Payments, Apps, You, Search.
+/// The tab bar — PeelCore's `MainTabs.swift`: Chats, Payments, Apps, You.
 /// Android only: Apps in the bar, between Payments and You (docs/phases/48-tasks-tab.md); it replaced the Tasks tab.
 ///
 /// Also where the call this account is on lives — `PeelUI`'s own
@@ -415,7 +412,6 @@ fun MainTabs(
                     MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }, onOpenInvite = { openInvite = it }) { openChat = it }
                     MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
                     MainTab.YOU -> YouScreen(engine, storage, secretStore, forget)
-                    MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                 }
             }
         }
@@ -445,8 +441,7 @@ private fun CallNoticeBar(notice: CallNotice, onDismiss: () -> Unit) {
     }
 }
 
-/// Chats, Payments, Apps and You in one pill, Search its own circle beside it —
-/// the shape the iPhone's native search-role tab gets for free.
+/// Chats, Payments, Apps and You in one pill. Search is a button at the top left of Chats, not a tab (iOS `ChatsTab`).
 @Composable
 private fun BottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
     Row(
@@ -464,24 +459,9 @@ private fun BottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
                     MainTab.CHATS -> Icons.AutoMirrored.Filled.Chat to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_chats)
                     MainTab.PAYMENTS -> Icons.Filled.Bolt to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_payments)
                     MainTab.YOU -> Icons.Filled.Person to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_you)
-                    MainTab.SEARCH -> Icons.Filled.Search to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_search)
                 }
                 TabIcon(icon, label, selected == tab) { onSelect(tab) }
             }
-        }
-        Box(
-            Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(Theme.colors.fieldFill)
-                .clickable { onSelect(MainTab.SEARCH) },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Filled.Search,
-                contentDescription = androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_search),
-                tint = if (selected == MainTab.SEARCH) Theme.colors.accent else Theme.colors.secondaryText,
-            )
         }
     }
 }
@@ -498,11 +478,11 @@ private fun RowScope.TabIcon(icon: ImageVector, label: String, selected: Boolean
     }
 }
 
-/// The bar's tabs, left to right: Chats | Payments | Apps | You (Search is the circle beside the pill). Apps lists the workspace apps and
+/// The bar's tabs, left to right: Chats | Payments | Apps | You. Apps lists the workspace apps and
 /// every public app opened here, an employer's Tasks page too (docs/phases/48-tasks-tab.md). Public: `MainTabs` takes one as the tab to
 /// return to (`MainActivity.PeelApp` remembers it across Voice Mode, docs/phases/55-voice-mode.md).
 enum class MainTab {
-    CHATS, PAYMENTS, APPS, YOU, SEARCH;
+    CHATS, PAYMENTS, APPS, YOU;
 
     companion object {
         /// The tabs in the bar's pill, in order.

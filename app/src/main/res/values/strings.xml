@@ -103,7 +103,6 @@
     <string name="tab_chats">Chats</string>
     <string name="tab_payments">Payments</string>
     <string name="tab_you">You</string>
-    <string name="tab_search">Search</string>
 
     <!-- Chats list -->
     <string name="chats_title">Chats</string>
@@ -124,7 +123,6 @@
     <string name="chats_invite_someone">Invite someone</string>
     <string name="chats_no_results">No results for \"%1$s\"</string>
     <string name="chats_search_hint">Search chats</string>
-    <string name="chats_search_detail">Tribes and people by name.</string>
     <string name="chats_clear">Clear</string>
     <string name="chats_restoring">Restoring your chats</string>
     <string name="chats_restoring_detail">They show here as they arrive. This can take a while.</string>
