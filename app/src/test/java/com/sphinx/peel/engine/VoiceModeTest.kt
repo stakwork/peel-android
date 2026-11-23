@@ -125,4 +125,56 @@ class VoiceModeTest {
         assertEquals(5.0, VoiceModePrefs.of(context).autoSendSeconds, 0.0)
         raw.edit().remove("voice.autoSend").remove("voice.autoSendSeconds").commit()
     }
+
+    @Test fun `enabled fires its listener when another instance changes it`() {
+        context.getSharedPreferences("peel.voicemode", Context.MODE_PRIVATE).edit().clear().commit()
+        val watcher = VoiceModePrefs.of(context)
+        var seen: Boolean? = null
+        val listener = watcher.onEnabledChanged { seen = it }
+        VoiceModePrefs.of(context).enabled = true
+        assertEquals(true, seen)
+        watcher.removeListener(listener)
+    }
+}
+
+/// `VoiceModeReply` (docs/phases/55-voice-mode.md, "What the reply actually is"): the agent's texts since the
+/// person's own newest message. Ported from peel's `replyIsWhatTheAgentSaidSinceYourNewestMessage`/`replySkipsWhatIsNoTurn`.
+@RunWith(RobolectricTestRunner::class)
+class VoiceModeReplyTest {
+    private val agent = "agent"
+
+    private fun row(
+        n: Int, fromMe: Boolean = false, content: String? = "m$n", type: Int = TEXT_MESSAGE_TYPE,
+        chat: String = agent, status: String? = null,
+    ) = com.sphinx.peel.storage.MessageRow(
+        uuid = "u$n", serverIndex = n.toLong(), type = type, chat = chat, fromMe = fromMe, sender = null,
+        body = content?.let { org.json.JSONObject().put("content", it).toString() }, msat = null,
+        timestamp = n * 1_000L, tag = null, paymentHash = null, id = n + 1L, status = status,
+    )
+
+    @Test fun `the reply is the agent's texts since your newest message`() {
+        val asked = row(1, fromMe = true, content = "What did I miss?")
+        val answer = row(2, content = "Three chats.")
+        val askedAgain = row(3, fromMe = true, content = "Read them")
+        val part1 = row(4, content = "Kate says hi.")
+        val part2 = row(5, content = "Bob asks about Friday.")
+        assertEquals(listOf(answer), VoiceModeReply.latest(listOf(asked, answer), agent))
+        // Your newer message has no answer yet.
+        assertTrue(VoiceModeReply.latest(listOf(asked, answer, askedAgain), agent).isEmpty())
+        assertEquals(listOf(part1, part2), VoiceModeReply.latest(listOf(asked, answer, askedAgain, part1, part2), agent))
+        assertEquals("Kate says hi.\n\nBob asks about Friday.", VoiceModeReply.text(listOf(part1, part2)))
+        assertNull(VoiceModeReply.text(emptyList()))
+        // Another chat's messages are not the agent's.
+        assertTrue(VoiceModeReply.latest(listOf(asked, answer), "someone-else").isEmpty())
+    }
+
+    @Test fun `a message that never went is no turn, so the answer before it is still the reply`() {
+        val asked = row(1, fromMe = true, content = "Hi")
+        val answer = row(2, content = "Hello.")
+        val failed = row(3, fromMe = true, content = "Again", status = "FAILED")
+        assertEquals(listOf(answer), VoiceModeReply.latest(listOf(asked, answer, failed), agent))
+        // A picture you sent is a turn of its own, waiting for its answer.
+        val picture = row(4, fromMe = true, content = null, type = ATTACHMENT_MESSAGE_TYPE)
+        assertTrue(VoiceModeReply.latest(listOf(asked, answer, picture), agent).isEmpty())
+    }
 }

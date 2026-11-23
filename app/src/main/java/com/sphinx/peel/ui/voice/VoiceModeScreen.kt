@@ -118,9 +118,10 @@ import kotlin.math.max
 import kotlin.math.sin
 
 /// Voice Mode (docs/phases/55-voice-mode.md): a mic in the middle of a linen canvas, a small "Type a message…" capsule at the bottom
-/// that springs up into a text field, and a small grid button at the top right to the standard view. What is said or typed goes to
-/// the agent's DM exactly as the chat's composer sends it (`Engine.sendMessage(engine.agentPubkey, …)`); the agent's reply is read
-/// in the standard view.
+/// that springs up into a text field, and a small grid button at the top right that turns the Voice Mode setting off (the standard
+/// view comes back; turning the setting on again, from here or from You, reopens this screen). What is said or typed goes to the
+/// agent's DM exactly as the chat's composer sends it (`Engine.sendMessage(engine.agentPubkey, …)`); the reply (`VoiceModeReply`) is
+/// read fresh from the chat's own stored messages, not only from whatever happened to arrive while this screen was collecting.
 @Composable
 fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit) {
     val context = LocalContext.current
@@ -156,8 +157,9 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
     // tapping the mic mid-reply, where `tts.stop()` has been asked for but the speaker may not have gone fully silent yet.
     val echoFilter = remember { EchoFilter() }
 
-    // Speech out: Android's TextToSpeech, made once for the screen and shut down with it. The utterance id of the reply's
-    // last chunk, so the progress listener (below) knows which `onDone` means "the whole reply finished speaking".
+    // Speech out: Android's TextToSpeech, made once for the screen and shut down with it. The utterance id of the
+    // most recently queued batch's last chunk, so the progress listener (below) knows which `onDone` means "every
+    // batch queued so far has finished speaking" -- not just whichever batch happened to be first.
     var lastUtteranceId by remember { mutableStateOf<String?>(null) }
     val tts = remember { arrayOf<TextToSpeech?>(null) }
     DisposableEffect(context) {
@@ -181,55 +183,78 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
         onDispose { tts[0]?.stop(); tts[0]?.shutdown(); tts[0] = null }
     }
 
-    /// Queues [chunks] as TTS, one after another; used for a fresh reply and for the "peel repeat that"/"peel read it all"
-    /// commands alike (plain sentence-sized chunks for the former, the untruncated [SpokenText.full] for the latter).
-    fun speak(chunks: List<String>): Boolean {
+    // A fresh batch's number, so each speak() call's utterance ids ("vm_reply_<batch>_<i>") stay unique across calls:
+    // a later message arriving while an earlier one is still being read (docs/phases/55-voice-mode.md, "A second
+    // message waits") queues rather than flushes, and two batches' chunks must never collide under the same id.
+    var speechBatch by remember { mutableStateOf(0) }
+
+    /// Queues [chunks] as TTS, one after another; used for a fresh reply, and for the "peel repeat that"/"peel read it
+    /// all" commands (plain sentence-sized chunks for the former, the untruncated [SpokenText.full] for the latter).
+    /// [flush] interrupts whatever is already playing; false appends after it instead, so a reply that arrives while
+    /// an earlier one is still being read is queued, not cut off into overlapping or restarted speech.
+    fun speak(chunks: List<String>, flush: Boolean = true): Boolean {
         if (chunks.isEmpty()) return false
         act(VoiceEvent.SpeechStarted)
         echoFilter.speechStarted(chunks, System.currentTimeMillis())
-        lastUtteranceId = "vm_reply_${chunks.lastIndex}"
+        val batch = speechBatch
+        speechBatch = batch + 1
+        lastUtteranceId = "vm_reply_${batch}_${chunks.lastIndex}"
         chunks.forEachIndexed { i, chunk ->
-            tts[0]?.speak(chunk, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "vm_reply_$i")
+            val mode = if (flush && i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            tts[0]?.speak(chunk, mode, null, "vm_reply_${batch}_$i")
         }
         return true
     }
 
-    androidx.compose.runtime.LaunchedEffect(replyText, interaction) {
-        val reply = replyText ?: return@LaunchedEffect
-        if (interaction.speaksReply) {
-            // Markdown cleaned to plain sentences and capped (docs/phases/55-voice-mode.md): code/tables/links become a
-            // short phrase and a long reply is cut with a spoken note, rather than TextToSpeech reading raw markdown.
-            if (!speak(SpokenText(reply).chunks)) act(VoiceEvent.ReplyReady(hasReply = false))
-        } else tts[0]?.stop()
-    }
-
-    // A device request already waiting for your approval in the agent's DM (docs/phases/55-voice-mode.md, "turn-state
-    // awareness"): the phone never answers one itself (ControlPlan.pendingApproval's own decision 9), so the only thing
-    // Voice Mode can do here is say so, the way `AgentRequestLine` already does in the standard view.
+    // Both the reply and a pending approval come from a fresh read of the agent's own stored chat, not from a single
+    // live-arriving row (docs/phases/55-voice-mode.md, "What the reply actually is"): a transient feed alone would
+    // miss whatever arrived before this screen was collecting (the app closed, or Voice Mode simply wasn't open), and
+    // would show only the first of several replies that arrived in the same batch rather than all of them.
     var pendingApproval by remember { mutableStateOf<AgentRequest?>(null) }
-    suspend fun refreshPendingApproval() {
-        val plan = withContext(Dispatchers.Default) {
-            ControlPlan.of(storage.messages(engine.agentPubkey), inTribe = false, agentDM = true) { "You" }
+    // The replies read aloud so far this turn, by id: so a reply that arrives while an earlier one in the same turn
+    // is still being read is only ever spoken once, and only the part not already queued.
+    val spokenReplyIds = remember { mutableSetOf<Long>() }
+    suspend fun refreshFromStorage() {
+        val messages = withContext(Dispatchers.Default) { storage.messages(engine.agentPubkey) }
+        // A device request already waiting for your approval in the agent's DM: the phone never answers one itself
+        // (ControlPlan.pendingApproval's own decision 9), so the only thing Voice Mode can do here is say so, the way
+        // `AgentRequestLine` already does in the standard view.
+        pendingApproval = ControlPlan.of(messages, inTribe = false, agentDM = true) { "You" }.pendingApproval(System.currentTimeMillis() / 1000)
+        // The agent's texts since the person's own newest message (VoiceModeReply.latest, ported from peel): a typed
+        // message gets its reply shown the same as a spoken one, and two replies sent back to back are both shown
+        // (joined into one panel/subtitle text) rather than the second silently dropping the first.
+        val replies = VoiceModeReply.latest(messages, engine.agentPubkey)
+        if (replies.isEmpty()) spokenReplyIds.clear() // a fresh turn: nothing queued yet for it.
+        val found = VoiceModeReply.text(replies)
+        if (found != replyText) {
+            replyText = found
+            // Nothing to speak: iOS's own controller only ever passes `hasReply: false` to the machine here too -- the
+            // phase is about audio timing, not about whether there is text (that is `replyText`, separate).
+            if (found != null && !interaction.speaksReply) act(VoiceEvent.ReplyReady(hasReply = false))
         }
-        pendingApproval = plan.pendingApproval(System.currentTimeMillis() / 1000)
-    }
-    // Polled too (ConversationScreen's own pattern), since a request can pass its own expiry with no new message ever
-    // arriving -- a push-only refresh would never notice that.
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        while (true) { refreshPendingApproval(); delay(5_000) }
-    }
-
-    // The agent's reply: what the engine receives in its DM (`Engine.incoming`, the same feed the notifier reads).
-    androidx.compose.runtime.LaunchedEffect(engine) {
-        engine.incoming.collect { rows ->
-            if (rows.any { it.chat == engine.agentPubkey }) refreshPendingApproval()
-            rows.firstNotNullOfOrNull { VoiceModeReply.text(it, engine.agentPubkey) }?.let { text ->
-                replyText = text
-                // Nothing to speak: iOS's own controller only ever passes `hasReply: false` to the machine here too -- the
-                // phase is about audio timing, not about whether there is text (that is `replyText`, separate).
-                if (!interaction.speaksReply) act(VoiceEvent.ReplyReady(hasReply = false))
+        if (interaction.speaksReply) {
+            val fresh = replies.filter { it.id !in spokenReplyIds }
+            val text = VoiceModeReply.text(fresh)
+            if (text != null) {
+                // Markdown cleaned to plain sentences and capped (docs/phases/55-voice-mode.md): code/tables/links
+                // become a short phrase and a long reply is cut with a spoken note, instead of TTS reading raw
+                // markdown. Queued (not flushed) while something from this same turn is already being read.
+                if (speak(SpokenText(text).chunks, flush = phase != VoicePhase.Speaking)) spokenReplyIds += fresh.map { it.id }
             }
         }
+    }
+    // A mode switch to a speech-out one picks up whatever was already shown but never read aloud.
+    androidx.compose.runtime.LaunchedEffect(interaction) { if (interaction.speaksReply) refreshFromStorage() }
+    // Polled too (ConversationScreen's own pattern), since a pending approval can pass its own expiry with no new
+    // message ever arriving -- a push-only refresh would never notice that.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) { refreshFromStorage(); delay(5_000) }
+    }
+
+    // `engine.incoming` (the same feed the notifier reads) is only the trigger to re-read storage, not the data
+    // itself -- see the comment above `refreshFromStorage`.
+    androidx.compose.runtime.LaunchedEffect(engine) {
+        engine.incoming.collect { rows -> if (rows.any { it.chat == engine.agentPubkey }) refreshFromStorage() }
     }
 
     fun send(text: String) {
@@ -380,10 +405,15 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
             onClick = onStandardView,
             modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(40.dp),
         ) {
-            Icon(Icons.Filled.GridView, contentDescription = stringResource(R.string.voice_standard_view), tint = inkColor().copy(alpha = 0.55f), modifier = Modifier.size(22.dp))
+            Icon(Icons.Filled.GridView, contentDescription = stringResource(R.string.voice_turn_off), tint = inkColor().copy(alpha = 0.55f), modifier = Modifier.size(22.dp))
         }
 
-        ModePicker(interaction, Modifier.align(Alignment.TopCenter).padding(top = 12.dp, start = 56.dp, end = 56.dp)) {
+        // Below the grid button, not beside it: four chips plus the grid icon never fit one row at once width-wise,
+        // the last chip squeezed down to a sliver that wrapped its own glyphs onto several lines.
+        ModePicker(interaction, Modifier.align(Alignment.TopCenter).padding(top = 56.dp, start = 16.dp, end = 16.dp)) {
+            // Switching away from a speech-out mode stops whatever it was reading right away, rather than leaving it
+            // playing under a screen that no longer looks like it is speaking.
+            if (!it.speaksReply && phase == VoicePhase.Speaking) { tts[0]?.stop(); act(VoiceEvent.SpeechEnded); echoFilter.speechEnded(System.currentTimeMillis()) }
             interaction = it
             prefs.interaction = it
         }
@@ -428,8 +458,9 @@ fun VoiceModeScreen(engine: Engine, storage: Storage, onStandardView: () -> Unit
         }
 
         Column(Modifier.align(Alignment.BottomCenter).imePadding().padding(horizontal = 24.dp, vertical = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            // Speech out with subtitles: the spoken words as text.
-            AnimatedVisibility(interaction.speaksReply && subtitles && replyText != null, enter = fadeIn(), exit = fadeOut()) {
+            // Speech out with subtitles: the spoken words as text, only while they are actually being read -- not
+            // the previous reply, left behind once TTS finishes and phase settles back to Listening/Idle.
+            AnimatedVisibility(interaction.speaksReply && subtitles && phase == VoicePhase.Speaking && replyText != null, enter = fadeIn(), exit = fadeOut()) {
                 ReplyCard(replyText.orEmpty(), Modifier.padding(bottom = 12.dp))
             }
             TypeBox(Modifier, onSend = ::sendFromTypeBox)

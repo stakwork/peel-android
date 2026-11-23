@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="voice_setting">Modo de voz</string>
-    <string name="voice_setting_note">Abre Peel con un micrófono sobre un lienzo en blanco. Un botón pequeño te lleva a la vista estándar.</string>
+    <string name="voice_setting_note">Abre Peel con un micrófono sobre un lienzo en blanco. El icono de cuadrícula arriba a la derecha desactiva el Modo de voz.</string>
     <string name="voice_mic_start">Hablar con Peel</string>
     <string name="voice_mic_stop">Dejar de escuchar</string>
     <string name="voice_listening">Escuchando…</string>
@@ -14,7 +14,7 @@
     <string name="voice_muted">Silenciado — toca para dejar de silenciar</string>
     <string name="voice_type_hint">Escribe un mensaje…</string>
     <string name="voice_send">Enviar</string>
-    <string name="voice_standard_view">Vista estándar</string>
+    <string name="voice_turn_off">Desactivar el Modo de voz</string>
     <string name="voice_sent">Enviado a Peel</string>
     <string name="voice_no_agent">El agente de Peel aún no está configurado en esta cuenta. Abre la vista estándar para configurarlo.</string>
     <string name="voice_permission_refused">Se rechazó el acceso al micrófono. Puedes escribir un mensaje en su lugar.</string>

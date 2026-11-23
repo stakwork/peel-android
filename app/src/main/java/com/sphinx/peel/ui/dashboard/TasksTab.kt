@@ -43,7 +43,9 @@ import com.sphinx.peel.ui.theme.Theme
 // The rules (which rows, one page or the list) are `engine/TasksTab.kt`'s.
 
 /// The bar's tabs. Tasks only while the account has opened a Tasks page; then it comes first and Peel opens on it.
-internal enum class MainTab {
+/// Public (not `internal`, like the rest of this file): `MainTabs` takes one as the tab to return to, in its own
+/// public signature (`MainActivity.PeelApp` remembers it across Voice Mode, docs/phases/55-voice-mode.md).
+enum class MainTab {
     TASKS, CHATS, PAYMENTS, YOU, SEARCH;
 
     companion object {
@@ -58,10 +60,12 @@ internal enum class MainTab {
     }
 }
 
-/// Which tab is in front and which Tasks page is chosen, held by `MainTabs`.
+/// Which tab is in front and which Tasks page is chosen, held by `MainTabs`. [initialTab] overrides the usual starting
+/// tab (`MainTab.start`) — the tab last shown before Voice Mode took over the screen, so coming back from it returns
+/// to where the person actually was, not always the default (docs/phases/55-voice-mode.md).
 @Stable
-internal class TabState(hasTasks: Boolean) {
-    var tab by mutableStateOf(MainTab.start(hasTasks))
+internal class TabState(hasTasks: Boolean, initialTab: MainTab? = null) {
+    var tab by mutableStateOf(initialTab?.let { MainTab.shown(it, hasTasks) } ?: MainTab.start(hasTasks))
 
     /// The Tasks page picked from the list or opened by a link; null: the one employer's page, or the list
     /// (`TasksTab.content`).
