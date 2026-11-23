@@ -21,6 +21,9 @@
     <string name="voice_unavailable">El reconocimiento de voz no está disponible en este dispositivo. Puedes escribir un mensaje en su lugar.</string>
     <string name="voice_heard_nothing">No te entendí. Toca el micrófono para intentarlo de nuevo, o escribe un mensaje.</string>
     <string name="voice_echo_ignored">Eso sonó como la propia voz de Peel. Intenta de nuevo cuando esté en silencio.</string>
+    <string name="voice_auto_send">Enviar automáticamente tras una pausa</string>
+    <string name="voice_auto_send_seconds">%1$d segundos</string>
+    <string name="voice_auto_send_note">Di «peel send» para enviar. El envío automático tras el silencio puede cortarte, por eso está desactivado de forma predeterminada.</string>
     <string name="voice_recognition_failed">Falló el reconocimiento de voz. Inténtalo de nuevo o escribe un mensaje.</string>
     <string name="voice_send_failed">No se pudo enviar: %1$s</string>
     <string name="voice_interaction_label">Modo de interacción</string>

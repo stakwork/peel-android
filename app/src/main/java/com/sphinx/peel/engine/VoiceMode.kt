@@ -36,6 +36,19 @@ class VoiceModePrefs(private val prefs: SharedPreferences) {
         get() = prefs.getBoolean(VoiceModeSubtitles.KEY, VoiceModeSubtitles.DEFAULT)
         set(value) { prefs.edit().putBoolean(VoiceModeSubtitles.KEY, value).apply() }
 
+    /// Auto-send after a pause in continuous listening (docs/phases/55-voice-mode.md, "Silence timeout"), ported from
+    /// peel's `VoiceDefaults.autoSend`. Off by default: "peel send" is the way to send; a pause can cut a driver off
+    /// mid-thought, and a message sent half-formed is worse than one that waits.
+    var autoSend: Boolean
+        get() = prefs.getBoolean(VoiceAutoSend.KEY, VoiceAutoSend.DEFAULT)
+        set(value) { prefs.edit().putBoolean(VoiceAutoSend.KEY, value).apply() }
+
+    /// Seconds of silence before an auto-send, clamped to [VoiceAutoSend.RANGE] on every read (so a stale or corrupt
+    /// stored value, or one carried over from somewhere else, is still bounded).
+    var autoSendSeconds: Double
+        get() = prefs.getFloat(VoiceAutoSend.SECONDS_KEY, VoiceAutoSend.DEFAULT_SECONDS.toFloat()).toDouble().coerceIn(VoiceAutoSend.RANGE)
+        set(value) { prefs.edit().putFloat(VoiceAutoSend.SECONDS_KEY, value.toFloat()).apply() }
+
     companion object {
         const val KEY = "voiceMode"
         private const val FILE = "peel.voicemode"
@@ -104,6 +117,19 @@ enum class VoiceModeInteraction(val wire: String) {
 object VoiceModeSubtitles {
     const val KEY = "voiceModeSubtitles"
     const val DEFAULT = false
+}
+
+/// Auto-send-after-silence's keys, default and range, ported from peel's `VoiceDefaults` (`Sources/PeelUI/Voice/VoiceModeState.swift`;
+/// only the auto-send fields -- Android has no wake listener and no separate "other audio" session to pause, and TTS rate is a
+/// separate concern from this phase's own).
+object VoiceAutoSend {
+    // ".v2": the first version stored on, 1-5 s, under the old unversioned keys. Those are not read here, so an old
+    // stale short value already on a device is never silently carried over into this version's 2-15 s range.
+    const val KEY = "voice.autoSend.v2"
+    const val SECONDS_KEY = "voice.autoSendSeconds.v2"
+    const val DEFAULT = false
+    const val DEFAULT_SECONDS = 5.0
+    val RANGE = 2.0..15.0
 }
 
 /// What Voice Mode shows (or reads) as the agent's reply: the agent's texts since the person's own newest message in

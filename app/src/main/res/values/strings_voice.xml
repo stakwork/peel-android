@@ -21,6 +21,9 @@
     <string name="voice_unavailable">Speech recognition isn\'t available on this device. You can type a message instead.</string>
     <string name="voice_heard_nothing">Didn\'t catch that. Tap the microphone to try again, or type a message.</string>
     <string name="voice_echo_ignored">That sounded like Peel\'s own voice. Try again once it\'s quiet.</string>
+    <string name="voice_auto_send">Auto-send after a pause</string>
+    <string name="voice_auto_send_seconds">%1$d seconds</string>
+    <string name="voice_auto_send_note">Say \"peel send\" to send. Auto-send after silence can cut you off, so it\'s off by default.</string>
     <string name="voice_recognition_failed">Speech recognition failed. Try again, or type a message.</string>
     <string name="voice_send_failed">Couldn\'t send: %1$s</string>
     <string name="voice_interaction_label">Interaction mode</string>

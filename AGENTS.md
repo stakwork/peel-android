@@ -61,6 +61,7 @@ sections for code that isn't written yet.
   - `engine/TribeLink.kt`, `TribeForm.kt`, `TribeMembers.kt`, `Tribes.kt` — tribe join/create/edit/leave/delete,
     members and requests, kick, pin (`docs/phases/23-tribe-management.md`): pure parsers/builders (JVM-tested) and
     `Engine` extensions over the core's tribe calls; UI in `ui/tribes/`.
+  - `TribeLinks`/`TribeRoute` (in `engine/TribeLink.kt`) — the one builder/parser of tribe links (`sphinx.chat://?action=tribeV2…` and `peel://tribe?…`), the in-message link detection and the open-or-Join decision (`docs/phases/23-tribe-management.md`, "Tribe links"). Build tribe links only through it.
   - `engine/ContactRemoval.kt` — remove a contact (`Engine.deleteContact`, pure `ContactRemoval.delete`, refusals);
     `Engine.forgetContact` and `Storage.deleteContact`/`hasPendingPayment`/`serverIndexes`
     (`docs/phases/24-delete-contact.md`); UI in `ui/details/ChatDetailsScreen.kt`.
@@ -138,8 +139,12 @@ sections for code that isn't written yet.
     sentence-sized, length-capped speech, ported from peel's `SpokenText.swift`), `engine/VoiceMachine.kt` (the idle/listening/hearing/sending/waiting/speaking
     phase reducer, mute and the command vocabulary, ported from peel's `VoiceModeState.swift`), `engine/VoiceCommandParser.kt` (the English phrase table and
     parser — "peel send", "peel mute", … — ported from peel's `VoiceCommand.swift`), `engine/EchoFilter.kt` (tells Peel's own TTS reply apart from the user,
-    ported from peel's `EchoFilter.swift` — narrower on Android, see the phase doc), `ui/voice/VoiceModeScreen.kt` — Voice Mode
-    (`docs/phases/55-voice-mode.md`): a setting (You › Account) that opens a mic-on-linen screen first; speech/typed text goes to the agent's DM via `Engine.sendMessage`; `MainActivity.PeelApp` routes, and its grid button turns the setting off rather than hiding the screen for just this launch.
+    ported from peel's `EchoFilter.swift` — narrower on Android, see the phase doc), `VoiceAutoSend`/`VoiceModePrefs.autoSend`/`autoSendSeconds`
+    (silence-timeout settings, ported from peel's `VoiceDefaults`/`VoiceSettings`; `voice-mode-continuous-listening` branch only), `ui/voice/VoiceModeScreen.kt`
+    — Voice Mode (`docs/phases/55-voice-mode.md`): a setting (You › Account) that opens a mic-on-linen screen first; speech/typed text goes to the agent's DM
+    via `Engine.sendMessage`; `MainActivity.PeelApp` routes, and its grid button turns the setting off rather than hiding the screen for just this launch. On
+    `voice-mode-continuous-listening`, the one-shot recognizer chains sessions into one continuous dictation with an optional auto-send timer — see the phase
+    doc's own section on that branch before touching `startListening`.
   - `ui/` — Compose screens and the pieces they share.
     - `theme/` — `Theme`, colours taken from `peel`'s
       `Apps/Shared/Theme.swift`.

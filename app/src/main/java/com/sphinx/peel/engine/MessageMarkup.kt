@@ -246,7 +246,7 @@ object MessageMarkup {
     /// links and mentions, in order and never overlapping. A backtick inside a
     /// link is part of the link; a link or mention inside code is code.
     fun spans(text: String): List<Span> {
-        var links = findLinks(text)
+        var links = withTribeLinks(text, findLinks(text))
         // A named link opens only an address read as an https link, the whole
         // of it, so it follows the same rules as one typed out.
         if (links.isNotEmpty() && text.contains("](")) {
@@ -358,6 +358,15 @@ object MessageMarkup {
             from = end
         }
         return links
+    }
+
+    /// [links] with the tribe links in `text` (`sphinx.chat://?action=tribeV2…`, `peel://tribe?…`: [TribeLinks]) added, in order. Their
+    /// url is the text as written; the app's link opener routes them inside Peel, never the system's.
+    private fun withTribeLinks(text: String, links: List<Span>): List<Span> {
+        val tribes = TribeLinks.inText(text)
+            .filter { r -> links.none { it.start <= r.last && r.first < it.end } }
+            .map { Span(Kind.Link(text.substring(it.first, it.last + 1)), it.first, it.last + 1, text.substring(it.first, it.last + 1)) }
+        return if (tribes.isEmpty()) links else (links + tribes).sortedBy { it.start }
     }
 
     /// The URL for what follows `https://`, or null when it is not one we open.

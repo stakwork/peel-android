@@ -90,6 +90,42 @@ class VoiceModeTest {
         prefs.subtitles = false
     }
 
+    @Test fun `auto-send is off by default with a five second pause`() {
+        context.getSharedPreferences("peel.voicemode", Context.MODE_PRIVATE).edit().clear().commit()
+        val prefs = VoiceModePrefs.of(context)
+        assertFalse(prefs.autoSend)
+        assertEquals(5.0, prefs.autoSendSeconds, 0.0)
+        assertEquals(2.0..15.0, VoiceAutoSend.RANGE)
+    }
+
+    @Test fun `auto-send persists`() {
+        val prefs = VoiceModePrefs.of(context)
+        prefs.autoSend = true
+        prefs.autoSendSeconds = 8.0
+        assertTrue(VoiceModePrefs.of(context).autoSend)
+        assertEquals(8.0, VoiceModePrefs.of(context).autoSendSeconds, 0.0)
+        prefs.autoSend = false
+        prefs.autoSendSeconds = VoiceAutoSend.DEFAULT_SECONDS
+    }
+
+    @Test fun `auto-send seconds are clamped to the range on read`() {
+        val raw = context.getSharedPreferences("peel.voicemode", Context.MODE_PRIVATE)
+        raw.edit().putFloat(VoiceAutoSend.SECONDS_KEY, 99f).commit()
+        assertEquals(15.0, VoiceModePrefs.of(context).autoSendSeconds, 0.0)
+        raw.edit().putFloat(VoiceAutoSend.SECONDS_KEY, 0.5f).commit()
+        assertEquals(2.0, VoiceModePrefs.of(context).autoSendSeconds, 0.0)
+        raw.edit().remove(VoiceAutoSend.SECONDS_KEY).commit()
+    }
+
+    @Test fun `old unversioned auto-send keys are not read`() {
+        // What a first version might have stored: on, 2 s, under the old unversioned keys.
+        val raw = context.getSharedPreferences("peel.voicemode", Context.MODE_PRIVATE)
+        raw.edit().putBoolean("voice.autoSend", true).putFloat("voice.autoSendSeconds", 2f).commit()
+        assertFalse(VoiceModePrefs.of(context).autoSend)
+        assertEquals(5.0, VoiceModePrefs.of(context).autoSendSeconds, 0.0)
+        raw.edit().remove("voice.autoSend").remove("voice.autoSendSeconds").commit()
+    }
+
     @Test fun `enabled fires its listener when another instance changes it`() {
         context.getSharedPreferences("peel.voicemode", Context.MODE_PRIVATE).edit().clear().commit()
         val watcher = VoiceModePrefs.of(context)
