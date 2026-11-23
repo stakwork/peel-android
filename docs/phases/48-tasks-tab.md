@@ -1,5 +1,12 @@
 # Phase 48 — A Tasks tab for a worker's employers
 
+> **Superseded: the Apps tab replaces the Tasks tab.** The bar is now Chats | Payments | Apps | You. Apps is one list: the workspace apps,
+> then every public app opened here (`Storage.openedApps`, a worker's Tasks page too, last opened first), source = the app's host;
+> `engine/AppsListing.kt` (`AppsListing`, JVM-tested) is the merge, `AppsScreen(onBack = null)` the tab. `TasksTab`, `TasksList`, `TabState`
+> and the kept-alive page are gone; a Tasks link (a worker's invite after signup) opens the page itself over the tabs like any public page.
+> Chats no longer has an Apps route; its Apps row only folds the pinned apps. What follows is the history of the Tasks tab.
+
+
 Status (2026-11-19): **built; JVM/Robolectric-tested; CI's three Gradle tasks pass locally; not run on a device or emulator.**
 Strut's half (stakwork/strut `feature/one-invite`) makes every worker invite open the Tasks app; nothing here waits on it, since
 a Tasks share link already opens `strut/worker` today.

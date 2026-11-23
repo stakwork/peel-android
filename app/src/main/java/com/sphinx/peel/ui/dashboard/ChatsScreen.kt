@@ -83,7 +83,7 @@ import com.sphinx.peel.R
 
 /// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
 /// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
-enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITE, JOIN_TRIBE, CREATE_TRIBE }
+enum class DashboardRoute { THREADS, MENTIONS, ADD_CONTACT, INVITE, JOIN_TRIBE, CREATE_TRIBE }
 
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
 /// the large title with the connection bolt, then `ChatListBody` for
@@ -147,12 +147,6 @@ private fun ChatListBody(
     var recentView by remember { mutableStateOf(engine.chatsRecentView() ?: layout.combinedView) }
     val restoreProgress by engine.restoreProgress.collectAsState()
     val liveCalls = rememberLiveCallCounts(engine, storage)
-    // A stranger's public app opened here shows Apps too: read again as one is kept or forgotten. Not an employer's Tasks page, which
-    // the Tasks tab holds and Apps does not list (docs/phases/48-tasks-tab.md): with only those, no Apps row.
-    val publicApps by storage.publicAppsVersion.collectAsState()
-    var openedApps by remember { mutableStateOf(false) }
-    LaunchedEffect(publicApps) { openedApps = withContext(Dispatchers.Default) { com.sphinx.peel.engine.TasksTab.others(storage.openedApps()).isNotEmpty() } }
-    val showsApps = Stadeum.showsApps(openedApps)
     // The apps under the Apps row, A–Z (the Mac's sidebar): the pinned ones while the fold is open, or, searching, every app that
     // matches. Read by `Stadeum.readApps`, shared with Apps; only the workspaces in use.
     val openPage = com.sphinx.peel.ui.apps.LocalPageOpener.current
@@ -246,7 +240,7 @@ private fun ChatListBody(
             }
         } else if (conversations.isEmpty() && !searching) {
             // Only for a kept public app here: a workspace's Apps row stays where iOS has it, in the list.
-            EmptyChats(restoring = restoreProgress.restoring, showsApps = openedApps, pendingInvites = pendingInvites, onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite)
+            EmptyChats(restoring = restoreProgress.restoring, pendingInvites = pendingInvites, onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite)
         } else if (noMatches) {
             NoSearchResults(query)
         } else {
@@ -258,10 +252,10 @@ private fun ChatListBody(
                 // appears as soon as You › Stadeum pairs), or (Android) with
                 // a public app opened here.
                 if (!searching) {
-                    if (showsApps) item(key = "apps-row") {
-                        AppsRow(fold = if (hasPins) layout.appsOpen else null, onToggleFold = { changeLayout(layout.copy(appsOpen = !layout.appsOpen)) }) {
-                            onOpenRoute(DashboardRoute.APPS)
-                        }
+                    // Apps has its own tab; this row only folds the pinned apps under it.
+                    if (hasPins) item(key = "apps-row") {
+                        val toggle = { changeLayout(layout.copy(appsOpen = !layout.appsOpen)) }
+                        AppsRow(fold = layout.appsOpen, onToggleFold = toggle, onClick = toggle)
                     }
                     items(underApps, key = { "pinned-${it.id}" }) { app -> pinnedRow(app) }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, stringResource(R.string.chats_threads), unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
@@ -493,7 +487,6 @@ private fun EmptySearch() {
 @Composable
 private fun EmptyChats(
     restoring: Boolean,
-    showsApps: Boolean,
     pendingInvites: List<InviteRecord>,
     onOpenRoute: (DashboardRoute) -> Unit,
     onOpenInvite: (String) -> Unit,
@@ -524,11 +517,6 @@ private fun EmptyChats(
             for (invite in pendingInvites) PendingInviteRow(invite) { onOpenInvite(invite.code) }
             ActionRow(stringResource(R.string.chats_add_contact)) { onOpenRoute(DashboardRoute.ADD_CONTACT) }
             ActionRow(stringResource(R.string.chats_invite_someone)) { onOpenRoute(DashboardRoute.INVITE) }
-        }
-        // A new worker has no chats yet but has the Stadeum's worker app: Apps must not hide behind a chat either.
-        if (showsApps) {
-            Spacer(Modifier.height(16.dp))
-            NavRow(Icons.Filled.Apps, stringResource(R.string.chats_apps), 0) { onOpenRoute(DashboardRoute.APPS) }
         }
     }
 }

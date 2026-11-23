@@ -132,7 +132,6 @@
     <string name="misc_apps_all">All</string>
     <string name="misc_apps_search">Search apps</string>
     <string name="misc_apps_talk_header">Talk to Jamie</string>
-    <string name="misc_apps_opened_header">Apps you opened</string>
     <string name="misc_apps_link_copied">Link copied</string>
     <string name="misc_apps_no_results">No results</string>
     <string name="misc_apps_nothing_matches">Nothing matches “%1$s”.</string>

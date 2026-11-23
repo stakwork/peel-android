@@ -132,33 +132,17 @@ class PublicPageRouterTest {
         assertNull(router.orgPage)
     }
 
-    // The Tasks tab (docs/phases/48-tasks-tab.md): an employer's Tasks page goes to the tab, never over everything.
+    // An employer's Tasks page opens as any public page (docs/phases/48-tasks-tab.md): a row in the Apps tab, not a tab of its own.
     private val tasks = PublicAppLink.of("https://acme.example.com/?app=strut%2Fworker&solo=1&public=1")!!
 
-    @Test fun aTasksLinkWaitingForSignupOpensInTheTab() {
+    @Test fun aTasksLinkWaitingForSignupOpensAsAPage() {
         val seen = mutableListOf<PublicAppLink>()
         val router = PublicPageRouter(opened = { link, _ -> seen += link })
         router.open(tasks, ready = false)
-        assertNull(router.tasksPage)
-        router.openWaitingLink()
-        assertEquals(tasks, router.tasksPage)
-        assertNull("not a page over Chats", router.page)
-        assertEquals("kept, so the tab shows", listOf(tasks), seen)
-        router.tasksTaken()
-        assertNull(router.tasksPage)
-    }
-
-    @Test fun aTasksLinkClosesThePagesOverEverything() {
-        val router = PublicPageRouter()
-        router.open(a, ready = true)
-        router.openOrg(board)
-        router.open(tasks, ready = true)
         assertNull(router.page)
-        assertNull(router.orgPage)
-        assertEquals(tasks, router.tasksPage)
-        // Another public app still opens over everything.
-        router.open(b, ready = true)
-        assertEquals(b, router.page)
+        router.openWaitingLink()
+        assertEquals(tasks, router.page)
+        assertEquals("kept, so Apps lists it", listOf(tasks), seen)
     }
 
     /// Whether a worker's invite link named the page (docs/phases/49-invite-signs-in.md) goes with that link alone: kept with it while it
@@ -185,15 +169,5 @@ class PublicPageRouterTest {
         router.open(tasks, ready = false)
         router.openWaitingLink()
         assertEquals(listOf(tasks to false), seen)
-    }
-
-    @Test fun aLockOrResetDropsATasksPageNotYetTaken() {
-        val router = PublicPageRouter()
-        router.open(tasks, ready = true)
-        router.locked()
-        assertNull(router.tasksPage)
-        router.open(tasks, ready = true)
-        router.reset()
-        assertNull(router.tasksPage)
     }
 }
