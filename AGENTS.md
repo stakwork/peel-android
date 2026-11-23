@@ -61,6 +61,7 @@ sections for code that isn't written yet.
   - `engine/TribeLink.kt`, `TribeForm.kt`, `TribeMembers.kt`, `Tribes.kt` — tribe join/create/edit/leave/delete,
     members and requests, kick, pin (`docs/phases/23-tribe-management.md`): pure parsers/builders (JVM-tested) and
     `Engine` extensions over the core's tribe calls; UI in `ui/tribes/`.
+  - `TribeLinks`/`TribeRoute` (in `engine/TribeLink.kt`) — the one builder/parser of tribe links (`sphinx.chat://?action=tribeV2…` and `peel://tribe?…`), the in-message link detection and the open-or-Join decision (`docs/phases/23-tribe-management.md`, "Tribe links"). Build tribe links only through it.
   - `engine/ContactRemoval.kt` — remove a contact (`Engine.deleteContact`, pure `ContactRemoval.delete`, refusals);
     `Engine.forgetContact` and `Storage.deleteContact`/`hasPendingPayment`/`serverIndexes`
     (`docs/phases/24-delete-contact.md`); UI in `ui/details/ChatDetailsScreen.kt`.

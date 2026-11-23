@@ -68,7 +68,10 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- An invite link, sphinx.chat://?action=i&d=… (the official apps' scheme; Peel's own is
+            <!-- Narrowing this is not possible: it matches the scheme alone because the official apps' links (invites,
+                 tribes `?action=tribeV2&…`) have no host or path and an intent filter cannot match query parameters. So
+                 Peel is offered for any sphinx.chat:// link; MainActivity takes the invites and tribe links and ignores the rest.
+                 An invite link, sphinx.chat://?action=i&d=… (the official apps' scheme; Peel's own is
                  not decided, docs/phases/21-invites.md). Only fills in the onboarding's invite step:
                  nothing is joined or paid by opening a link. -->
             <intent-filter>
@@ -85,6 +88,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="peel" android:host="open" />
+            </intent-filter>
+            <!-- A tribe's link, peel://tribe?pubkey=<66 hex>&host=<tribes server> (docs/phases/23-tribe-management.md). Read
+                 strictly by TribeLinks; opens the tribe's chat if the account is in it, else Join tribe filled in. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="peel" android:host="tribe" />
             </intent-filter>
             <!-- A strut box's link, peel://strut/link?url=<box>&challenge=<…> (its Connect's QR code or Open in
                  Peel; docs/phases/45-box-link.md). Read strictly by BoxLinkOffer; opening one only asks "Link Peel

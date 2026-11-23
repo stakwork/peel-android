@@ -50,3 +50,18 @@ core before trusting any of it.
 ## Tests
 `TribeLinkTest`, `TribeFormTest` (body builder, validation, registry parse), `TribeMembersTest` (members parse, pending
 requests, message bodies, ownership), `StorageRemoveChatTest`.
+
+
+## Tribe links (journal)
+
+- **Bug:** a tribe link in a message ("I click and it does not open"). Root cause: message text linkified https only
+  (`MessageMarkup.findLinks`), so `sphinx.chat://?action=tribeV2…` was plain text; and the catch-all `sphinx.chat` intent filter
+  reached `MainActivity`, which only took invites (`action=i`), so an external tribe link just brought Peel forward.
+- **Built:** `TribeLinks` (engine/TribeLink.kt) is the one place a tribe link is built (`build`, still the official
+  `sphinx.chat://?action=tribeV2&pubkey=…&host=…`, byte for byte; `ChatDetails.tribeLink` calls it; `peel(...)` is the `peel://tribe?pubkey=…&host=…`
+  form, so switching Share/Copy/QR is a one-line change) and read (`parse`, both forms; `inText` for messages). `TribeRoute.decide`
+  (pure): joined (a ready tribe contact) opens the chat, else Join tribe filled in and looked up (joining/paying still needs the tap).
+  Message text links both forms; `AppLinkHandler` takes them first (`tribe`), never the system's. External: `peel://tribe` intent filter and
+  `sphinx.chat://?action=tribeV2` via `MainActivity.takeTribeLink` -> `DeepLink.tribe` -> `MainTabs`.
+- **Open:** no tribe card under the message (the Mac's name + Open/Join); the tappable link only. The `sphinx.chat` filter cannot be
+  narrowed (no host, no path, filters cannot match query parameters), so Peel is still offered for any `sphinx.chat://` link.

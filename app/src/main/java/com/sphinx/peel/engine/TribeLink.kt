@@ -26,6 +26,7 @@ object TribeLink {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || trimmed.length > MAX_LENGTH) throw notATribe()
         if (trimmed.lowercase().startsWith("sphinx.chat://")) return link(trimmed)
+        if (trimmed.lowercase().startsWith("peel://tribe")) return TribeLinks.parsePeel(trimmed)?.let { Target(it.pubkey, null, it.host) } ?: throw notATribe()
         if (isPubkey(trimmed)) return Target(trimmed.lowercase(), null, null)
         for (separator in listOf("@", "/")) {
             val i = trimmed.indexOf(separator)
@@ -67,10 +68,10 @@ object TribeLink {
         return own
     }
 
-    private fun isPubkey(text: String): Boolean =
+    internal fun isPubkey(text: String): Boolean =
         text.length == 66 && text.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
 
-    private fun isHost(text: String): Boolean = HOST.matches(text) && !isPubkey(text)
+    internal fun isHost(text: String): Boolean = HOST.matches(text) && !isPubkey(text)
 
     private fun notATribe() = Problem("That is not a tribe link, a tribe's public key or a tribe uuid.")
 
@@ -84,5 +85,112 @@ object TribeLink {
             items.putIfAbsent(name, runCatching { URLDecoder.decode(value, "UTF-8") }.getOrDefault(value))
         }
         return items
+    }
+}
+
+/// The one place a tribe's link is built and read, in both forms: `sphinx.chat://?action=tribeV2&pubkey=…&host=…` (the official
+/// apps' form, what Share/Copy/QR make today) and `peel://tribe?pubkey=…&host=…` (Peel's own, which an Android intent filter can
+/// match by host). Switching what Peel shares to the second is a one-line change in [build]. Pure, so JVM-tested
+/// (docs/phases/23-tribe-management.md, "Tribe links").
+object TribeLinks {
+    /// A tribe a link names: its [pubkey] (66 hex, lower case) and the tribes server [host] it named, if any.
+    data class Named(val pubkey: String, val host: String?)
+
+    private const val MAX_LENGTH = 2_000
+
+    /// A tribe's link as Peel shares it, or null with no host. Byte for byte what `ChatDetails.tribeLink` always made.
+    fun build(pubkey: String, host: String?): String? = official(pubkey, host)
+
+    /// The official apps' form.
+    fun official(pubkey: String, host: String?): String? =
+        host?.takeIf { it.isNotEmpty() }?.let { "sphinx.chat://?action=tribeV2&pubkey=$pubkey&host=$it" }
+
+    /// Peel's own form.
+    fun peel(pubkey: String, host: String?): String? =
+        host?.takeIf { it.isNotEmpty() }?.let { "peel://tribe?pubkey=$pubkey&host=$it" }
+
+    /// The tribe a link of either form names, or null for anything else (a link of another action, an older uuid form, a bad
+    /// pubkey or host). Only a whole link: the scheme (any case), the action, a 66-hex `pubkey` and, when there is one, a plain `host`;
+    /// extra parameters are ignored. A `peel://tribe` link must name its host.
+    fun parse(text: String): Named? = parsePeel(text) ?: parseOfficial(text)
+
+    fun parseOfficial(text: String): Named? {
+        val t = text.trim()
+        if (t.isEmpty() || t.length > MAX_LENGTH || !t.lowercase().startsWith("sphinx.chat://")) return null
+        val items = items(t) ?: return null
+        if (items["action"] != "tribeV2") return null
+        return named(items, hostRequired = false)
+    }
+
+    fun parsePeel(text: String): Named? {
+        val t = text.trim()
+        if (t.isEmpty() || t.length > MAX_LENGTH) return null
+        if (!t.lowercase().startsWith("peel://tribe")) return null
+        val after = t.substring("peel://tribe".length)
+        if (!after.startsWith("?") && !after.startsWith("/?")) return null
+        val items = items(t) ?: return null
+        return named(items, hostRequired = true)
+    }
+
+    private fun named(items: Map<String, String>, hostRequired: Boolean): Named? {
+        val key = items["pubkey"]?.trim() ?: return null
+        if (!TribeLink.isPubkey(key)) return null
+        val host = items["host"]?.trim()?.takeIf { it.isNotEmpty() }
+        if (host == null && hostRequired) return null
+        if (host != null && !TribeLink.isHost(host)) return null
+        return Named(key.lowercase(), host?.lowercase())
+    }
+
+    private fun items(text: String): Map<String, String>? {
+        val uri = runCatching { java.net.URI(text) }.getOrNull() ?: return null
+        val raw = uri.rawQuery?.takeIf { it.isNotEmpty() } ?: return null
+        val items = LinkedHashMap<String, String>()
+        for (part in raw.split("&")) {
+            val i = part.indexOf('=')
+            val name = if (i < 0) part else part.substring(0, i)
+            val value = if (i < 0) "" else part.substring(i + 1)
+            items.putIfAbsent(name, runCatching { URLDecoder.decode(value, "UTF-8") }.getOrDefault(value))
+        }
+        return items
+    }
+
+    private val LINK = Regex("(?<![A-Za-z0-9])(?:sphinx\\.chat://\\?|peel://tribe\\?)[^\\s<>\"\\[\\]{}|\\\\^]+", RegexOption.IGNORE_CASE)
+
+    /// Where tribe links sit in a message: (start, end) of each, trailing sentence punctuation and an unbalanced `)` left out.
+    fun inText(text: String): List<IntRange> {
+        if (!text.contains("://")) return emptyList()
+        val found = ArrayList<IntRange>()
+        for (m in LINK.findAll(text)) {
+            var end = m.range.last + 1
+            val start = m.range.first
+            while (end > start) {
+                val c = text[end - 1]
+                val drop = when {
+                    c in ".,;:!?'*_~" -> true
+                    c == ')' -> text.substring(start, end).let { s -> s.count { it == ')' } > s.count { it == '(' } }
+                    else -> false
+                }
+                if (!drop) break
+                end--
+            }
+            if (parse(text.substring(start, end)) != null) found.add(start until end)
+        }
+        return found
+    }
+}
+
+/// What a tapped or opened tribe link does: the tribe's chat when this account already is in it, else the Join screen with the
+/// link filled in (looking up prices; joining and paying still wait for the person's tap).
+sealed interface TribeRoute {
+    data class OpenChat(val chat: String) : TribeRoute
+    data class Join(val link: String) : TribeRoute
+
+    companion object {
+        /// The route for [link], or null when it is no tribe link. [joined] says whether this account is in the tribe (its pubkey is the chat's id):
+        /// a left tribe has no chat here any more, so it is not joined.
+        fun decide(link: String, joined: (String) -> Boolean): TribeRoute? {
+            val named = TribeLinks.parse(link) ?: return null
+            return if (joined(named.pubkey)) OpenChat(named.pubkey) else Join(link.trim())
+        }
     }
 }

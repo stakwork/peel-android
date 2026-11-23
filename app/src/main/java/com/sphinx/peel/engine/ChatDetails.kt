@@ -18,8 +18,7 @@ import java.util.Locale
 /// (`docs/phases/23-tribe-management.md`); see `docs/phases/22-tribe-details-parity.md`.
 object ChatDetails {
     /// A tribe's link in the official apps' format (`Tribe.link`).
-    fun tribeLink(pubkey: String, host: String?): String? =
-        host?.takeIf { it.isNotEmpty() }?.let { "sphinx.chat://?action=tribeV2&pubkey=$pubkey&host=$it" }
+    fun tribeLink(pubkey: String, host: String?): String? = TribeLinks.build(pubkey, host)
 
     data class Fact(val label: String, val value: String)
 

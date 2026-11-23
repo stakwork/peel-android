@@ -91,6 +91,16 @@ class MainActivity : FragmentActivity() {
         takeInviteLink(intent)
         takePublicLink(intent)
         takeBoxLink(intent)
+        takeTribeLink(intent)
+    }
+
+    /// A tribe link from outside: `peel://tribe?pubkey=…&host=…` or `sphinx.chat://?action=tribeV2&…` (docs/phases/23-tribe-management.md,
+    /// "Tribe links"). Read strictly by `TribeLinks`; the tribe's chat opens when this account is in it, else the Join screen with the
+    /// link filled in, once unlocked (`MainTabs`). Opening it joins and pays nothing. Held in memory only.
+    private fun takeTribeLink(intent: Intent?) {
+        val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
+        val link = data.toString()
+        if (com.sphinx.peel.engine.TribeLinks.parse(link) != null) deepLink = DeepLink.tribe(link)
     }
 
     /// A strut box's `peel://strut/link?url=…&challenge=…` (docs/phases/45-box-link.md): its question waits for the person's yes
@@ -171,7 +181,7 @@ class MainActivity : FragmentActivity() {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         deepLink = DeepLink.from(intent)
-        if (savedInstanceState == null) takeBoxLink(intent)
+        if (savedInstanceState == null) { takeBoxLink(intent); takeTribeLink(intent) }
         secretStore = FileSecretStore(applicationContext)
         val storage = Storage(applicationContext)
         setContent {

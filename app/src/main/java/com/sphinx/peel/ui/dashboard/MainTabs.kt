@@ -81,10 +81,13 @@ import com.sphinx.peel.ui.you.YouScreen
 /// Read from the intent extras `push/Notifications.openIntent` sets. [you]: a
 /// box's `peel://strut/link` opened You, where its question and the boxes are
 /// (docs/phases/45-box-link.md).
-data class DeepLink(val chat: String?, val payments: Boolean, val you: Boolean = false) {
+data class DeepLink(val chat: String?, val payments: Boolean, val you: Boolean = false, val tribe: String? = null) {
     companion object {
         /// You, its own page (iOS `tab = .you; you = []`).
         val YOU = DeepLink(chat = null, payments = false, you = true)
+
+        /// A tribe link opened from outside (`peel://tribe?…`, `sphinx.chat://?action=tribeV2…`), already checked by [com.sphinx.peel.engine.TribeLinks].
+        fun tribe(link: String) = DeepLink(chat = null, payments = false, tribe = link)
 
         fun from(intent: Intent?): DeepLink? {
             val chat = intent?.getStringExtra(com.sphinx.peel.push.Notifications.EXTRA_CHAT)?.takeIf { it.isNotEmpty() }
@@ -143,10 +146,24 @@ fun MainTabs(
     // The invite whose detail is open (a pending one tapped in the chat list, or the one just made).
     var openInvite by remember { mutableStateOf<String?>(null) }
 
+    // A tribe link, tapped in a message or opened from outside (`TribeRoute`): the tribe's chat if this account is in it, else the Join
+    // screen with the link filled in. Nothing is joined or paid until the person taps Join there.
+    var joinPrefill by remember { mutableStateOf<String?>(null) }
+    val openTribe = { link: String ->
+        val route = com.sphinx.peel.engine.TribeRoute.decide(link) { pubkey -> storage.contact(pubkey)?.let { it.isTribe && it.ready } == true }
+        when (route) {
+            is com.sphinx.peel.engine.TribeRoute.OpenChat -> { openRoute = null; openInvite = null; openThreadRoot = null; openChat = route.chat }
+            is com.sphinx.peel.engine.TribeRoute.Join -> { openChat = null; openInvite = null; openThreadRoot = null; joinPrefill = route.link; openRoute = DashboardRoute.JOIN_TRIBE }
+            null -> {}
+        }
+        route != null
+    }
+
     // A tapped notification: open its chat (or Payments), once.
     LaunchedEffect(deepLink) {
         val link = deepLink ?: return@LaunchedEffect
-        if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tabs.tab = MainTab.PAYMENTS }
+        if (link.tribe != null) openTribe(link.tribe)
+        else if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tabs.tab = MainTab.PAYMENTS }
         else if (link.you) { openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; tabs.tab = MainTab.YOU }
         onDeepLinkHandled()
     }
@@ -299,13 +316,14 @@ fun MainTabs(
     LaunchedEffect(talk.home == null) { if (talk.home == null) talkOpener.close() }
     // A tapped Hive link to an app opens it when its workspace is paired here. Otherwise it says to connect that workspace first and
     // still goes to the browser, so Hive shows its own sign-in or not-found; any other link is the system's, as before.
-    val linkOpener = remember(toast, context) {
+    val linkOpener = remember(toast, context, storage) {
         val handler = com.sphinx.peel.engine.AppLinkHandler(
             tap = { Stadeum.openings.tap(it) },
             reopen = { Stadeum.openings.opening(it) },
             openPage = { pages.openOrg(it) },
             announce = { toast.show(it, com.sphinx.peel.ui.toast.ToastType.Warning) },
             system = { com.sphinx.peel.ui.apps.openInBrowser(context, it) },
+            tribe = { openTribe(it) },
         )
         com.sphinx.peel.ui.apps.LinkOpener { handler.open(it) }
     }
@@ -359,7 +377,8 @@ fun MainTabs(
                     )
                     DashboardRoute.JOIN_TRIBE -> com.sphinx.peel.ui.tribes.JoinTribeScreen(
                         engine,
-                        onBack = back,
+                        onBack = { joinPrefill = null; back() },
+                        initialLink = joinPrefill,
                         onOpenChat = { tribeChat -> openRoute = null; openChat = tribeChat },
                     )
                     DashboardRoute.CREATE_TRIBE -> com.sphinx.peel.ui.tribes.TribeFormScreen(
