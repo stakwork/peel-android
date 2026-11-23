@@ -3,7 +3,8 @@ package com.sphinx.peel.engine
 import java.net.URI
 import java.net.URLDecoder
 
-/// What a pasted or scanned text names when joining a tribe: a `sphinx.chat://` tribe
+/// What a pasted or scanned text names when joining a tribe: Peel's own `peel://tribe?pubkey=…&host=…`
+/// (read strictly, through [PeelLink]: exactly those two items, no path or fragment), a `sphinx.chat://` tribe
 /// link (`action=tribeV2` with `pubkey`, or the older `action=tribe` with `uuid`), a
 /// `pubkey@host`, `host/pubkey` or `pubkey/host`, a bare pubkey or a bare uuid. Pure, so
 /// JVM-tested. Ported in spirit from PeelCore's `TribeLink` (Tribe.swift); the loose
@@ -25,6 +26,7 @@ object TribeLink {
     fun parse(text: String): Target {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || trimmed.length > MAX_LENGTH) throw notATribe()
+        if (trimmed.lowercase().startsWith("peel://")) return peelLink(trimmed)
         if (trimmed.lowercase().startsWith("sphinx.chat://")) return link(trimmed)
         if (trimmed.lowercase().startsWith("peel://tribe")) return TribeLinks.parsePeel(trimmed)?.let { Target(it.pubkey, null, it.host) } ?: throw notATribe()
         if (isPubkey(trimmed)) return Target(trimmed.lowercase(), null, null)
@@ -40,6 +42,14 @@ object TribeLink {
         }
         if (UUID.matches(trimmed)) return Target(null, trimmed, null)
         throw notATribe()
+    }
+
+    private fun peelLink(text: String): Target {
+        val values = PeelLink.values(text, host = "tribe", names = setOf("pubkey", "host")) ?: throw notATribe()
+        val key = values.getValue("pubkey")
+        val host = values.getValue("host")
+        if (!isPubkey(key) || !isHost(host)) throw notATribe()
+        return Target(key.lowercase(), null, host.lowercase())
     }
 
     private fun link(text: String): Target {
@@ -89,16 +99,18 @@ object TribeLink {
 }
 
 /// The one place a tribe's link is built and read, in both forms: `sphinx.chat://?action=tribeV2&pubkey=…&host=…` (the official
-/// apps' form, what Share/Copy/QR make today) and `peel://tribe?pubkey=…&host=…` (Peel's own, which an Android intent filter can
-/// match by host). Switching what Peel shares to the second is a one-line change in [build]. Pure, so JVM-tested
-/// (docs/phases/23-tribe-management.md, "Tribe links").
+/// apps' form, [official]/[build]) and `peel://tribe?pubkey=…&host=…` (Peel's own, [peel] — what Share/Copy/QR make today,
+/// since the Android intent filter can match it by host). [parse] reads either form a message or an opened link names.
+/// Pure, so JVM-tested (docs/phases/23-tribe-management.md, "Tribe links").
 object TribeLinks {
     /// A tribe a link names: its [pubkey] (66 hex, lower case) and the tribes server [host] it named, if any.
     data class Named(val pubkey: String, val host: String?)
 
     private const val MAX_LENGTH = 2_000
 
-    /// A tribe's link as Peel shares it, or null with no host. Byte for byte what `ChatDetails.tribeLink` always made.
+    /// A tribe's link in the official apps' format (`sphinx.chat://`); Peel itself shares [peel]'s form instead
+    /// (`ChatDetails.tribeLink`, since the already-merged "share as peel://tribe links" change) -- kept so
+    /// [parse]'s round trip of both formats stays tested.
     fun build(pubkey: String, host: String?): String? = official(pubkey, host)
 
     /// The official apps' form.

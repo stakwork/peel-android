@@ -10,7 +10,7 @@ class ChatDetailsTest {
 
     @Test
     fun `link is in the official format and needs a host`() {
-        assertEquals("sphinx.chat://?action=tribeV2&pubkey=pk&host=tribes.example", ChatDetails.tribeLink("pk", "tribes.example"))
+        assertEquals("peel://tribe?pubkey=pk&host=tribes.example", ChatDetails.tribeLink("pk", "tribes.example"))
         assertNull(ChatDetails.tribeLink("pk", null))
         assertNull(ChatDetails.tribeLink("pk", ""))
     }

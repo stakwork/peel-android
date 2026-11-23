@@ -153,7 +153,10 @@ fun MainTabs(
         val route = com.sphinx.peel.engine.TribeRoute.decide(link) { pubkey -> storage.contact(pubkey)?.let { it.isTribe && it.ready } == true }
         when (route) {
             is com.sphinx.peel.engine.TribeRoute.OpenChat -> { openRoute = null; openInvite = null; openThreadRoot = null; openChat = route.chat }
-            is com.sphinx.peel.engine.TribeRoute.Join -> { openChat = null; openInvite = null; openThreadRoot = null; joinPrefill = route.link; openRoute = DashboardRoute.JOIN_TRIBE }
+            is com.sphinx.peel.engine.TribeRoute.Join -> {
+                openChat = null; openInvite = null; openThreadRoot = null; focusMessage = null; focusThread = null
+                joinPrefill = route.link; tabs.tab = MainTab.CHATS; openRoute = DashboardRoute.JOIN_TRIBE
+            }
             null -> {}
         }
         route != null

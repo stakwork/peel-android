@@ -20,8 +20,8 @@ first-time experience matters most.
   (the table keeps one per seller and app). `TasksTab.content` decides what the tab shows: no row, no tab; one, that page; several,
   the list, or the page picked from it (or opened by a link). A picked page whose row is forgotten (Disconnect) goes with it.
 - **The tab** (`ui/dashboard/MainTabs.kt`, `ui/dashboard/TasksTab.kt`): `MainTab.TASKS` comes first in the pill (Tasks, Chats,
-  Payments, You; Search beside it) while a Tasks row exists, and is the tab Peel opens on then (after every unlock too, as Chats is
-  without it). Its last row forgotten while it is in front: Chats. `MainTabs` reads the rows again as one is kept or forgotten, or a
+  Payments, You; Search beside it) while a Tasks row exists, and is not the tab Peel opens on: Peel opens on Chats on every
+  launch and unlock, whether or not the Tasks tab exists (a Tasks link still opens it). Its last row forgotten while it is in front: Chats. `MainTabs` reads the rows again as one is kept or forgotten, or a
   sign-in names one (`publicAppsVersion`, `walletConnectionsVersion`).
 - **One employer: the tab is the page.** The same page host every public page uses (`OrgPageScreen` over `PublicPage`, phase 30),
   inside the tab, with the bar under it. No Done (it is a tab); Back steps back in the page, and at its first address is not the

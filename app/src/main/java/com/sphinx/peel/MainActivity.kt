@@ -96,7 +96,8 @@ class MainActivity : FragmentActivity() {
 
     /// A tribe link from outside: `peel://tribe?pubkey=…&host=…` or `sphinx.chat://?action=tribeV2&…` (docs/phases/23-tribe-management.md,
     /// "Tribe links"). Read strictly by `TribeLinks`; the tribe's chat opens when this account is in it, else the Join screen with the
-    /// link filled in, once unlocked (`MainTabs`). Opening it joins and pays nothing. Held in memory only.
+    /// link filled in, once unlocked (`MainTabs`). Opening it joins and pays nothing. Held in memory only. A `sphinx.chat` link that is
+    /// not a tribe (an invite, `action=i`) is left to [takeInviteLink]: `TribeLinks.parse` only matches `action=tribeV2`/`tribe`.
     private fun takeTribeLink(intent: Intent?) {
         val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
         val link = data.toString()
@@ -171,6 +172,7 @@ class MainActivity : FragmentActivity() {
         if (savedInstanceState == null) {
             takeInviteLink(intent)
             takePublicLink(intent)
+            takeTribeLink(intent)
         }
         // No chat contents in the Recents thumbnail (API 33+). Screens that show
         // a secret are additionally FLAG_SECURE (`SecureWindow`).

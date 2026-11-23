@@ -45,7 +45,7 @@ import com.sphinx.peel.ui.toast.LocalToast
 import com.sphinx.peel.ui.toast.ToastType
 import kotlinx.coroutines.launch
 
-/// Join a tribe (the iPhone's join sheet): a `sphinx.chat` tribe link, `pubkey@host`, a bare public
+/// Join a tribe (the iPhone's join sheet): a `peel://tribe` link (or the official apps' `sphinx.chat` one), `pubkey@host`, a bare public
 /// key or a uuid, pasted or scanned. "Look up" reads the tribe's registry entry and shows what
 /// joining costs; "Join" then pays it, through the usual balance and confirmation checks.
 @Composable

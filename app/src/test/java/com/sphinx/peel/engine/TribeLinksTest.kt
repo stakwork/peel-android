@@ -13,7 +13,9 @@ class TribeLinksTest {
 
     @Test
     fun `the builder keeps the shared link byte for byte`() {
-        assertEquals(official, ChatDetails.tribeLink(key, "tribes.v2.sphinx.chat"))
+        // ChatDetails.tribeLink shares peel://, not the official apps' form (already merged, "share as peel://tribe
+        // links" -- TribeLinks.build/official stay for parsing's round trip, not for what Peel itself writes).
+        assertEquals(peel, ChatDetails.tribeLink(key, "tribes.v2.sphinx.chat"))
         assertEquals(official, TribeLinks.build(key, "tribes.v2.sphinx.chat"))
         assertEquals(peel, TribeLinks.peel(key, "tribes.v2.sphinx.chat"))
         assertNull(TribeLinks.build(key, null))
