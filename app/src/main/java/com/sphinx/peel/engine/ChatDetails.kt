@@ -17,9 +17,10 @@ import java.util.Locale
 /// yet): delete contact; leave/edit/members are in `Tribes.kt`
 /// (`docs/phases/23-tribe-management.md`); see `docs/phases/22-tribe-details-parity.md`.
 object ChatDetails {
-    /// A tribe's link in the official apps' format (`Tribe.link`).
+    /// A tribe's link as Peel writes it (`Tribe.link`): `peel://tribe?…`, Peel's own scheme, which opens Peel
+    /// for someone who has no Sphinx app. [TribeLink.parse] still reads the official apps' `sphinx.chat://` form.
     fun tribeLink(pubkey: String, host: String?): String? =
-        host?.takeIf { it.isNotEmpty() }?.let { "sphinx.chat://?action=tribeV2&pubkey=$pubkey&host=$it" }
+        host?.takeIf { it.isNotEmpty() }?.let { "peel://tribe?pubkey=$pubkey&host=$it" }
 
     data class Fact(val label: String, val value: String)
 

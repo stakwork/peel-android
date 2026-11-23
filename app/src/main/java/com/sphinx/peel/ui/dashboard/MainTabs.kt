@@ -113,6 +113,8 @@ fun MainTabs(
     // The tab shown before Voice Mode last took over the screen, and where a tab change is reported back to remember
     // for next time (docs/phases/55-voice-mode.md): so its grid button returns to Chats, Payments or You/Profile, not
     // always Chats, when the screen is shown again (`MainActivity.PeelApp` holds the saved value across the swap).
+    // A tribe link that opened the app, taken here into the Join a tribe form once (nothing is joined by it).
+    tribeLink: String? = null, onTribeLinkTaken: () -> Unit = {},
     initialTab: MainTab? = null, onTabChanged: (MainTab) -> Unit = {},
     onForgotten: () -> Unit,
 ) {
@@ -142,6 +144,17 @@ fun MainTabs(
     var openThreadRoot by remember { mutableStateOf<String?>(null) }
     // The invite whose detail is open (a pending one tapped in the chat list, or the one just made).
     var openInvite by remember { mutableStateOf<String?>(null) }
+
+    // The link the Join a tribe form opens with.
+    var joinLink by remember { mutableStateOf("") }
+    LaunchedEffect(tribeLink) {
+        val link = tribeLink ?: return@LaunchedEffect
+        openChat = null; openInvite = null; openThreadRoot = null; focusMessage = null; focusThread = null
+        joinLink = link
+        tabs.tab = MainTab.CHATS
+        openRoute = DashboardRoute.JOIN_TRIBE
+        onTribeLinkTaken()
+    }
 
     // A tapped notification: open its chat (or Payments), once.
     LaunchedEffect(deepLink) {
@@ -359,6 +372,7 @@ fun MainTabs(
                     )
                     DashboardRoute.JOIN_TRIBE -> com.sphinx.peel.ui.tribes.JoinTribeScreen(
                         engine,
+                        initialLink = joinLink,
                         onBack = back,
                         onOpenChat = { tribeChat -> openRoute = null; openChat = tribeChat },
                     )

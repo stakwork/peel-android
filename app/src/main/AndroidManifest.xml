@@ -95,6 +95,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="peel" android:host="strut" />
             </intent-filter>
+            <!-- A tribe's link, peel://tribe?pubkey=<key>&host=<host> (what Share and Copy write; read strictly by
+                 TribeLink). Opening one only fills in Join a tribe: nothing is joined or paid without the person's tap. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="peel" android:host="tribe" />
+            </intent-filter>
         </activity>
 
         <!-- FCM: onNewToken re-registers the token, onMessageReceived is the

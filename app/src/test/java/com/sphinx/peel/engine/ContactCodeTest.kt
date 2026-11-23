@@ -56,6 +56,8 @@ class ContactCodeTest {
     @Test
     fun `tribe links, other actions and text are refused`() {
         assertTrue(refused("sphinx.chat://?action=tribeV2&host=h&pubkey=$key").contains("tribe"))
+        assertTrue(refused("peel://tribe?pubkey=$key&host=tribes.example.com").contains("tribe"))
+        assertTrue(refused("peel://tribe?pubkey=$key").contains("not contact info"))
         assertTrue(refused("sphinx.chat://?action=auth&x=1").contains("not contact info"))
         assertTrue(refused("hello there").contains("not contact info"))
         assertTrue(refused("").contains("not contact info"))

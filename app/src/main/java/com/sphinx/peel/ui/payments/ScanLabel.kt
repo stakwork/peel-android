@@ -122,6 +122,8 @@ sealed class ScanRoute {
             val lower = text.lowercase()
             if (lower.startsWith("peel://open") || lower.startsWith("peel://strut")) return InApp
             if (InviteLink.fromDeepLink(ScanLabel.scheme(text), ScanLabel.param(text, "action"), text) != null) return InApp
+            // A tribe's own link opens Peel's join form (`MainActivity.takeTribeLink`).
+            if (lower.startsWith("peel://tribe") && runCatching { TribeLink.parse(text) }.isSuccess) return InApp
             // Only these open in another app: an untrusted code must not start tel:, intent:, file:, content: and the like.
             val scheme = SCHEME.find(lower)?.groupValues?.get(1) ?: return Refuse
             if (scheme != "http" && scheme != "https" && scheme != "lightning") return Refuse

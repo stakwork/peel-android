@@ -81,6 +81,10 @@ class MainActivity : FragmentActivity() {
     /// (docs/phases/49-invite-signs-in.md). In memory only, like the link; never logged.
     private var publicLinkInvited by mutableStateOf(false)
 
+    /// A tribe link (`peel://tribe?…`, or the official apps' `sphinx.chat://?action=tribeV2…`) that opened the app, until
+    /// `MainTabs` has put it in the Join a tribe form. Nothing is joined or paid by opening it. In memory only.
+    private var tribeLink by mutableStateOf<String?>(null)
+
     private val askNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -91,6 +95,20 @@ class MainActivity : FragmentActivity() {
         takeInviteLink(intent)
         takePublicLink(intent)
         takeBoxLink(intent)
+        takeTribeLink(intent)
+    }
+
+    /// A strictly valid tribe link, in either scheme (Android registers both). A `sphinx.chat` link that is not a tribe
+    /// (an invite, `action=i`) is left to [takeInviteLink].
+    private fun takeTribeLink(intent: Intent?) {
+        val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
+        val scheme = data.scheme?.lowercase()
+        if (scheme != "peel" && scheme != "sphinx.chat") return
+        val text = data.toString()
+        val target = runCatching { com.sphinx.peel.engine.TribeLink.parse(text) }.getOrNull() ?: return
+        if (target.pubkey == null) return
+        if (scheme == "peel" && data.host?.lowercase() != "tribe") return
+        tribeLink = text
     }
 
     /// A strut box's `peel://strut/link?url=…&challenge=…` (docs/phases/45-box-link.md): its question waits for the person's yes
@@ -161,6 +179,7 @@ class MainActivity : FragmentActivity() {
         if (savedInstanceState == null) {
             takeInviteLink(intent)
             takePublicLink(intent)
+            takeTribeLink(intent)
         }
         // No chat contents in the Recents thumbnail (API 33+). Screens that show
         // a secret are additionally FLAG_SECURE (`SecureWindow`).
@@ -183,7 +202,7 @@ class MainActivity : FragmentActivity() {
                     val toast = rememberToastState()
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                         CompositionLocalProvider(LocalToast provides toast) {
-                            PeelApp(secretStore, storage, inviteLink, { inviteLink = null }, deepLink, { deepLink = null }, publicLink, publicLinkInvited) { publicLink = null; publicLinkInvited = false }
+                            PeelApp(secretStore, storage, inviteLink, { inviteLink = null }, deepLink, { deepLink = null }, publicLink, publicLinkInvited, { publicLink = null; publicLinkInvited = false }, tribeLink) { tribeLink = null }
                         }
                         ToastHost(toast, Modifier.align(Alignment.BottomCenter))
                     }
@@ -215,6 +234,7 @@ private fun PeelApp(
     secretStore: SecretStore, storage: Storage, inviteLink: String?, onInviteLinkUsed: () -> Unit,
     deepLink: DeepLink?, onDeepLinkHandled: () -> Unit,
     publicLink: PublicAppLink?, publicLinkInvited: Boolean, onPublicLinkTaken: () -> Unit,
+    tribeLink: String?, onTribeLinkTaken: () -> Unit,
 ) {
     val appContext = LocalContext.current.applicationContext
     var screen by remember {
@@ -282,8 +302,8 @@ private fun PeelApp(
                 onDispose { voicePrefs.removeListener(listener) }
             }
             var showedStandard by rememberSaveable { mutableStateOf(false) }
-            androidx.compose.runtime.LaunchedEffect(deepLink) { if (deepLink != null) showedStandard = true }
-            val route = VoiceModeRoute.initial(voiceModeOn, showedStandard || deepLink != null)
+            androidx.compose.runtime.LaunchedEffect(deepLink) { if (deepLink != null || tribeLink != null) showedStandard = true }
+            val route = VoiceModeRoute.initial(voiceModeOn, showedStandard || deepLink != null || tribeLink != null)
             // The tab shown before Voice Mode took over (Chats, Payments, You/Profile, …): MainTabs itself is torn down and
             // rebuilt across the swap (it's a different composable in this same slot), so its own tab state does not survive
             // on its own -- held here instead, above both, so the grid button returns to where the person actually was.
@@ -291,7 +311,7 @@ private fun PeelApp(
             Box(Modifier.fillMaxSize()) {
                 if (route == VoiceModeRoute.VOICE) VoiceModeScreen(current.engine, storage) { voicePrefs.enabled = false }
                 else MainTabs(
-                    current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router,
+                    current.engine, storage, secretStore, deepLink, onDeepLinkHandled, pages = router, tribeLink = tribeLink, onTribeLinkTaken = onTribeLinkTaken,
                     initialTab = lastMainTab, onTabChanged = { lastMainTab = it },
                 ) { router.reset(); screen = Screen.Onboarding }
                 com.sphinx.peel.ui.update.UpdateHost()

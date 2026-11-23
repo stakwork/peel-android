@@ -26,6 +26,7 @@ class ScanLabelTest {
     fun `sphinx links`() {
         assertEquals("Sphinx invite", label("sphinx.chat://?action=i&d=abc"))
         assertEquals("Tribe", label("sphinx.chat://?action=tribeV2&pubkey=$key&host=tribes.example.com"))
+        assertEquals("Tribe", label("peel://tribe?pubkey=$key&host=tribes.example.com"))
     }
 
     @Test
@@ -59,6 +60,8 @@ class ScanLabelTest {
         assertEquals(ScanRoute.External, ScanRoute.of("https://example.com/x"))
         assertEquals(ScanRoute.External, ScanRoute.of("lightning:lnurl1abc"))
         assertEquals(ScanRoute.Refuse, ScanRoute.of("sphinx.chat://?action=tribe&uuid=x"))
+        assertEquals(ScanRoute.InApp, ScanRoute.of("peel://tribe?pubkey=$key&host=tribes.example.com"))
+        assertEquals(ScanRoute.Refuse, ScanRoute.of("peel://tribe?pubkey=nothex&host=tribes.example.com"))
         assertEquals(ScanRoute.Refuse, ScanRoute.of("peel://other"))
         for (bad in listOf("tel:123456", "intent://x#Intent;end", "file:///etc/passwd", "content://x/y", "sms:123", "javascript:alert(1)")) assertEquals(bad, ScanRoute.Refuse, ScanRoute.of(bad))
         assertEquals(ScanRoute.Refuse, ScanRoute.of("hello world"))
