@@ -27,8 +27,6 @@
     <string name="dash_app_with_source">%1$s · %2$s</string>
     <string name="dash_unpin">Unpin</string>
     <string name="dash_pin_to_chats">Pin to Chats</string>
-    <string name="dash_tasks">Tasks</string>
-    <string name="dash_remove_from_tasks">Remove from Tasks</string>
     <string name="dash_cannot_discard">That message can no longer be discarded.</string>
     <string name="dash_could_not_resend">Could not send again.</string>
     <string name="dash_discard_question">Discard, never sent?</string>

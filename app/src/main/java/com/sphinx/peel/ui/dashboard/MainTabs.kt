@@ -28,21 +28,17 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.runtime.collectAsState
 import com.sphinx.peel.engine.PublicPage
-import com.sphinx.peel.engine.TasksTab
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -97,10 +93,8 @@ data class DeepLink(val chat: String?, val payments: Boolean, val you: Boolean =
     }
 }
 
-/// The tab bar — PeelCore's `MainTabs.swift`: Chats, Payments, You, Search.
-/// Android only: Tasks first, for an account that has opened an employer's Tasks page, and the tab Peel opens on then
-/// (docs/phases/48-tasks-tab.md). With one employer the tab is that page, with the bar kept; with several, a list of them. The page
-/// stays alive behind the other tabs and anything opened over them ([KeptPage]).
+/// The tab bar — PeelCore's `MainTabs.swift`: Chats, Payments, Apps, You.
+/// Android only: Apps in the bar, between Payments and You (docs/phases/48-tasks-tab.md); it replaced the Tasks tab.
 ///
 /// Also where the call this account is on lives — `PeelUI`'s own
 /// `CallStore`, trimmed to what this port needs (no watching calls across
@@ -119,14 +113,7 @@ fun MainTabs(
     initialTab: MainTab? = null, onTabChanged: (MainTab) -> Unit = {},
     onForgotten: () -> Unit,
 ) {
-    // The Tasks tab's pages: the `public_app` rows of strut's `strut/worker`, read again as one is kept or forgotten (and as a
-    // sign-in names one: a row's title is its connection's).
-    val publicVersion by storage.publicAppsVersion.collectAsState()
-    val connectionsVersion by storage.walletConnectionsVersion.collectAsState()
-    val tasksPages = remember(publicVersion, connectionsVersion) { TasksTab.pages(storage.openedApps()) }
-    val hasTasks = tasksPages.isNotEmpty()
-    val tabs = remember { TabState(hasTasks, initialTab) }
-    val tab = MainTab.shown(tabs.tab, hasTasks)
+    var tab by remember { mutableStateOf(initialTab ?: MainTab.CHATS) }
     LaunchedEffect(tab) { onTabChanged(tab) }
     // An open chat replaces the whole tab area, bar included — PeelCore's
     // `ConversationScreen` hides the tab bar the same way; Back returns to
@@ -155,7 +142,7 @@ fun MainTabs(
             is com.sphinx.peel.engine.TribeRoute.OpenChat -> { openRoute = null; openInvite = null; openThreadRoot = null; openChat = route.chat }
             is com.sphinx.peel.engine.TribeRoute.Join -> {
                 openChat = null; openInvite = null; openThreadRoot = null; focusMessage = null; focusThread = null
-                joinPrefill = route.link; tabs.tab = MainTab.CHATS; openRoute = DashboardRoute.JOIN_TRIBE
+                joinPrefill = route.link; tab = MainTab.CHATS; openRoute = DashboardRoute.JOIN_TRIBE
             }
             null -> {}
         }
@@ -166,22 +153,10 @@ fun MainTabs(
     LaunchedEffect(deepLink) {
         val link = deepLink ?: return@LaunchedEffect
         if (link.tribe != null) openTribe(link.tribe)
-        else if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tabs.tab = MainTab.PAYMENTS }
-        else if (link.you) { openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; tabs.tab = MainTab.YOU }
+        else if (link.chat != null) openChat = link.chat else if (link.payments) { openChat = null; tab = MainTab.PAYMENTS }
+        else if (link.you) { openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; tab = MainTab.YOU }
         onDeepLinkHandled()
     }
-
-    // A Tasks page opened by a link (a worker's invite after signup, a `peel://open` link; `PublicPageRouter.tasksPage`): the
-    // Tasks tab in front with that page, not a page over Chats. Whatever was open over the tabs closes; a call goes on, on its banner.
-    val tasksLink = pages.tasksPage
-    LaunchedEffect(tasksLink) {
-        val link = tasksLink ?: return@LaunchedEffect
-        openChat = null; openRoute = null; openInvite = null; openThreadRoot = null; focusMessage = null; focusThread = null
-        CallController.callScreenShown = false
-        tabs.openTasks(link)
-        pages.tasksTaken()
-    }
-    val tasksContent = TasksTab.content(tasksPages, tabs.chosen)
 
     // The call is `CallController`'s (application-scoped, `docs/phases/15-call-background.md`):
     // this only observes it, so rotation or a recreated Activity never ends a call. Whether the
@@ -312,6 +287,20 @@ fun MainTabs(
     val live = Stadeum.live
     val orgPage = pages.orgPage
     val shownPage = orgPage?.takeIf { it.isLive(live) || boxes.shows(it) }
+    // An app shown inside Apps, every app's home (docs/phases/48-tasks-tab.md, "An app opens inside Apps"): any public page (a
+    // worker's Tasks, from its row, an invite or a link), or an org page opened from its Apps row. Titled with the app's own name,
+    // never its host. The tab moves to Apps, so leaving it lands on the list; an open chat stays over the tab and is back on leaving.
+    val publicLink = pages.page
+    val publicPage = remember(publicLink) { publicLink?.let { PublicPage(it) } }
+    val appsPage: com.sphinx.peel.engine.PhonePage? = publicPage ?: shownPage?.takeIf { pages.orgInApps }
+    val appsPageTitle = remember(appsPage) {
+        when {
+            publicLink != null -> storage.openedApps().firstOrNull { it.link.seller == publicLink.seller && it.link.app == publicLink.app }
+                ?.title?.takeIf { it != publicLink.host }
+            else -> shownPage?.title
+        }
+    }
+    LaunchedEffect(appsPage) { if (appsPage != null) tab = MainTab.APPS }
     LaunchedEffect(live.map { it.id }, boxes.links.map { it.url }, orgPage) { pages.workspacesChanged(live, boxes::shows) }
     val talkOpener = remember { com.sphinx.peel.ui.talk.TalkOpener() }
     LaunchedEffect(live.map { it.id }) { talkOpener.workspacesChanged(live) }
@@ -346,29 +335,21 @@ fun MainTabs(
         val route = openRoute
         val inviteCode = openInvite
         // Nothing over the tabs: the bar shows, with the tab in front.
-        val onTabs = !callInFront && chat == null && route == null && inviteCode == null
-        // One area for the call screen, an open chat or page, and the tab in front, so the Tasks page keeps its place in it (first,
-        // under the rest) whatever is open: it is placed only while it is the tab in front ([KeptPage]).
+        val onTabs = !callInFront && chat == null && route == null && inviteCode == null && appsPage == null
+        // One area for the call screen, an open chat or page, and the tab in front.
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            (tasksContent as? TasksTab.Content.Page)?.link?.let { link ->
-                // Not under a page over everything either (an org page here, a public page over the tabs): one page has the Back.
-                val inFront = onTabs && tab == MainTab.TASKS && shownPage == null && pages.page == null
-                KeptPage(shown = inFront) {
-                    val page = remember(link) { PublicPage(link) }
-                    // A page picked off the list has Done (and Back at its first address) to return to the list; the one employer's
-                    // page is the tab itself.
-                    val close = if (TasksTab.picked(tasksPages, tasksContent)) tabs::backToList else null
-                    com.sphinx.peel.ui.apps.OrgPageScreen(page, engine.walletHost, onClose = close, locations = storage, shown = inFront)
-                }
-            }
             if (callInFront && phase != null) {
                 CallScreen(phase, onHide = { CallController.callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)
+            } else if (appsPage != null) {
+                com.sphinx.peel.ui.apps.OrgPageScreen(
+                    appsPage, engine.walletHost, onClose = { if (publicLink != null) pages.close() else pages.closeOrg() },
+                    locations = storage, inApps = true, title = appsPageTitle,
+                )
             } else if (inviteCode != null && chat == null) {
                 com.sphinx.peel.ui.invites.InviteDetailScreen(engine, storage, inviteCode, onClose = { openInvite = null })
             } else if (route != null && chat == null) {
                 val back = { openRoute = null }
                 when (route) {
-                    DashboardRoute.APPS -> AppsScreen(storage, onBack = back, onTalk = { home -> back(); talkToJamie(home) }, onOpenPublic = { pages.open(it, ready = true) })
                     DashboardRoute.THREADS -> ThreadsScreen(engine, storage, onBack = back, onOpenThread = { threadChat, root ->
                         openThreadRoot = root
                         openChat = threadChat
@@ -422,24 +403,22 @@ fun MainTabs(
                 )
             } else {
                 when (tab) {
-                    // The page itself is the kept one above; with several employers and none picked, the list.
-                    MainTab.TASKS -> if (tasksContent is TasksTab.Content.Pick) {
-                        TasksList(tasksContent.pages, onOpen = tabs::pick, onRemove = { storage.forgetPublicApp(it) })
+                    // A workspace's app opened from its row stays inside Apps (iOS `openInApps`).
+                    MainTab.APPS -> androidx.compose.runtime.CompositionLocalProvider(
+                        com.sphinx.peel.ui.apps.LocalPageOpener provides { page: com.sphinx.peel.engine.OrgPageRequest -> pages.openOrg(page, inApps = true) },
+                    ) {
+                        AppsScreen(storage, onBack = null, onTalk = { home -> talkToJamie(home) }, onOpenPublic = { pages.open(it, ready = true) }, modifier = Modifier.fillMaxSize())
                     }
                     MainTab.CHATS -> ChatsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenRoute = { openRoute = it }, onOpenInvite = { openInvite = it }) { openChat = it }
                     MainTab.PAYMENTS -> PaymentsScreen(engine, storage, modifier = Modifier.fillMaxSize(), onOpenChat = { openChat = it })
                     MainTab.YOU -> YouScreen(engine, storage, secretStore, forget)
-                    MainTab.SEARCH -> SearchScreen(engine, storage, modifier = Modifier.fillMaxSize()) { openChat = it }
                 }
             }
         }
-        // Typing in the Tasks page: the keyboard has the bar's room (a task's form needs it).
-        @OptIn(ExperimentalLayoutApi::class)
-        val typing = WindowInsets.isImeVisible
-        if (onTabs && !(tab == MainTab.TASKS && typing)) BottomBar(tab, hasTasks) { tabs.tab = it }
+        if (onTabs) BottomBar(tab) { tab = it }
     }
     // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
-    shownPage?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg, locations = storage) }
+    shownPage?.takeIf { !pages.orgInApps }?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg, locations = storage) }
     // A Talk card's page: a sheet over the call screen (iOS `.sheet(item: $opener.opened)`); the call goes on behind it.
     talkOpener.page?.takeIf { talk.home != null && it.isLive(live) }?.let {
         com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = talkOpener::close, locations = storage)
@@ -462,10 +441,9 @@ private fun CallNoticeBar(notice: CallNotice, onDismiss: () -> Unit) {
     }
 }
 
-/// Chats, Payments and You in one pill (Tasks first while the account has it), Search its own circle beside it —
-/// the shape the iPhone's native search-role tab gets for free.
+/// Chats, Payments, Apps and You in one pill. Search is a button at the top left of Chats, not a tab (iOS `ChatsTab`).
 @Composable
-private fun BottomBar(selected: MainTab, hasTasks: Boolean, onSelect: (MainTab) -> Unit) {
+private fun BottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -475,30 +453,15 @@ private fun BottomBar(selected: MainTab, hasTasks: Boolean, onSelect: (MainTab) 
             Modifier.weight(1f).clip(RoundedCornerShape(28.dp)).background(Theme.colors.fieldFill),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            MainTab.pill(hasTasks).forEach { tab ->
+            MainTab.pill.forEach { tab ->
                 val (icon, label) = when (tab) {
-                    MainTab.TASKS -> Icons.Filled.TaskAlt to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_tasks)
+                    MainTab.APPS -> Icons.Filled.Apps to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_apps)
                     MainTab.CHATS -> Icons.AutoMirrored.Filled.Chat to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_chats)
                     MainTab.PAYMENTS -> Icons.Filled.Bolt to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_payments)
                     MainTab.YOU -> Icons.Filled.Person to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_you)
-                    MainTab.SEARCH -> Icons.Filled.Search to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_search)
                 }
                 TabIcon(icon, label, selected == tab) { onSelect(tab) }
             }
-        }
-        Box(
-            Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(Theme.colors.fieldFill)
-                .clickable { onSelect(MainTab.SEARCH) },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Filled.Search,
-                contentDescription = androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_search),
-                tint = if (selected == MainTab.SEARCH) Theme.colors.accent else Theme.colors.secondaryText,
-            )
         }
     }
 }
@@ -512,5 +475,17 @@ private fun RowScope.TabIcon(icon: ImageVector, label: String, selected: Boolean
     ) {
         Icon(icon, contentDescription = label, tint = tint)
         Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
+    }
+}
+
+/// The bar's tabs, left to right: Chats | Payments | Apps | You. Apps lists the workspace apps and
+/// every public app opened here, an employer's Tasks page too (docs/phases/48-tasks-tab.md). Public: `MainTabs` takes one as the tab to
+/// return to (`MainActivity.PeelApp` remembers it across Voice Mode, docs/phases/55-voice-mode.md).
+enum class MainTab {
+    CHATS, PAYMENTS, APPS, YOU;
+
+    companion object {
+        /// The tabs in the bar's pill, in order.
+        val pill: List<MainTab> = listOf(CHATS, PAYMENTS, APPS, YOU)
     }
 }

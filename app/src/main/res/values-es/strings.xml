@@ -97,11 +97,10 @@
     <string name="box_link">Vincular</string>
 
     <!-- Tabs -->
-    <string name="tab_tasks">Tareas</string>
+    <string name="tab_apps">Apps</string>
     <string name="tab_chats">Chats</string>
     <string name="tab_payments">Pagos</string>
     <string name="tab_you">Tú</string>
-    <string name="tab_search">Buscar</string>
 
     <!-- Chats list -->
     <string name="chats_title">Chats</string>
@@ -120,10 +119,8 @@
     <string name="chats_create_tribe">Crear una tribu</string>
     <string name="chats_add_contact">Agregar contacto</string>
     <string name="chats_invite_someone">Invitar a alguien</string>
-    <string name="chats_apps">Apps</string>
     <string name="chats_no_results">Sin resultados para \"%1$s\"</string>
     <string name="chats_search_hint">Buscar chats</string>
-    <string name="chats_search_detail">Tribus y personas por nombre.</string>
     <string name="chats_clear">Borrar</string>
     <string name="chats_restoring">Restaurando tus chats</string>
     <string name="chats_restoring_detail">Aparecerán aquí a medida que lleguen. Esto puede tardar un poco.</string>

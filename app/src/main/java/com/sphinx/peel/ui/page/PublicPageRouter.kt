@@ -6,7 +6,6 @@ import androidx.compose.runtime.setValue
 import com.sphinx.peel.engine.HivePeer
 import com.sphinx.peel.engine.OrgPageRequest
 import com.sphinx.peel.engine.PublicAppLink
-import com.sphinx.peel.engine.TasksTab
 
 /// The two pages Peel can show over everything, and where a `peel://open?url=…` link goes (iOS `PhoneRouter`: `orgPage`, `publicPage`,
 /// `waitingLink`, `open(peelLink:)`, `openWaitingLink()`, `reset()`, and the lock in `PeelPhoneApp`). iOS's rules, no more:
@@ -22,20 +21,20 @@ import com.sphinx.peel.engine.TasksTab
 /// too whether a worker's invite link named it (`invited`): that page signs the account in with no sheet (`WalletHost.grantInvitePage`,
 /// docs/phases/49-invite-signs-in.md). The mark is held only in memory, with the waiting link, and never logged.
 ///
-/// Android only: an employer's Tasks page (`TasksTab.isTasks`, strut's `strut/worker`) does not open over everything. It goes to
-/// [tasksPage] for `MainTabs`, which shows it in the Tasks tab with the tab bar kept (docs/phases/48-tasks-tab.md). It still replaces
-/// both pages over everything, as any `peel://` link does, so the tab is not left under one.
+/// An employer's Tasks page (strut's `strut/worker`) opens as any public page does; it is a row in the Apps tab
+/// (docs/phases/48-tasks-tab.md), which replaced the Tasks tab. Apps is every app's home, so a public page is shown inside it
+/// (`MainTabs`), as is an org page opened from its Apps row ([orgInApps]); an org page from a chat is full screen over everything.
 class PublicPageRouter(private val opened: (link: PublicAppLink, invited: Boolean) -> Unit = { _, _ -> }) {
     /// The stranger's page on screen, if any (iOS `publicPage`).
     var page by mutableStateOf<PublicAppLink?>(null)
         private set
 
-    /// A Tasks page to show in the Tasks tab, until `MainTabs` takes it ([tasksTaken]).
-    var tasksPage by mutableStateOf<PublicAppLink?>(null)
-        private set
-
     /// An org's page on screen, if any (iOS `orgPage`): a workspace's app, a deliverable, a tapped Hive link.
     var orgPage by mutableStateOf<OrgPageRequest?>(null)
+        private set
+
+    /// Whether [orgPage] was opened from its row in Apps, and is shown inside that tab (iOS `AppsRoute.org`) rather than over everything.
+    var orgInApps by mutableStateOf(false)
         private set
 
     /// A link that arrived while the account was locked, opened once it unlocks.
@@ -69,22 +68,13 @@ class PublicPageRouter(private val opened: (link: PublicAppLink, invited: Boolea
         // Told first: an invite's grant is written before the page is set, so before it loads.
         opened(link, invited)
         orgPage = null
-        if (TasksTab.isTasks(link)) {
-            page = null
-            tasksPage = link
-        } else {
-            page = link
-        }
+        page = link
     }
 
-    /// `MainTabs` has the Tasks page in its tab.
-    fun tasksTaken() {
-        tasksPage = null
-    }
-
-    /// iOS `router.orgPage = request`.
-    fun openOrg(request: OrgPageRequest) {
+    /// iOS `router.orgPage = request`; [inApps]: from its row in Apps (iOS `openInApps`).
+    fun openOrg(request: OrgPageRequest, inApps: Boolean = false) {
         orgPage = request
+        orgInApps = inApps
     }
 
     /// iOS `closeGoneOrgPage` (`.onChange(of: live)` and of the boxes): the org page goes when its workspace is no longer in use,
@@ -102,19 +92,17 @@ class PublicPageRouter(private val opened: (link: PublicAppLink, invited: Boolea
         orgPage = null
     }
 
-    /// The account locked (or failed to open): both pages close (the Tasks tab's goes with the tabs); a waiting link stays for the
+    /// The account locked (or failed to open): both pages close; a waiting link stays for the
     /// next unlock.
     fun locked() {
         orgPage = null
         page = null
-        tasksPage = null
     }
 
     /// The app is back at onboarding (signed out or wiped): no page, no waiting link.
     fun reset() {
         orgPage = null
         page = null
-        tasksPage = null
         waitingLink = null
         waitingInvited = false
     }

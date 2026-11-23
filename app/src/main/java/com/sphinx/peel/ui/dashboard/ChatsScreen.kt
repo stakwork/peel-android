@@ -47,6 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.PathEffect
@@ -83,7 +84,7 @@ import com.sphinx.peel.R
 
 /// Pages the rows above Tribes open. Placeholders for now (`ui/apps`,
 /// `ui/threads`, `ui/mentions`); PeelCore's `ChatsTab.swift` `NavRow`s.
-enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITE, JOIN_TRIBE, CREATE_TRIBE }
+enum class DashboardRoute { THREADS, MENTIONS, ADD_CONTACT, INVITE, JOIN_TRIBE, CREATE_TRIBE }
 
 /// "Chats" (docs/design/iphone.md, screen 1, `ChatsTab.swift`/`ChatList`):
 /// the large title with the connection bolt, then `ChatListBody` for
@@ -91,12 +92,19 @@ enum class DashboardRoute { APPS, THREADS, MENTIONS, ADD_CONTACT, INVITE, JOIN_T
 @Composable
 fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenRoute: (DashboardRoute) -> Unit = {}, onOpenInvite: (String) -> Unit = {}, onOpenChat: (String) -> Unit = {}) {
     val connection by engine.connectionState.collectAsState()
+    // The magnifying glass top left (iOS `ChatsTab`): a field under the title that narrows the list to chats whose name matches.
+    // There is no Search tab; closing the field clears it.
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
 
     Column(modifier.fillMaxSize()) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+            Modifier.fillMaxWidth().padding(start = 8.dp, end = 20.dp, top = 16.dp, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            androidx.compose.material3.IconButton(onClick = { searching = true }) {
+                Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.chats_search_hint), tint = Theme.colors.accent)
+            }
             Text(
                 stringResource(R.string.chats_title),
                 style = MaterialTheme.typography.headlineMedium,
@@ -106,16 +114,20 @@ fun ChatsScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier,
             )
             ConnectionBolt(connected = connection == ConnectionState.Connected)
         }
+        if (searching) {
+            SearchField(
+                query, onQueryChange = { query = it }, onClose = { searching = false; query = "" },
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+            )
+        }
         com.sphinx.peel.ui.diagnostics.DiagnosticsNotice(storage)
-        ChatListBody(engine, storage, query = "", modifier = Modifier.weight(1f), onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite, onOpenChat = onOpenChat)
+        ChatListBody(engine, storage, query = query, modifier = Modifier.weight(1f), onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite, onOpenChat = onOpenChat)
     }
 }
 
 /// The actual list: Unread (when there is any), then Tribes, then Direct
-/// messages, each ending in its own actions — shared by `ChatsScreen`
-/// (`query` always blank) and `SearchScreen` (PeelCore's own `ChatList`,
-/// reused the same way by both `ChatsTab` and the iPhone's `SearchTab`).
-/// Owns the data loading so either caller can be mounted on its own.
+/// messages, each ending in its own actions, narrowed to chats whose name matches [query] while Chats' search field is up
+/// (PeelCore's own `ChatList`, filtered by `searchQuery`). Owns its data loading.
 @Composable
 private fun ChatListBody(
     engine: Engine,
@@ -147,12 +159,6 @@ private fun ChatListBody(
     var recentView by remember { mutableStateOf(engine.chatsRecentView() ?: layout.combinedView) }
     val restoreProgress by engine.restoreProgress.collectAsState()
     val liveCalls = rememberLiveCallCounts(engine, storage)
-    // A stranger's public app opened here shows Apps too: read again as one is kept or forgotten. Not an employer's Tasks page, which
-    // the Tasks tab holds and Apps does not list (docs/phases/48-tasks-tab.md): with only those, no Apps row.
-    val publicApps by storage.publicAppsVersion.collectAsState()
-    var openedApps by remember { mutableStateOf(false) }
-    LaunchedEffect(publicApps) { openedApps = withContext(Dispatchers.Default) { com.sphinx.peel.engine.TasksTab.others(storage.openedApps()).isNotEmpty() } }
-    val showsApps = Stadeum.showsApps(openedApps)
     // The apps under the Apps row, A–Z (the Mac's sidebar): the pinned ones while the fold is open, or, searching, every app that
     // matches. Read by `Stadeum.readApps`, shared with Apps; only the workspaces in use.
     val openPage = com.sphinx.peel.ui.apps.LocalPageOpener.current
@@ -246,7 +252,7 @@ private fun ChatListBody(
             }
         } else if (conversations.isEmpty() && !searching) {
             // Only for a kept public app here: a workspace's Apps row stays where iOS has it, in the list.
-            EmptyChats(restoring = restoreProgress.restoring, showsApps = openedApps, pendingInvites = pendingInvites, onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite)
+            EmptyChats(restoring = restoreProgress.restoring, pendingInvites = pendingInvites, onOpenRoute = onOpenRoute, onOpenInvite = onOpenInvite)
         } else if (noMatches) {
             NoSearchResults(query)
         } else {
@@ -258,10 +264,10 @@ private fun ChatListBody(
                 // appears as soon as You › Stadeum pairs), or (Android) with
                 // a public app opened here.
                 if (!searching) {
-                    if (showsApps) item(key = "apps-row") {
-                        AppsRow(fold = if (hasPins) layout.appsOpen else null, onToggleFold = { changeLayout(layout.copy(appsOpen = !layout.appsOpen)) }) {
-                            onOpenRoute(DashboardRoute.APPS)
-                        }
+                    // Apps has its own tab; this row only folds the pinned apps under it.
+                    if (hasPins) item(key = "apps-row") {
+                        val toggle = { changeLayout(layout.copy(appsOpen = !layout.appsOpen)) }
+                        AppsRow(fold = layout.appsOpen, onToggleFold = toggle, onClick = toggle)
                     }
                     items(underApps, key = { "pinned-${it.id}" }) { app -> pinnedRow(app) }
                     item { NavRow(Icons.Filled.ChatBubbleOutline, stringResource(R.string.chats_threads), unreadThreads) { onOpenRoute(DashboardRoute.THREADS) } }
@@ -404,39 +410,11 @@ private fun NoSearchResults(query: String) {
     }
 }
 
-/// "Search" (docs/design/iphone.md's own tab bar: Chats, Payments, You,
-/// "plus the system's separate search tab") — a text field filtering
-/// `ChatListBody`, the same list the Chats tab shows, by name
-/// (`ChatSections`'s own `matches`/`searching`), PeelCore's own iPhone
-/// `SearchTab`: `.searchable` over the same `ChatList` `ChatsTab` uses.
-/// Not message content — PeelCore's own content search is a different
-/// feature entirely (Mac's ⌘F find-within-a-chat, `Storage+Search.swift`'s
-/// FTS5 index), and "results across messages" for *this* tab is still
-/// explicitly listed under `docs/design/iphone.md`'s own "To design", not
-/// built even on iOS yet.
+/// Chats' search field: focused as it opens; ✕ closes it (and clears it).
 @Composable
-fun SearchScreen(engine: Engine, storage: Storage, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
-    var query by remember { mutableStateOf("") }
-
-    Column(modifier.fillMaxSize()) {
-        Text(
-            stringResource(R.string.tab_search),
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = Theme.colors.text,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-        )
-        SearchField(query, onQueryChange = { query = it }, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp))
-        if (query.isBlank()) {
-            EmptySearch()
-        } else {
-            ChatListBody(engine, storage, query = query, modifier = Modifier.weight(1f), onOpenChat = onOpenChat)
-        }
-    }
-}
-
-@Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun SearchField(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
     Row(
         modifier
             .fillMaxWidth()
@@ -458,42 +436,22 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, modifier
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = Theme.colors.text),
                 cursorBrush = SolidColor(Theme.colors.accent),
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
         }
-        if (query.isNotEmpty()) {
-            Spacer(Modifier.width(8.dp))
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = stringResource(R.string.chats_clear),
-                tint = Theme.colors.secondaryText,
-                modifier = Modifier.size(18.dp).clickable { onQueryChange("") },
-            )
-        }
-    }
-}
-
-/// "Search chats" / stringResource(R.string.chats_search_detail) for a blank query —
-/// PeelCore's own `ContentUnavailableView("Search chats", ...)`.
-@Composable
-private fun EmptySearch() {
-    Column(
-        Modifier.fillMaxSize().padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = Theme.colors.secondaryText, modifier = Modifier.size(40.dp))
-        Spacer(Modifier.height(12.dp))
-        Text(stringResource(R.string.chats_search_hint), style = MaterialTheme.typography.titleMedium, color = Theme.colors.text)
-        Spacer(Modifier.height(4.dp))
-        Text(stringResource(R.string.chats_search_detail), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = stringResource(R.string.chats_clear),
+            tint = Theme.colors.secondaryText,
+            modifier = Modifier.size(18.dp).clickable(onClick = onClose),
+        )
     }
 }
 
 @Composable
 private fun EmptyChats(
     restoring: Boolean,
-    showsApps: Boolean,
     pendingInvites: List<InviteRecord>,
     onOpenRoute: (DashboardRoute) -> Unit,
     onOpenInvite: (String) -> Unit,
@@ -524,11 +482,6 @@ private fun EmptyChats(
             for (invite in pendingInvites) PendingInviteRow(invite) { onOpenInvite(invite.code) }
             ActionRow(stringResource(R.string.chats_add_contact)) { onOpenRoute(DashboardRoute.ADD_CONTACT) }
             ActionRow(stringResource(R.string.chats_invite_someone)) { onOpenRoute(DashboardRoute.INVITE) }
-        }
-        // A new worker has no chats yet but has the Stadeum's worker app: Apps must not hide behind a chat either.
-        if (showsApps) {
-            Spacer(Modifier.height(16.dp))
-            NavRow(Icons.Filled.Apps, stringResource(R.string.chats_apps), 0) { onOpenRoute(DashboardRoute.APPS) }
         }
     }
 }

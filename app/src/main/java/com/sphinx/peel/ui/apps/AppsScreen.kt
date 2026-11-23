@@ -64,7 +64,7 @@ import com.sphinx.peel.engine.OpenedApp
 import com.sphinx.peel.engine.PublicAppLink
 import com.sphinx.peel.engine.Stadeum
 import com.sphinx.peel.engine.TalkHome
-import com.sphinx.peel.engine.TasksTab
+import com.sphinx.peel.engine.AppsListing
 import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.storage.Storage
 import com.sphinx.peel.ui.dashboard.SidebarLayoutState
@@ -80,13 +80,13 @@ import com.sphinx.peel.ui.toast.ToastType
 /// (New conversation, History). Not ported: the Mac-only own-strut apps.
 /// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
-/// Android only: the strangers' public apps opened here ("Apps you opened", `Storage.openedApps`, last opened first), so a worker
-/// opens a Stadeum's worker app again with one tap (docs/phases/41-worker-onboarding.md); long-press removes one, and Disconnect in
-/// You › Connected apps removes an origin's. Every one but an employer's Tasks page, which is the Tasks tab's
-/// (`TasksTab.others`, docs/phases/48-tasks-tab.md).
+/// Android only: this is the Apps tab (docs/phases/48-tasks-tab.md). Its one list is the workspace apps, then every public app opened
+/// here (`Storage.openedApps`, an employer's Tasks page too, last opened first; `AppsListing`), so a worker opens a Stadeum's worker
+/// app again with one tap (docs/phases/41-worker-onboarding.md); long-press removes one, and Disconnect in You › Connected apps
+/// removes an origin's. An opened app's source is its host. [onBack] null: in the tab, with no Back.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit, onOpenPublic: (PublicAppLink) -> Unit, modifier: Modifier = Modifier) {
+fun AppsScreen(storage: Storage, onBack: (() -> Unit)?, onTalk: (TalkHome) -> Unit, onOpenPublic: (PublicAppLink) -> Unit, modifier: Modifier = Modifier) {
     val live = Stadeum.live
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -100,10 +100,9 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     val layout = layoutState.layout
     val openPage = LocalPageOpener.current
     val publicVersion by storage.publicAppsVersion.collectAsState()
-    // The connection titles move too (a first sign-in names the app). An employer's Tasks page is not listed: the Tasks tab holds
-    // those (docs/phases/48-tasks-tab.md).
+    // The connection titles move too (a first sign-in names the app).
     val connectionsVersion by storage.walletConnectionsVersion.collectAsState()
-    val opened = remember(publicVersion, connectionsVersion) { TasksTab.others(storage.openedApps()) }
+    val opened = remember(publicVersion, connectionsVersion) { storage.openedApps() }
     var refresh by remember { mutableStateOf(0) }
     var historyHome by remember { mutableStateOf<TalkHome?>(null) }
     val context2 = LocalContext.current
@@ -112,7 +111,7 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     // Read again on opening, and when the workspaces (or Refresh) change.
     LaunchedEffect(live.map { it.id }, refresh) { Stadeum.readApps() }
 
-    BackHandler(onBack = onBack)
+    if (onBack != null) BackHandler(onBack = onBack)
     // Conversations: a screen over the list (iOS pushes `TalkHistoryScreen`); Back returns to the list.
     historyHome?.let { home ->
         com.sphinx.peel.ui.talk.TalkHistoryScreen(home, history, onBack = { historyHome = null }, onTalk = onTalk, modifier = modifier)
@@ -123,20 +122,24 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
     val apps = AppsOpenDecision.visible(read, liveIds)
     val unread = AppsOpenDecision.unreadNames(unreadIds, live)
     val several = apps.mapNotNull { it.peer }.toSet().size > 1
-    val sources = WorkspaceApp.sources(apps)
+    val sources = AppsListing.sources(apps, opened)
     val shownSource = if (sources.size > 1 && source in sources) source else null
-    val shown = WorkspaceApp.byTitle(WorkspaceApp.filter(apps, query, shownSource))
+    val rows = AppsListing.merged(apps, opened, query, shownSource)
+    val shown = rows.mapNotNull { (it as? AppsListing.Row.Workspace)?.app }
+    val openedShown = rows.mapNotNull { (it as? AppsListing.Row.Opened)?.app }
     // Not while searching: the search is of the apps.
     val homes = if (query.isEmpty()) Stadeum.talkHomes else emptyList()
-    // Not with a workspace's source chosen: they are no workspace's.
-    val openedShown = if (shownSource == null) opened.filter { it.matches(query) } else emptyList()
 
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
+            if (onBack != null) {
+                Box(Modifier.size(40.dp).clip(CircleShape).background(Theme.colors.fieldFill), contentAlignment = Alignment.Center) {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.misc_back), tint = Theme.colors.text) }
+                }
+                Spacer(Modifier.width(12.dp))
+            } else {
+                Spacer(Modifier.width(8.dp))
             }
-            Spacer(Modifier.width(12.dp))
             Text(stringResource(R.string.misc_apps_title), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
             if (sources.size > 1) {
                 var open by remember { mutableStateOf(false) }
@@ -174,13 +177,6 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
                     }
                     item { Spacer(Modifier.size(12.dp)) }
                 }
-                if (openedShown.isNotEmpty()) {
-                    item { Text(stringResource(R.string.misc_apps_opened_header), Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
-                    items(openedShown, key = { "opened-${it.link.seller} ${it.link.app ?: ""}" }) { app ->
-                        OpenedAppRow(app, onOpen = { onOpenPublic(app.link) }, onRemove = { storage.forgetPublicApp(app.link) })
-                    }
-                    item { Spacer(Modifier.size(12.dp)) }
-                }
                 items(shown, key = { it.id }) { app ->
                     AppRow(app, several, pinned = layout.isPinned(app.id), onTogglePin = {
                         layoutState.change(layout.withPinned(app.id, !layout.isPinned(app.id)))
@@ -191,6 +187,9 @@ fun AppsScreen(storage: Storage, onBack: () -> Unit, onTalk: (TalkHome) -> Unit,
                         copy(context, link)
                         toast.show(context.str(R.string.misc_apps_link_copied), ToastType.Success)
                     })
+                }
+                items(openedShown, key = { "opened-${it.link.seller} ${it.link.app ?: ""}" }) { app ->
+                    OpenedAppRow(app, onOpen = { onOpenPublic(app.link) }, onRemove = { storage.forgetPublicApp(app.link) })
                 }
                 if (unread.isNotEmpty() && apps.isNotEmpty() && !reading) {
                     item { Note(AppsOpenDecision.unreadNote(unread)) }

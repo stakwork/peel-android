@@ -389,8 +389,7 @@ object Stadeum {
     /// The Dashboard's Apps row shows only with something to show (iOS
     /// `ChatsTab`: `!stadeum.live.isEmpty || talk.developmentHome != nil`). Android also shows it with a stranger's public app
     /// opened here ([openedApps]: `Storage.openedApps` is not empty; docs/phases/41-worker-onboarding.md): a worker who joined a
-    /// Stadeum through its invite link has no workspace, and Apps is where that worker app opens again. An employer's Tasks page
-    /// does not count: the Tasks tab holds it (`TasksTab.others`, docs/phases/48-tasks-tab.md).
+    /// Stadeum through its invite link has no workspace, and Apps is where that worker app opens again.
     fun showsApps(openedApps: Boolean): Boolean = showsApps(live, developmentHome, openedApps)
 
     /// One Talk to Jamie row per live workspace, then the development home.

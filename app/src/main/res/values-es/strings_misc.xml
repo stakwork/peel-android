@@ -132,7 +132,6 @@
     <string name="misc_apps_all">Todas</string>
     <string name="misc_apps_search">Buscar apps</string>
     <string name="misc_apps_talk_header">Habla con Jamie</string>
-    <string name="misc_apps_opened_header">Apps que abriste</string>
     <string name="misc_apps_link_copied">Enlace copiado</string>
     <string name="misc_apps_no_results">Sin resultados</string>
     <string name="misc_apps_nothing_matches">Nada coincide con “%1$s”.</string>
@@ -158,6 +157,7 @@
     <string name="misc_apps_not_now">Ahora no</string>
     <string name="misc_apps_reload">Recargar</string>
     <string name="misc_close">Cerrar</string>
+    <string name="misc_more">Más</string>
     <string name="misc_copy">Copiar</string>
     <string name="misc_copied">Copiado</string>
     <string name="misc_delete">Eliminar</string>
