@@ -55,7 +55,7 @@ data class WorkspaceApp(
 
     companion object {
         const val YOURS = "Yours"
-        /// TODO: confirm against `HiveClient.production` (Hive.swift).
+        /// Matches Peel iOS `HiveClient.production` (Sources/PeelCore/Hive.swift).
         const val HIVE_PRODUCTION = "https://hive.sphinx.chat"
         private const val MAX_TITLE = 64
         private const val MAX_ABOUT = 400
