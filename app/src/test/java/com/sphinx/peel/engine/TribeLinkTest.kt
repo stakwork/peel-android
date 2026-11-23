@@ -20,6 +20,24 @@ class TribeLinkTest {
     }
 
     @Test
+    fun `a peel tribe link names a pubkey and a host, as the old one did`() {
+        val target = TribeLink.parse("peel://tribe?pubkey=${key.uppercase()}&host=Tribes.Sphinx.Chat")
+        assertEquals(TribeLink.Target(key, null, "tribes.sphinx.chat"), target)
+        assertEquals(target, TribeLink.parse("sphinx.chat://?action=tribeV2&pubkey=$key&host=tribes.sphinx.chat"))
+        assertEquals(target, TribeLink.parse(ChatDetails.tribeLink(key, "tribes.sphinx.chat")!!))
+    }
+
+    @Test
+    fun `a malformed peel tribe link is refused`() {
+        val h = "host=tribes.sphinx.chat"
+        for (bad in listOf(
+            "peel://tribe?pubkey=$key&$h&extra=1", "peel://tribe/x?pubkey=$key&$h", "peel://tribe?pubkey=$key&$h#f",
+            "peel://tribe?pubkey=zz&$h", "peel://tribe?pubkey=$key&host=evil.com/path", "peel://tribe?pubkey=$key",
+            "peel://other?pubkey=$key&$h", "peel://user@tribe?pubkey=$key&$h",
+        )) refused(bad)
+    }
+
+    @Test
     fun `an older tribe link names a uuid`() {
         assertEquals(TribeLink.Target(null, uuid, "tribes.sphinx.chat"), TribeLink.parse("sphinx.chat://?action=tribe&uuid=$uuid&host=tribes.sphinx.chat"))
         assertEquals(uuid, TribeLink.parse("sphinx.chat://?action=tribe&uuid=$uuid").id)

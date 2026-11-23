@@ -701,10 +701,6 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
 /// connection leaves with no sheet ([PhoneWalletSheets.toast]) over it. A tap in the page counts for the wallet for
 /// [StrutWallet.GESTURE_WINDOW_MS] and for a link out for [OrgNavigation.TAP_WINDOW_MS]. [sheets] is the person's side of the wallet, made here
 /// unless a test brings its own (closing the page, which a lock does, answers whatever it waits on as a no).
-///
-/// The Tasks tab (docs/phases/48-tasks-tab.md) holds a page too: [onClose] null is a page that is a tab (no Done, and Back at its first
-/// address is not the page's), and [shown] false is that page kept alive behind another tab (`KeptPage` does not place it): it is
-/// treated as a page not showing (paused, no prompt, no Back) and gives up the keyboard.
 @Composable
 fun OrgPageScreen(
     page: PhonePage, wallet: WalletHost, onClose: (() -> Unit)?, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null,

@@ -6,7 +6,7 @@ core before trusting any of it.
 
 ## Built
 - **Join** (`TribeLink`, `Tribes.kt` `lookupTribe`/`joinTribe`, `ui/tribes/JoinTribeScreen`): "Join a tribe" on the chat
-  list. Input is parsed by the pure `TribeLink.parse`: a `sphinx.chat://?action=tribeV2&pubkey=…&host=…` link, the older
+  list. Input is parsed by the pure `TribeLink.parse`: a `peel://tribe?pubkey=…&host=…` link (what Peel writes; read strictly), the official apps' `sphinx.chat://?action=tribeV2&pubkey=…&host=…` link, the older
   `action=tribe&uuid=…`, `pubkey@host`, `pubkey/host`, `host/pubkey`, a bare pubkey, a bare uuid. A named host must be the
   account's own tribes host (`TribeLink.hostFor`) — a link never chooses where Peel connects. "Look up" reads the registry
   (`TribeInfo.lookup`, by pubkey or uuid) and shows the price; "Join" pays `ChatDetails.joinPrice` (1 sat minimum) through

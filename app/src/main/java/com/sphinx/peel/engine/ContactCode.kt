@@ -36,6 +36,11 @@ sealed class ContactCode {
             val trimmed = text.trim()
             if (trimmed.isEmpty() || trimmed.length > InviteLink.MAX_LENGTH) throw problem("notACode")
             if (trimmed.lowercase().startsWith("${InviteLink.SCHEME}://")) return link(trimmed, reader)
+            // Peel's own tribe link is a tribe, joined elsewhere, as the sphinx.chat one is; any other peel:// link is no code.
+            if (trimmed.lowercase().startsWith("peel://")) {
+                runCatching { TribeLink.parse(trimmed) }.getOrNull() ?: throw problem("notACode")
+                throw problem("tribe")
+            }
             contactInfo(trimmed)?.let { return Contact(it) }
             if (isPubkey(trimmed)) throw problem("keyWithoutRoute")
             // An invite without its prefix, as the core also reads them.
