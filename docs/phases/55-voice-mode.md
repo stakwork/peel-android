@@ -107,6 +107,49 @@ once — `voice-mode-fixes` branch).
   on Android's `SpeechRecognizer` without a continuously-running, custom `AudioRecord`-based recognizer bypassing the
   system API entirely; that is a materially bigger, separate piece of work, not an extension of this one.
 
+## Continuous listening and auto-send (`voice-mode-continuous-listening` branch)
+
+The sixth gap from the review, built on a separate branch off `voice-mode-screen` so it can be tested and released in its
+own second phase rather than hold up the first five: a draft that survives a pause, and an optional auto-send timer, the
+way iOS's continuously-running engine tap has.
+
+- 2026-11-21 — `VoiceAutoSend` + `VoiceModePrefs.autoSend`/`autoSendSeconds` (`engine/VoiceMode.kt`), ported from peel's
+  `VoiceDefaults`/`VoiceSettings` (just the auto-send fields -- no wake listener, no "other audio" session, and TTS rate
+  is separate from this). Off by default, 5 s when turned on, clamped to 2-15 s on every read (a stale or corrupt stored
+  value is still bounded); the versioned keys (`.v2`) mean an old, differently-ranged value under the old key name is
+  never silently carried over. A toggle and a -/+ seconds stepper added to You > Account, next to the other Voice Mode
+  settings, shown only while the toggle is on. JVM-tested (`VoiceModeTest` gained 4 cases).
+  **Android's recognizer has nothing like this built in**: `ACTION_RECOGNIZE_SPEECH` ends itself after its own short,
+  fixed, vendor-controlled silence detection (not the 2-15 s this setting controls), so until the rest of this item, the
+  setting had nothing to turn on or off -- see "What auto-send actually needed" below.
+- 2026-11-21 — Continuous listening, built on top of the one-shot `Recognizer` (`ui/voice/VoiceModeScreen.kt`):
+  `EXTRA_PARTIAL_RESULTS` turned on, so a growing live transcript now feeds `VoiceEvent.Transcript` as the user talks,
+  not only once a one-shot session ends. When a session ends on its own with no command detected, it is no longer
+  treated as "done, send it" -- the confirmed text becomes the base for an immediately-restarted session, chaining
+  one-shot captures into what reads, to the person, as one continuous dictation (`startListening(base: String)`, the
+  base captured once per link so a session's own partials never double against themselves). A manual mic tap while a
+  session is live now means "send what I have" (`stopRequested`), not "stop and lose it." The auto-send `LaunchedEffect`
+  is keyed on `phase`/the draft/`isMuted`, so Compose cancels and restarts its delay on every new partial -- the same
+  restart-on-every-partial rule peel's own controller timer follows, for free from Compose's own semantics. "Peel send"
+  (an explicit command) still sends immediately regardless of the timer, same as before and as on iOS, where it is
+  primary and auto-send is secondary.
+  **What auto-send actually needed, spelled out**: the setting alone could not do anything on a one-shot recognizer --
+  this chaining is what makes "after N seconds of silence" a real, configurable wait instead of whatever ~1-2 s the
+  vendor's recognizer happens to use. That's why this was its own branch rather than a small addition to the five items
+  already on `voice-mode-screen`.
+  **Mute is unchanged, deliberately**: it still behaves exactly as commit `ed1d666` shipped it on `voice-mode-screen` --
+  saying "peel mute" (or tapping the Mute button) stops the chain outright (`chainContinues` checks `!isMuted`), and the
+  only way back is the Unmute button, not voice. iOS keeps a quiet recognizer loop running while muted, listening only
+  for "peel unmute"/"peel end voice mode"; replicating that would mean restarting listening with no tap at all (blocked
+  today specifically because the mic is muted) whenever TTS finishes speaking while still muted -- a second, separate
+  piece of mute-fidelity work, not something this item's scope (continuous dictation) needed to solve to be real.
+  **Not run on a device**: everything above changes the actual audio-capture lifecycle (when a session starts, ends,
+  and restarts, and how quickly), which is exactly the part of this whole branch no JVM/Robolectric test can exercise.
+  The risk this carries that the first five items didn't: a chained restart has a real seam -- speech landing exactly
+  across the boundary between one session ending and the next one's `recognizer.start()` actually being ready to
+  capture can be lost, the same few hundred milliseconds of gap `EchoFilter`'s own tail window exists to guard the other
+  side of. Build/lint/the full JVM suite passing is necessary here, not sufficient, more than anywhere else in this doc.
+
 ## What the reply actually is (`voice-mode-fixes` branch)
 
 Peel's iOS side made a pass fixing several things across the modes once it actually ran (commit `dfa01f4`, "make every
