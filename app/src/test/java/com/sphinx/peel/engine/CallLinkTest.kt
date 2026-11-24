@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -58,9 +59,68 @@ class CallLinkTest {
     }
 
     @Test
-    fun `credentials or a fragment in the link are refused`() {
+    fun `credentials in the link are refused`() {
         assertNull(CallLink.parse("https://user:pass@$server/rooms/sphinx.call.abc", server))
-        assertNull(CallLink.parse("https://$server/rooms/sphinx.call.abc#frag", server))
+    }
+
+    // The call's key after `#` (docs/phases/56-box-group-calls.md; stadeum plans/group-calls.md §2)
+
+    private val key = "q8Zp3v+Jx/2mWcLrT0aYb1nHsEuKfD6gVoQ4tRzN5iE="
+
+    @Test
+    fun `a fragment is the call's key, kept on the link and written back after the query`() {
+        val link = CallLink.parse("https://$server/rooms/sphinx.call.abc?startAudioOnly=true#$key", server)!!
+        assertEquals(key, link.encryptionKey)
+        assertTrue(link.isEncrypted)
+        assertTrue(link.audioOnly)
+        assertEquals("https://$server/rooms/sphinx.call.abc?startAudioOnly=true#$key", link.url)
+        assertNull(CallLink.parse("https://$server/rooms/sphinx.call.abc", server)!!.encryptionKey)
+    }
+
+    @Test
+    fun `a percent-encoded key is read as meet writes one, and an empty fragment is no key`() {
+        val escaped = key.replace("+", "%2B").replace("/", "%2F").replace("=", "%3D")
+        assertEquals(key, CallLink.parse("https://$server/rooms/sphinx.call.abc#$escaped", server)!!.encryptionKey)
+        val empty = CallLink.parse("https://$server/rooms/sphinx.call.abc#", server)!!
+        assertNull(empty.encryptionKey)
+        assertFalse(empty.isEncrypted)
+    }
+
+    @Test
+    fun `a fragment that is not a key refuses the link`() {
+        assertNull(CallLink.parse("https://$server/rooms/sphinx.call.abc#has%20space", server))
+        assertNull(CallLink.parse("https://$server/rooms/sphinx.call.abc#a%22b", server))
+        assertNull(CallLink.parse("https://$server/rooms/sphinx.call.abc#" + "a".repeat(CallLink.MAX_KEY + 1), server))
+        assertNull(CallLink.parse("https://$server/rooms/sphinx.call.abc#%zz", server))
+    }
+
+    @Test
+    fun `a new encrypted call carries its key through the message`() {
+        val link = CallLink.new(server, audioOnly = false, encryptionKey = key)
+        assertTrue(link.url.endsWith("#$key"))
+        assertEquals(link, CallLink.parse(link.url, server))
+        assertEquals(link, CallLink.inMessage(link.message, isCallType = true, server = server))
+        // Still JSON the other apps read: the link is the `link` field, key and all.
+        assertEquals(link.url, CallLink.linkText(link.message))
+    }
+
+    @Test
+    fun `the key is never in a link's description`() {
+        val link = CallLink.new(server, audioOnly = true, encryptionKey = key)
+        assertFalse(link.toString().contains(key))
+        assertTrue(link.toString().contains("encrypted"))
+    }
+
+    @Test
+    fun `a key that is not one is refused when making a call`() {
+        assertThrows(IllegalArgumentException::class.java) { CallLink.new(server, audioOnly = false, encryptionKey = "has space") }
+        assertThrows(IllegalArgumentException::class.java) { CallLink.new(server, audioOnly = false, encryptionKey = "") }
+    }
+
+    @Test
+    fun `Hive's call links still refuse a fragment`() {
+        assertNull(CallLink.hive("https://$server/rooms/swarm1.sphinx.chat-.1700000000#$key", server))
+        assertNotNull(CallLink.hive("https://$server/rooms/swarm1.sphinx.chat-.1700000000", server))
     }
 
     @Test

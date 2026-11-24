@@ -23,6 +23,8 @@
     <string name="conv_start_call">Iniciar una llamada</string>
     <string name="conv_start_audio_call">Iniciar una llamada de audio</string>
     <string name="conv_start_video_call">Iniciar una videollamada</string>
+    <string name="conv_call_record_canvas">Grabar en el lienzo</string>
+    <string name="conv_call_bringing_jamie">Llevando a Jamie a la llamada…</string>
     <string name="conv_pinned">Fijado: %1$s</string>
     <string name="conv_message_word">mensaje</string>
     <string name="conv_unpin">Desfijar</string>

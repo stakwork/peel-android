@@ -54,7 +54,12 @@ class TalkSession(
 ) {
     private val identity = ticket.identity
     private val agent = ticket.agent
-    private val room: Room = LiveKit.create(appContext, options(ticket.key))
+    // WebRTC's native library first: the key provider is native, and `create` loads the library only once its options are built,
+    // so the first call in a fresh process threw UnsatisfiedLinkError here (found on an emulator, docs/phases/56-box-group-calls.md).
+    private val room: Room = run {
+        LiveKit.init(appContext)
+        LiveKit.create(appContext, options(ticket.key))
+    }
 
     var phase by mutableStateOf<TalkPhase>(TalkPhase.Connecting)
         private set

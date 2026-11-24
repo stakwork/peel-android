@@ -32,6 +32,8 @@
     <string name="conv_start_call">Start a call</string>
     <string name="conv_start_audio_call">Start an audio call</string>
     <string name="conv_start_video_call">Start a video call</string>
+    <string name="conv_call_record_canvas">Record on the canvas</string>
+    <string name="conv_call_bringing_jamie">Bringing Jamie into the call…</string>
     <string name="conv_pinned">Pinned: %1$s</string>
     <string name="conv_message_word">message</string>
     <string name="conv_unpin">Unpin</string>

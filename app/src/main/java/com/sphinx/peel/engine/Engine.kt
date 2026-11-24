@@ -465,11 +465,20 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// all post under the plain account alias, tribe or not), just the same
     /// "a blank name joins as 'Peel user', not the tribes registry's own
     /// 'Unknown'" fallback PeelCore's own version keeps regardless.
-    suspend fun callTicket(link: CallLink): CallTicket {
+    ///
+    /// [fromBox] asks the linked boxes for the person's own ticket into an encrypted call one of their Jamies is in
+    /// (`BoxCalls.ticket`, docs/phases/56-box-group-calls.md), so what they ask Jamie runs as them; none in it, or a ticket that
+    /// is not for the call server's LiveKit, and the call server's ticket is asked for as before.
+    suspend fun callTicket(link: CallLink, fromBox: (suspend (name: String) -> BoxTicket?)? = null): CallTicket {
         val alias = storage.value(Setting.ALIAS)?.trim()?.takeIf { it.isNotEmpty() } ?: "Peel user"
         val photo = storage.value(Setting.PHOTO_URL)?.takeIf { it.startsWith("https://") }
         // Either way, so a device of this account that joins later can take the call over.
-        return callConnection(link).ticket(link, alias, photo).copy(handoff = CallHandoff(seed))
+        val handoff = CallHandoff(seed)
+        if (link.isEncrypted && fromBox != null) {
+            val own = fromBox(alias)?.let { runCatching { it.callTicket(link.server, BoxCalls.ticketName(alias)) }.getOrNull() }
+            if (own != null) return own.copy(handoff = handoff)
+        }
+        return callConnection(link).ticket(link, alias, photo).copy(handoff = handoff)
     }
 
     /// The publish half of `run`: whatever a result's `subscriptionTopics`,
@@ -1008,10 +1017,14 @@ class Engine(mnemonic: CharArray, val storage: Storage) {
     /// link is only ever handed off externally (an `Intent.ACTION_VIEW`),
     /// same as `callServer()`'s own doc comment implies by returning a
     /// plain string, not a connection.
-    suspend fun startCall(chat: String, isTribe: Boolean, audioOnly: Boolean): MessageRow {
+    ///
+    /// [made] is a link made already (`CallLink.new`): an encrypted call a box's Jamie was asked into first
+    /// (docs/phases/56-box-group-calls.md). It must be on this account's call server.
+    suspend fun startCall(chat: String, isTribe: Boolean, audioOnly: Boolean, made: CallLink? = null): MessageRow {
         check(transport != null) { "Not connected." }
         val server = callServer() ?: error("No call server is configured for this account.")
-        val link = CallLink.new(server, audioOnly)
+        require(made == null || made.server == server) { "The call is on another call server." }
+        val link = made ?: CallLink.new(server, audioOnly)
         val amountMsat = if (isTribe) MESSAGE_FLOOR_MSAT else 0L
         val body = JSONObject().apply { put("content", link.message) }.toString()
         val (myAlias, myPhoto) = sentIdentity(chat, isTribe)

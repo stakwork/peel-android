@@ -138,6 +138,8 @@ class CallServer(val host: String) {
     /// `GET /api/connection-details` with every value percent-encoded to
     /// unreserved characters, as the official apps' `urlEncode` does, so a
     /// `+` arrives as `+` and never as a space.
+    /// Never the call's encryption key ([CallLink.encryptionKey]): it stays on
+    /// the people's devices, and the call server would hear the call with it.
     private fun ticketUrl(link: CallLink, participantName: String, photoUrl: String?): String? {
         val (scheme, callHost, port) = CallLink.baseURL(host) ?: return null
         val authority = if (port == CallLink.defaultPort(scheme)) callHost else "$callHost:$port"
@@ -148,61 +150,15 @@ class CallServer(val host: String) {
         return "$scheme://$authority/api/connection-details?${items.joinToString("&")}"
     }
 
-    /// The LiveKit media servers each call server may name besides itself,
-    /// on port 443, by exact host, never a suffix (`*.livekit.cloud` would
-    /// admit any LiveKit tenant) — PeelCore's own `mediaHosts`. The official
-    /// apps' call server names `livekit.sphinx.chat`.
-    private val mediaHosts: Map<String, List<String>> = mapOf("chat.sphinx.chat" to listOf("livekit.sphinx.chat"))
-
     /// The ticket in a reply, checked: the media server must be `wss://`
     /// (or `https://`, read as it) on the call server's own host or one
     /// recorded for it in [mediaHosts] (`ws://` only when the call server is
     /// this device), and the token must be for `room` and not yet expired.
     /// Its signature is the media server's to check.
-    internal fun buildTicket(serverUrlText: String, token: String, room: String, participantName: String, now: Long = System.currentTimeMillis()): CallTicket {
-        val serverUrl = mediaUrl(serverUrlText)
-        val claims = claimsOf(token)
-        if (claims.room != room) throw TicketException.TokenForAnotherRoom
-        val identity = claims.sub?.takeIf { isIdentity(it) } ?: throw TicketException.MalformedToken
-        val expMs = claims.expMs ?: throw TicketException.MalformedToken
-        if (expMs <= now) throw TicketException.TokenExpired
-        return CallTicket(serverUrl, token, room, identity, participantName, expMs, claims.roomAdmin)
-    }
+    internal fun buildTicket(serverUrlText: String, token: String, room: String, participantName: String, now: Long = System.currentTimeMillis()): CallTicket =
+        ticketOn(host, serverUrlText, token, room, participantName, now)
 
-    internal fun mediaUrl(text: String): String {
-        if (text.toByteArray(Charsets.UTF_8).size > 2048) throw TicketException.MediaHostNotAllowed(null)
-        val uri = try {
-            java.net.URI(text)
-        } catch (e: Exception) {
-            throw TicketException.MediaHostNotAllowed(null)
-        }
-        val givenScheme = uri.scheme?.lowercase() ?: throw TicketException.MediaHostNotAllowed(null)
-        val mediaHost = uri.host?.lowercase() ?: throw TicketException.MediaHostNotAllowed(null)
-        if (uri.userInfo != null || uri.rawQuery != null || uri.fragment != null) throw TicketException.MediaHostNotAllowed(null)
-        // LiveKit reads `https://` as `wss://` and `http://` as `ws://`;
-        // the official call server has answered with `https://` since the
-        // same date PeelCore's own comment on this names.
-        val scheme = when (givenScheme) { "https" -> "wss"; "http" -> "ws"; else -> givenScheme }
-        val mediaPort = if (uri.port == -1) CallLink.defaultPort(if (scheme == "wss") "https" else "http") else uri.port
-        val named = endpoint(mediaHost, mediaPort, secure = scheme != "ws")
-        val (ownScheme, ownHost, ownPort) = CallLink.baseURL(host) ?: throw TicketException.MediaHostNotAllowed(null)
-        val loopback = ownScheme == "http"
-        // Release builds accept only wss/https, even for a loopback call server.
-        if (loopback && !NetworkPolicy.plainLoopbackAllowed(com.sphinx.peel.BuildConfig.DEBUG)) throw TicketException.MediaHostNotAllowed(null)
-        val allowed = listOf(endpoint(ownHost, ownPort, secure = !loopback)) +
-            // Only the call server itself on its default port: not another one on the same host.
-            (if (!host.contains(':')) mediaHosts[ownHost] ?: emptyList() else emptyList()).map { endpoint(it, null, secure = true) }
-        val plainHostOrNull = named.takeIf { it.all { c -> c.isLetterOrDigit() || c in ".-:" } }
-        if (!NetworkPolicy.mediaSchemeAllowed(scheme, loopback, com.sphinx.peel.BuildConfig.DEBUG) || named !in allowed) throw TicketException.MediaHostNotAllowed(plainHostOrNull)
-        val authority = if (mediaPort == CallLink.defaultPort(if (scheme == "wss") "https" else "http")) mediaHost else "$mediaHost:$mediaPort"
-        return "$scheme://$authority"
-    }
-
-    /// `host:port`, with the scheme's default port written out.
-    private fun endpoint(endpointHost: String, port: Int?, secure: Boolean): String {
-        val p = port ?: (if (secure) 443 else 80)
-        return if (endpointHost.contains(':') && port == null) endpointHost else "$endpointHost:$p"
-    }
+    internal fun mediaUrl(text: String): String = mediaUrlOn(host, text)
 
     internal data class Claims(val sub: String?, val expMs: Long?, val room: String?, val roomAdmin: Boolean)
 
@@ -212,11 +168,6 @@ class CallServer(val host: String) {
     /// issue the token, the call server did, and nothing here trusts it
     /// for anything beyond "which room, whose identity, until when."
     internal fun claimsOf(token: String): Claims = parseClaims(token)
-
-    /// An identity is matched exactly (a leave names it), so one with a
-    /// control character is refused rather than cleaned.
-    private fun isIdentity(identity: String): Boolean =
-        identity.length in 1..256 && identity == identity.filter { !it.isISOControl() }
 
     /// `{"profilePictureUrl":"<url>"}`, the only metadata Peel sends (no
     /// pubkey: others could read it but not check it).
@@ -425,6 +376,72 @@ class CallServer(val host: String) {
     companion object {
         private const val MAX_PARTICIPANTS = 500
         private const val MAX_NAME = 100
+
+        /// The LiveKit media servers each call server may name besides itself,
+        /// on port 443, by exact host, never a suffix (`*.livekit.cloud` would
+        /// admit any LiveKit tenant) — PeelCore's own `mediaHosts`. The official
+        /// apps' call server names `livekit.sphinx.chat`.
+        private val mediaHosts: Map<String, List<String>> = mapOf("chat.sphinx.chat" to listOf("livekit.sphinx.chat"))
+
+        /// [buildTicket] for the call server [callServer] (`host[:port]`), without
+        /// a connection to it: a box's ticket into one of its calls is checked
+        /// the same way (`BoxCalls`).
+        internal fun ticketOn(
+            callServer: String, serverUrlText: String, token: String, room: String, participantName: String,
+            now: Long = System.currentTimeMillis(),
+        ): CallTicket {
+            val serverUrl = mediaUrlOn(callServer, serverUrlText)
+            val claims = parseClaims(token)
+            if (claims.room != room) throw TicketException.TokenForAnotherRoom
+            val identity = claims.sub?.takeIf { isIdentity(it) } ?: throw TicketException.MalformedToken
+            val expMs = claims.expMs ?: throw TicketException.MalformedToken
+            if (expMs <= now) throw TicketException.TokenExpired
+            return CallTicket(serverUrl, token, room, identity, participantName, expMs, claims.roomAdmin)
+        }
+
+        /// Whether [text] names a LiveKit server of the call server [callServer]
+        /// (`host[:port]`), as [mediaUrlOn] takes one: a box joins a call only on
+        /// the LiveKit its call server's tickets name (`BoxCalls.offers`).
+        fun isMediaServer(callServer: String, text: String): Boolean =
+            try { mediaUrlOn(callServer, text); true } catch (e: TicketException) { false }
+
+        /// [text] as LiveKit takes it, when it is the call server [callServer]'s own
+        /// host or one recorded for it in [mediaHosts]; throws
+        /// [TicketException.MediaHostNotAllowed] for anything else.
+        internal fun mediaUrlOn(callServer: String, text: String): String {
+            if (text.toByteArray(Charsets.UTF_8).size > 2048) throw TicketException.MediaHostNotAllowed(null)
+            val uri = try {
+                java.net.URI(text)
+            } catch (e: Exception) {
+                throw TicketException.MediaHostNotAllowed(null)
+            }
+            val givenScheme = uri.scheme?.lowercase() ?: throw TicketException.MediaHostNotAllowed(null)
+            val mediaHost = uri.host?.lowercase() ?: throw TicketException.MediaHostNotAllowed(null)
+            if (uri.userInfo != null || uri.rawQuery != null || uri.fragment != null) throw TicketException.MediaHostNotAllowed(null)
+            // LiveKit reads `https://` as `wss://` and `http://` as `ws://`;
+            // the official call server has answered with `https://` since the
+            // same date PeelCore's own comment on this names.
+            val scheme = when (givenScheme) { "https" -> "wss"; "http" -> "ws"; else -> givenScheme }
+            val mediaPort = if (uri.port == -1) CallLink.defaultPort(if (scheme == "wss") "https" else "http") else uri.port
+            val named = endpoint(mediaHost, mediaPort, secure = scheme != "ws")
+            val (ownScheme, ownHost, ownPort) = CallLink.baseURL(callServer) ?: throw TicketException.MediaHostNotAllowed(null)
+            val loopback = ownScheme == "http"
+            // Release builds accept only wss/https, even for a loopback call server.
+            if (loopback && !NetworkPolicy.plainLoopbackAllowed(com.sphinx.peel.BuildConfig.DEBUG)) throw TicketException.MediaHostNotAllowed(null)
+            val allowed = listOf(endpoint(ownHost, ownPort, secure = !loopback)) +
+                // Only the call server itself on its default port: not another one on the same host.
+                (if (!callServer.contains(':')) mediaHosts[ownHost] ?: emptyList() else emptyList()).map { endpoint(it, null, secure = true) }
+            val plainHostOrNull = named.takeIf { it.all { c -> c.isLetterOrDigit() || c in ".-:" } }
+            if (!NetworkPolicy.mediaSchemeAllowed(scheme, loopback, com.sphinx.peel.BuildConfig.DEBUG) || named !in allowed) throw TicketException.MediaHostNotAllowed(plainHostOrNull)
+            val authority = if (mediaPort == CallLink.defaultPort(if (scheme == "wss") "https" else "http")) mediaHost else "$mediaHost:$mediaPort"
+            return "$scheme://$authority"
+        }
+
+        /// `host:port`, with the scheme's default port written out.
+        private fun endpoint(endpointHost: String, port: Int?, secure: Boolean): String {
+            val p = port ?: (if (secure) 443 else 80)
+            return if (endpointHost.contains(':') && port == null) endpointHost else "$endpointHost:$p"
+        }
 
         /// [claimsOf] without a server: Talk (`Talk.kt`) reads a home's token the same way.
         internal fun parseClaims(token: String): Claims {

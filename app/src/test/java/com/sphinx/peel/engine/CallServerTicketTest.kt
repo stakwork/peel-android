@@ -84,6 +84,31 @@ class CallServerTicketTest {
         }
     }
 
+    /// A box's LiveKit is the call server's when a ticket from it would be taken (BoxCalls.offers).
+    @Test
+    fun `isMediaServer takes what the call server's tickets may name, by host and port`() {
+        assertTrue(CallServer.isMediaServer("chat.sphinx.chat", "wss://livekit.sphinx.chat"))
+        assertTrue(CallServer.isMediaServer("chat.sphinx.chat", "https://livekit.sphinx.chat/"))
+        assertTrue(CallServer.isMediaServer("chat.sphinx.chat", "wss://chat.sphinx.chat"))
+        assertFalse(CallServer.isMediaServer("chat.sphinx.chat", "wss://livekit.example.com"))
+        assertFalse(CallServer.isMediaServer("chat.sphinx.chat", "wss://livekit.sphinx.chat:7880"))
+        assertFalse(CallServer.isMediaServer("chat.sphinx.chat", "ws://livekit.sphinx.chat"))
+        assertFalse(CallServer.isMediaServer("chat.sphinx.chat", ""))
+        // Another call server than the official one has no media host recorded beside itself.
+        assertFalse(CallServer.isMediaServer("calls.example.com", "wss://livekit.sphinx.chat"))
+    }
+
+    @Test
+    fun `ticketOn checks a ticket as the call server's own are checked`() {
+        val token = jwt(sub = "box_" + "ab".repeat(16), room = "sphinx.call.abc")
+        val ticket = CallServer.ticketOn("chat.sphinx.chat", "wss://livekit.sphinx.chat", token, "sphinx.call.abc", "Ada")
+        assertEquals("wss://livekit.sphinx.chat", ticket.serverUrl)
+        assertEquals("box_" + "ab".repeat(16), ticket.identity)
+        assertThrows(CallServer.TicketException.MediaHostNotAllowed::class.java) {
+            CallServer.ticketOn("chat.sphinx.chat", "wss://box.example.com", token, "sphinx.call.abc", "Ada")
+        }
+    }
+
     @Test
     fun `mediaUrl accepts the call server's own host, https read as wss`() {
         assertEquals("wss://chat.sphinx.chat", server.mediaUrl("https://chat.sphinx.chat"))
