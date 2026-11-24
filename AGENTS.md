@@ -125,7 +125,8 @@ sections for code that isn't written yet.
     `CanvasRecording`), `CallLink.encryptionKey`, `CallServer.isMediaServer`/`ticketOn`, `ui/dashboard/CallJamieItems.kt` — Jamie from a box in a
     group call (`docs/phases/56-box-group-calls.md`): the call menu's box pick and "Record on the canvas", the box asked in before the link
     (with the key after `#`) is posted, encrypted group rooms (`CallSession.options`; the data channel's encryption is turned on by hand),
-    and the person's own ticket from the box in the call.
+    and the person's own ticket from the box in the call. `CallChat.sender` names an in-call chat line by the identity LiveKit's server
+    stamped (`DataReceived.participantIdentity`, livekit-android ≥ 2.31.0), never by the payload except a line Jamie relays.
   - `engine/AppsListing.kt` + the Apps tab (`MainTab.APPS`; replaced the former Tasks tab, `TasksTab`/`TasksList` removed) — Apps
     (`docs/phases/48-tasks-tab.md`): first in the bar once a `strut/worker` page was opened, its page kept alive (composed, not placed) behind the other tabs; Apps lists the other public apps.
   - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.

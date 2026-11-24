@@ -33,7 +33,8 @@ import org.junit.runner.RunWith
 /// The box is asked in with recording on (and refuses the same room again), then two people join on their own tickets from it, with
 /// the call's key: the room's encryption is on for both, each sees Jamie and Jamie recording on the canvas, and what one types
 /// reaches the other (each takes only what came encrypted, so this fails if Peel sent it in the clear). The box's voice service logs
-/// the line too ("text message from Ada"): it decrypted what Android sent.
+/// the line too ("text message from Ada"): it decrypted what Android sent. Jamie's notice ("Jamie is taking notes on the canvas.")
+/// reaches each of them under Jamie's name.
 @RunWith(AndroidJUnit4::class)
 class BoxGroupCallLiveTest {
     @Test fun aBoxJoinsAnEncryptedCallAndPeopleJoinOnItsTickets() = runBlocking {
@@ -96,9 +97,11 @@ class BoxGroupCallLiveTest {
 
             withContext(Dispatchers.Main) { ada.sendChat("Hello from Android") }
             until("Ada's line at Bob's") { bob.chatMessages.any { it.text == "Hello from Android" && !it.isYou } }
-            // Not checked: Jamie's own chat lines (its recording notice). They arrive decrypted, but livekit-android 2.29.2 finds a
-            // data packet's sender only by its participant SID, which rtc-node leaves empty, so the session drops them as from
-            // nobody (docs/phases/56-box-group-calls.md, "Found").
+            // Jamie's own line, sent to each joiner: rtc-node leaves the packet's participant SID empty, so it is named by the identity
+            // LiveKit's server stamped on it (CallChat.sender).
+            until("Jamie's notice at both") {
+                listOf(ada, bob).all { s -> s.chatMessages.any { it.name == "Jamie" && it.text == "Jamie is taking notes on the canvas." && !it.isYou } }
+            }
             assertNull(withContext(Dispatchers.Main) { ada.encryptionNotice ?: bob.encryptionNotice })
         } finally {
             withContext(Dispatchers.Main) {

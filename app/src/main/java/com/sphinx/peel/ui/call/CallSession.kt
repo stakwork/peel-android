@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import android.content.Intent
 import com.sphinx.peel.engine.CallChat
 import com.sphinx.peel.engine.CallChatMessage
+import com.sphinx.peel.engine.CallRoomMember
 import com.sphinx.peel.engine.CallEncryption
 import com.sphinx.peel.engine.CanvasRecording
 import com.sphinx.peel.engine.CallHandoff
@@ -349,8 +350,8 @@ class CallSession(
 
     // MARK: - Encryption
 
-    /// Turns the data channel's encryption on beside the media's, and says whether LiveKit encrypts both. This SDK (2.29.2)
-    /// decrypts what comes encrypted either way, but encrypts what it sends (the chat, the handoff) only with this `@Beta` flag,
+    /// Turns the data channel's encryption on beside the media's, and says whether LiveKit encrypts both. This SDK (2.29.2 through
+    /// 2.31.0) decrypts what comes encrypted either way, but encrypts what it sends (the chat, the handoff) only with this `@Beta` flag,
     /// which is off by default.
     @OptIn(Beta::class)
     private fun encryptionOn(): Boolean {
@@ -430,20 +431,23 @@ class CallSession(
 
     private fun received(event: RoomEvent.DataReceived) {
         if (!accepted(event.encryptionType)) return
-        val participant = event.participant ?: return
-        val (id, timestamp, text) = CallChat.decode(event.data) ?: return
-        val identity = participant.identity?.value ?: return
-        val name = CallServer.fromLiveKitRoom(identity, participant.name, participant.metadata)?.nickname?.ifEmpty { null } ?: "Guest"
-        val line = CallChatMessage(
-            id = id.ifEmpty { UUID.randomUUID().toString() }, identity = identity, name = name, text = text,
-            timestampMs = if (timestamp > 0) timestamp else System.currentTimeMillis(), isYou = false,
+        val line = CallChat.decode(event.data) ?: return
+        val sender = CallChat.sender(event.participantIdentity, event.participant?.let(::member), line.sender) { identity ->
+            room.remoteParticipants[Participant.Identity(identity)]?.let(::member)
+        } ?: return
+        val message = CallChatMessage(
+            id = line.id.ifEmpty { UUID.randomUUID().toString() }, identity = sender.identity, name = sender.nickname, text = line.text,
+            timestampMs = if (line.timestampMs > 0) line.timestampMs else System.currentTimeMillis(), isYou = false,
         )
-        val next = CallChat.append(chatMessages, line)
+        val next = CallChat.append(chatMessages, message)
         if (next !== chatMessages) {
             chatMessages = next
             if (!chatOpen) chatUnread += 1
         }
     }
+
+    private fun member(participant: Participant): CallRoomMember? =
+        participant.identity?.value?.let { CallRoomMember(it, participant.name, participant.metadata, participant.attributes) }
 
     /// Sends what was typed to everyone in the room, and shows it as yours.
     fun sendChat(typed: String) {

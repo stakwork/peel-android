@@ -1,7 +1,8 @@
 # Phase 56 — Jamie from a box in a group call
 
 Status (2026-11-24): **built; JVM/Robolectric tests pass; the box's routes, the tickets and the encrypted room run live on an
-emulator against a local strut + voice service + LiveKit (see "Checked"); the call menu and posting the call not run on a device.**
+emulator against a local strut + voice service + LiveKit (see "Checked"); the call menu and posting the call not run on a device.
+Jamie's chat lines show (livekit-android 2.31.0 and `CallChat.sender`, "Who sent a chat line"), checked live the same way.**
 Android's side of stadeum `plans/group-calls.md` work item 3 and `plans/call-canvas.md` work item 6. Strut's side is
 stakwork/strut#881 (merged: `GET /voice/calls`, `POST /voice/calls/ticket`, `POST /voice/calls` forwarded to the box's voice
 service as the person); the voice service's is stakwork/sphinx-voice#45–#47 (open). iOS/Mac is a parallel session in `peel`.
@@ -70,6 +71,16 @@ the handoff take only packets that came encrypted. A track that won't encrypt or
 **Recording on the canvas:** while a participant named Jamie has the attribute `recording` = `"true"` (`CanvasRecording`), the call
 screen says "Jamie is recording this call on the canvas", beside the call server's own "This call is being recorded".
 
+**Who sent a chat line (`CallChat.sender`, livekit-android 2.31.0):** a line is named by the identity LiveKit's server stamped on the
+packet (`DataReceived.participantIdentity`, new in 2.31.0), looked up in the room. The server writes it from the sender's own
+connection, encrypted packets included, so a sender can't take another's name with it. The SDK's own match (`participant`, by the
+`participantSid` inside the packet) names the line only when the server stamped nothing: the sender writes that SID, and on an
+encrypted call the server can't check it. A stamped sender who isn't in the room (left, or not announced yet) still has the line, as
+"Guest"; a line with neither is dropped, never taken as Jamie's. A payload's `sender` names the line only when the call's Jamie sent it
+(named Jamie with the `tts` attribute, PeelCore's `isJamie`): Jamie relays what a person asked aloud, and replays a joiner what people
+asked before, under the speaker's name. Anyone else's `sender` is ignored. iOS names every line by `sender` and takes a line without
+one as Jamie's; Android doesn't, since meet's lines carry no `sender` either and anyone can write it.
+
 ## Found
 
 - **livekit-android 2.29.2 does not encrypt what it sends on the data channel by default.** It decrypts any encrypted packet it
@@ -86,12 +97,18 @@ screen says "Jamie is recording this call on the canvas", beside the call server
   native, and `LiveKit.create` loads WebRTC's library only after its options (and so the key provider) are built. Found on the
   emulator; `CallSession` and `TalkSession` now call `LiveKit.init` first. Talk had the same crash on its first call since phase 26
   (written without a build, never run on a device).
-- **Jamie's chat lines don't show on Android.** They arrive and decrypt (`GCM`), but livekit-android 2.29.2 finds a data packet's
-  sender only by `UserPacket.participantSid`, which rtc-node (the box's Jamie, Hive's worker) and livekit-client (meet) leave empty, so
-  `DataReceived.participant` is null and the call chat drops the line as from nobody (as it always has, Hive calls included). iOS
-  names a line by the payload's `sender` and takes one without it as Jamie's (PeelCore `CallChatMessage.isFromJamie`); Android can't
-  copy that safely, since meet's lines carry no `sender` either and would read as Jamie's once meet joins encrypted calls. Left as
-  is: a follow-up (a LiveKit version that looks the sender up by identity, or a sender field in the voice service's lines).
+- **Jamie's chat lines didn't show on Android (fixed: "Who sent a chat line").** They arrived and decrypted (`GCM`), but
+  livekit-android 2.29.2 finds a data packet's sender only by the inner `UserPacket.participantSid`, which rtc-node (the box's Jamie,
+  Hive's worker) and livekit-client (meet) leave empty, so `DataReceived.participant` was null and the call chat dropped the line.
+  On a call in the clear LiveKit's server writes that SID itself (`pkg/rtc/participant.go`), so this hit encrypted calls, whose inner
+  packet the server can't read. The server also stamps the sender's identity on the outer `DataPacket`; 2.31.0 (2026-11-24,
+  client-sdk-android#1046) passes it on as `DataReceived.participantIdentity`, but still matches `participant` by SID only, so Peel
+  looks the identity up itself.
+- **livekit-android 2.30–2.31, for the upgrade:** 2.30 moved data streams (the handoff, Talk's transcripts) onto LiveKit's Rust core
+  (`livekit-ffi-android`, replacing `livekit-uniffi-android`, about the same size), negotiates a v2 stream format per recipient, and
+  holds an incoming stream to the encryption its header came with; 2.31 adds `BaseKeyProvider`'s `keySize` (128-bit by default, as
+  before) and an opt-in single peer connection. `dataChannelEncryptionEnabled` is still `@Beta` and off by default. Nothing Peel calls
+  changed its signature.
 
 ## Tests
 
@@ -103,6 +120,9 @@ screen says "Jamie is recording this call on the canvas", beside the call server
   the join's body as the person; never a clear call; every refusal's words and the missing `encrypted`; a refused token renewed once;
   the box in the call gives the ticket and the others 404; no ticket from a failing box or for a clear call (and no box asked);
   tickets for another room, identity, LiveKit or subject not taken; the ticket's name.
+- `CallChatTest` (+7): a payload's `sender` read; a line the SDK matched to nobody named by the stamped identity; the stamp over a
+  SID the sender wrote; no stamp, only the SDK's match, and neither dropped; a stamped sender not in the room as "Guest", a bad
+  identity refused; a line Jamie relays is the speaker's and only the call's Jamie relays; who is the call's Jamie.
 - `CallEncryptionTest` (3), `CallJamieItemsUiTest` (2, Robolectric: nothing without a box that can join; a pick, Record on the
   canvas, No Jamie). The encrypted room's options (`CallSession.options`) can't be built on a plain JVM (`BaseKeyProvider` is
   native): the live run below builds them.
@@ -130,7 +150,14 @@ Passed (OK, 1 test):
 - Ada's typed line reached Bob, who takes only encrypted packets, and the voice service logged it ("text message from Ada: \"Hello
   from Android\""): Android's outgoing data encryption interoperates with rtc-node.
 - An rtc-node client on the host, in a box's room the same way, got Jamie's notice ("Jamie is taking notes on the canvas."); on
-  Android it arrives but has no sender (Found).
+  Android it arrived with no sender (Found), until "Who sent a chat line".
+
+Again, the same day, with livekit-android 2.31.0 and `CallChat.sender`, against strut `origin/main` 11517b34, the same voice service
+(c7f9068) and LiveKit: OK. Everything above held on 2.31.0 (the voice service logged Ada's line, so Android's encrypted data still
+reaches rtc-node), and Jamie's notice reached both Ada and Bob under "Jamie". Control: the same build naming a line only by the SDK's
+`participant` timed out waiting for the notice, while Ada's line still arrived (the Android SDK writes its own SID): 2.31.0 alone does
+not show Jamie's lines; the lookup by the stamped identity does. The run used JDK 17, as CI does (`ConversationDateTest` fails on JDK 21,
+whose time format puts a narrow no-break space before "PM").
 
 Not checked live: the call menu and the start flow on a device (needs a Sphinx account with a server connection and a linked box;
 the menu is covered by `CallJamieItemsUiTest`), joining from a posted card (`Engine.callTicket(fromBox)`; JVM-tested), a real call
@@ -139,7 +166,8 @@ and meet.
 
 ## Open
 
-- **Jamie's chat lines** on Android (Found).
+- Android sends no `sender` in its chat lines, so Peel on iOS/Mac (which names a line by `sender` and takes one without it as
+  Jamie's) shows an Android person's line as Jamie's, as it does meet's.
 - **Captions** (optional in the brief): group call screens show none. The voice service sends them on encrypted `lk.transcription`
   text streams, the speaker by `lk.transcribed_track_id` (not the stream's sender, which is Jamie). `TalkTranscript` already folds
   those streams; a group version needs the track → participant map and a place on the call screen.

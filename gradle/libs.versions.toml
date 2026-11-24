@@ -19,11 +19,12 @@ coil = "3.0.4"
 # and this is the one already on the classpath, not a second one.
 okhttp = "4.12.0"
 # The real in-app call (CallSession.kt) — peel's own iPhone/Mac apps are
-# on client-sdk-swift 2.10.2; this is the Android SDK's own latest at
-# the time this was added (2026-10-30), not a matched pair — the two
-# SDKs version independently, same as any two platforms' native
-# LiveKit clients talking to the same room.
-livekit = "2.29.2"
+# on client-sdk-swift 2.10.2; the two SDKs version independently, same as
+# any two platforms' native LiveKit clients talking to the same room.
+# At least 2.31.0: `DataReceived.participantIdentity`, the sender the server
+# stamped, without which Jamie's in-call chat lines have no sender
+# (CallChat.sender, docs/phases/56-box-group-calls.md).
+livekit = "2.31.0"
 # Push (FCM). Optional at runtime: without google-services.json the
 # plugin is not applied and push stays off (push/PushRegistrar.kt).
 firebaseBom = "33.7.0"
