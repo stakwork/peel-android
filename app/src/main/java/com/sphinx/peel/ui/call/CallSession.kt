@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 import android.content.Intent
 import com.sphinx.peel.engine.CallChat
 import com.sphinx.peel.engine.CallChatMessage
+import com.sphinx.peel.engine.CallEncryption
+import com.sphinx.peel.engine.CanvasRecording
 import com.sphinx.peel.engine.CallHandoff
 import com.sphinx.peel.engine.CallLink
 import com.sphinx.peel.engine.CallParticipant
@@ -16,6 +18,11 @@ import com.sphinx.peel.engine.CallServer
 import com.sphinx.peel.engine.CallTicket
 import io.livekit.android.LiveKit
 import io.livekit.android.RoomOptions
+import io.livekit.android.annotations.Beta
+import io.livekit.android.e2ee.BaseKeyProvider
+import io.livekit.android.e2ee.E2EEOptions
+import io.livekit.android.e2ee.E2EEState
+import io.livekit.android.room.participant.AudioTrackPublishDefaults
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.datastream.StreamTextOptions
@@ -73,6 +80,12 @@ data class CallTile(
 /// The microphone starts on and the camera off; only the person who started
 /// a video call (or explicitly turns theirs on) starts with the camera on.
 ///
+/// A link with a key ([CallLink.encryptionKey]) is an end-to-end encrypted
+/// call (docs/phases/56-box-group-calls.md): the room is joined with the key,
+/// as Talk's is, and left at once if LiveKit did not turn the encryption on:
+/// never joined in the clear. The in-call chat and the handoff take only what
+/// came encrypted then.
+///
 /// [askMicPermission]/[askCameraPermission] are `CallController`'s (the
 /// application-scoped owner of this session), never an Activity's: the
 /// session outlives the Activity, so it must not hold anything of one. The
@@ -92,7 +105,12 @@ class CallSession(
     private val stay: Boolean = false,
 ) {
     private val context = appContext
-    private val room: Room = LiveKit.create(appContext, RoomOptions(adaptiveStream = true, dynacast = true))
+    // WebRTC's native library first: an encrypted call's key provider is native, and `create` loads the library only once its
+    // options are built (a fresh process threw UnsatisfiedLinkError here, docs/phases/56-box-group-calls.md).
+    private val room: Room = run {
+        LiveKit.init(appContext)
+        LiveKit.create(appContext, options(link.encryptionKey))
+    }
 
     var state by mutableStateOf(CallConnectionState.CONNECTING)
         private set
@@ -112,6 +130,15 @@ class CallSession(
     /// Whether the call server is recording the call (the room says so).
     var isRecording by mutableStateOf(false)
         private set
+
+    /// Whether Jamie (a box's) is recording the call on the canvas: its participant attribute says so ([CanvasRecording]).
+    var recordedOnCanvas by mutableStateOf(false)
+        private set
+
+    /// An encrypted call's encryption failing ([CallEncryption]), or never turned on: said before anything else.
+    var encryptionNotice by mutableStateOf<String?>(null)
+        private set
+    private var encryption = CallEncryption()
 
     /// Whether you last chose the camera on (or started a video call):
     /// what a rejoin brings back.
@@ -189,6 +216,7 @@ class CallSession(
         scope.launch {
             room.events.collect { event ->
                 if (event is RoomEvent.DataReceived && event.topic == CallChat.TOPIC) received(event)
+                if (event is RoomEvent.TrackE2EEStateEvent) encryptionChanged(event)
                 refresh()
             }
         }
@@ -199,6 +227,14 @@ class CallSession(
                 room.connect(ticket.serverUrl, ticket.token)
             } catch (e: Exception) {
                 failed = true
+                refresh()
+                return@launch
+            }
+            // Before anything is published or sent: an encrypted call whose encryption is not on is left.
+            if (link.isEncrypted && !encryptionOn()) {
+                encryptionNotice = CallEncryption.NOT_ON
+                failed = true
+                room.disconnect()
                 refresh()
                 return@launch
             }
@@ -232,6 +268,23 @@ class CallSession(
 
     companion object {
         private const val SHARE_NOTIFICATION_ID = 4107
+
+        /// LiveKit's encryption types of a data packet that came encrypted (not `NONE`).
+        private val ENCRYPTED_TYPES = setOf("GCM", "CUSTOM")
+
+        /// The room's options: for an encrypted call ([key]), as Talk's room is keyed (`TalkSession.options`): a shared-key
+        /// [BaseKeyProvider] on the key string (LiveKit keys with its UTF-8 bytes, as the box and meet do; the data channel's
+        /// encryption is turned on once connected, [encryptionOn]), and the microphone without Opus RED (the server can't
+        /// repackage an encrypted track) or DTX.
+        internal fun options(key: String?): RoomOptions = if (key == null) {
+            RoomOptions(adaptiveStream = true, dynacast = true)
+        } else {
+            RoomOptions(
+                adaptiveStream = true, dynacast = true,
+                e2eeOptions = E2EEOptions(keyProvider = BaseKeyProvider(enableSharedKey = true).also { it.setSharedKey(key) }),
+                audioTrackPublishDefaults = AudioTrackPublishDefaults(dtx = false, red = false),
+            )
+        }
 
         /// The call's start: the earliest known join time (epoch ms) of
         /// anyone in the room. Never later than [current] (so it survives
@@ -294,6 +347,30 @@ class CallSession(
         if (wantsCamera && !leaving) scope.launch { setCamera(true) }
     }
 
+    // MARK: - Encryption
+
+    /// Turns the data channel's encryption on beside the media's, and says whether LiveKit encrypts both. This SDK (2.29.2)
+    /// decrypts what comes encrypted either way, but encrypts what it sends (the chat, the handoff) only with this `@Beta` flag,
+    /// which is off by default.
+    @OptIn(Beta::class)
+    private fun encryptionOn(): Boolean {
+        val manager = room.e2eeManager ?: return false
+        manager.dataChannelEncryptionEnabled = true
+        return manager.enabled && manager.isDataChannelEncryptionEnabled()
+    }
+
+    /// What came over the data channel may be taken: anything on a call in the clear, only what came encrypted on an encrypted one.
+    /// [type] is LiveKit's `Encryption.Type`, read by name: its protobuf class is not on the compile classpath (a runtime
+    /// dependency of the SDK).
+    private fun accepted(type: Any?): Boolean = !link.isEncrypted || (type as? Enum<*>)?.name in ENCRYPTED_TYPES
+
+    private fun encryptionChanged(event: RoomEvent.TrackE2EEStateEvent) {
+        if (leaving || !link.isEncrypted) return
+        val failedState = event.state in setOf(E2EEState.MISSING_KEY, E2EEState.ENCRYPTION_FAILED, E2EEState.DECRYPTION_FAILED, E2EEState.INTERNAL_ERROR)
+        encryption = encryption.track(event.publication.sid, local = event.participant === room.localParticipant, failed = failedState)
+        if (encryption.notice != encryptionNotice) encryptionNotice = encryption.notice
+    }
+
     // MARK: - Handoff
 
     /// Tells this account's other devices on the call that this one has joined, so they leave it
@@ -321,6 +398,7 @@ class CallSession(
     private fun listenForHandoff() {
         val handoff = ticket.handoff ?: return
         room.registerTextStreamHandler(CallHandoff.TOPIC) { reader, sender ->
+            if (!accepted(reader.info.encryptionType)) return@registerTextStreamHandler
             scope.launch {
                 val text = try {
                     reader.readAll().joinToString("")
@@ -351,6 +429,7 @@ class CallSession(
     // MARK: - Chat
 
     private fun received(event: RoomEvent.DataReceived) {
+        if (!accepted(event.encryptionType)) return
         val participant = event.participant ?: return
         val (id, timestamp, text) = CallChat.decode(event.data) ?: return
         val identity = participant.identity?.value ?: return
@@ -560,6 +639,8 @@ class CallSession(
         val cam = camPublication != null && !camPublication.muted
         if (cam != cameraOn) cameraOn = cam
         if (room.isRecording != isRecording) isRecording = room.isRecording
+        val canvas = others.any { CanvasRecording.isOn(it.name, it.attributes) }
+        if (canvas != recordedOnCanvas) recordedOnCanvas = canvas
 
         val now = when (room.state) {
             Room.State.CONNECTED -> {

@@ -391,11 +391,26 @@ private fun CallControls(session: CallSession, onLeave: () -> Unit, onRejoin: ()
             val text = if (session.connectedAtMs == null) stringResource(R.string.misc_call_could_not_connect) else stringResource(R.string.misc_call_lost)
             CallNote(text, action = stringResource(R.string.misc_call_rejoin), onAction = onRejoin)
         }
+        // An encrypted call whose encryption failed, or never came on: before anything else.
+        session.encryptionNotice?.let {
+            Text(
+                it, style = MaterialTheme.typography.labelSmall, color = Theme.colors.destructive,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
         if (session.isRecording) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.FiberManualRecord, contentDescription = null, tint = Theme.colors.destructive, modifier = Modifier.size(10.dp))
                 Spacer(Modifier.width(4.dp))
                 Text(stringResource(R.string.misc_call_recorded), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
+            }
+        }
+        // A box's Jamie recording the call on the canvas (its `recording` attribute; docs/phases/56-box-group-calls.md).
+        if (session.recordedOnCanvas) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.FiberManualRecord, contentDescription = null, tint = Theme.colors.destructive, modifier = Modifier.size(10.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(stringResource(R.string.misc_call_recording_canvas), style = MaterialTheme.typography.labelSmall, color = Theme.colors.secondaryText)
             }
         }
     }

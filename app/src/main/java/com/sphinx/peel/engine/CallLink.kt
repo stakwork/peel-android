@@ -17,9 +17,17 @@ import org.json.JSONObject
 /// Anyone can write a call message, so a link is only ever a link that
 /// passed [parse]'s checks against the account's own call server: https
 /// (plain http only when that server is this device), its exact host and
-/// port, no credentials or fragment, the path `/rooms/<room>` with a strict
-/// room name, and only known query keys. Everything else in it is dropped —
-/// [url] is rebuilt from the parsed parts, never the text received.
+/// port, no credentials, the path `/rooms/<room>` with a strict room name,
+/// only known query keys, and a fragment only as the call's key. Everything
+/// else in it is dropped — [url] is rebuilt from the parsed parts, never the
+/// text received.
+///
+/// An end-to-end encrypted call carries its key after `#`
+/// (`https://<call server>/rooms/<room>#<key>`, stadeum plans/group-calls.md
+/// §2; docs/phases/56-box-group-calls.md): whoever can read the chat it is
+/// posted in can hear the call, and nobody else, the call server and LiveKit
+/// included. A fragment never goes to a server: the key is not in the call
+/// server's ticket request either ([CallServer]). [toString] leaves it out.
 data class CallLink(
     val server: String,
     private val scheme: String,
@@ -29,7 +37,17 @@ data class CallLink(
     val audioOnly: Boolean,
     val callKey: String?,
     val hiveToken: String?,
+    /// The call's end-to-end encryption key, from the link's fragment: the
+    /// room is joined with it ([com.sphinx.peel.ui.call.CallSession]). Null
+    /// for a call in the clear.
+    val encryptionKey: String? = null,
 ) {
+    /// Whether the call is end-to-end encrypted: its link carries a key.
+    val isEncrypted: Boolean get() = encryptionKey != null
+
+    override fun toString(): String =
+        "CallLink($server, room $room${if (audioOnly) ", audio" else ""}${if (isEncrypted) ", encrypted, key not shown" else ""})"
+
     /// The link, rebuilt from its parts with every query value strictly
     /// percent-encoded.
     val url: String
@@ -41,7 +59,9 @@ data class CallLink(
                 hiveToken?.let { add("hiveToken=${encode(it)}") }
             }
             val query = if (items.isEmpty()) "" else "?" + items.joinToString("&")
-            return "$scheme://$authority$ROOMS_PATH$room$query"
+            // A key holds only characters a fragment may carry as they are ([isKey]).
+            val fragment = encryptionKey?.let { "#$it" } ?: ""
+            return "$scheme://$authority$ROOMS_PATH$room$query$fragment"
         }
 
     /// The content of a call message in the `call::` form iOS and Android
@@ -67,10 +87,13 @@ data class CallLink(
         /// A new room on `server` (`host[:port]`) named with 128 random bits
         /// from the system's secure generator, as the words are, where the
         /// official apps' timestamps can be guessed from when a call started.
-        fun new(server: String, audioOnly: Boolean): CallLink {
+        /// With [encryptionKey] (a fresh key, `TalkHome.newKey`), the call is
+        /// end-to-end encrypted with it.
+        fun new(server: String, audioOnly: Boolean, encryptionKey: String? = null): CallLink {
             val base = baseURL(server) ?: throw IllegalArgumentException("the call server $server is unreadable")
+            require(encryptionKey == null || isKey(encryptionKey)) { "a call's key is base64 of at most $MAX_KEY characters" }
             val name = ByteArray(16).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
-            return CallLink(server, base.first, base.second, base.third, ROOM_PREFIX + name, audioOnly, null, null)
+            return CallLink(server, base.first, base.second, base.third, ROOM_PREFIX + name, audioOnly, null, null, encryptionKey)
         }
 
         /// A link on `server` (`host[:port]`), checked as this class's own
@@ -88,7 +111,9 @@ data class CallLink(
             if (scheme != base.first || host != base.second) return null
             val port = if (uri.port == -1) defaultPort(scheme) else uri.port
             if (port != base.third) return null
-            if (uri.userInfo != null || uri.fragment != null) return null
+            if (uri.userInfo != null) return null
+            // The call's key, percent-decoded (a link may escape `+`, `/` and `=`, as meet writes its own); none for an empty one.
+            val key = uri.rawFragment?.takeIf { it.isNotEmpty() }?.let { raw -> decode(raw)?.takeIf { isKey(it) } ?: return null }
             val path = uri.rawPath ?: return null
             if (!path.startsWith(ROOMS_PATH)) return null
             val room = path.removePrefix(ROOMS_PATH)
@@ -106,7 +131,7 @@ data class CallLink(
             }
             return CallLink(
                 server, scheme, host, port, room, query["startAudioOnly"] == "true",
-                query["callKey"], query["hiveToken"],
+                query["callKey"], query["hiveToken"], key,
             )
         }
 
@@ -180,6 +205,16 @@ data class CallLink(
         /// A Hive key or token: base64, base64url or JWT characters, at most 2 KB.
         private fun isToken(value: String): Boolean =
             value.length in 1..2048 && value.all { isAlphanumeric(it) || it in "-._~+/=" }
+
+        /// The longest key a link may carry: Peel's own are 44 (32 bytes as base64).
+        const val MAX_KEY = 256
+
+        /// A call's key as a link carries it: base64 or base64url characters, at
+        /// most [MAX_KEY]. Peel makes 32 random bytes as base64; LiveKit keys the
+        /// room with the string's UTF-8 bytes, so any such string works, and
+        /// every one of these characters may stand in a fragment unescaped.
+        fun isKey(value: String): Boolean =
+            value.length in 1..MAX_KEY && value.all { isAlphanumeric(it) || it in "-._~+/=" }
 
         private fun isAlphanumeric(c: Char): Boolean = c in '0'..'9' || c in 'A'..'Z' || c in 'a'..'z'
 

@@ -120,6 +120,7 @@
     <string name="misc_call_lost">Se perdió la conexión con la llamada</string>
     <string name="misc_call_rejoin">Volver a unirse</string>
     <string name="misc_call_recorded">Esta llamada se está grabando</string>
+    <string name="misc_call_recording_canvas">Jamie está grabando esta llamada en el lienzo</string>
     <string name="misc_call_close_chat">Cerrar el chat</string>
     <string name="misc_call_chat_hint">Los mensajes de aquí son solo para las personas de esta llamada.</string>
     <string name="misc_call_message">Mensaje</string>

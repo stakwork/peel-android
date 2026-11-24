@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.sphinx.peel.engine.Boxes
 import com.sphinx.peel.engine.CallDevices
 import com.sphinx.peel.engine.CallLink
 import com.sphinx.peel.engine.CallParticipant
@@ -175,7 +176,8 @@ object CallController {
             if (phase !== requested) return@launch
             startService(title)
             try {
-                val ticket = engine.callTicket(link)
+                // An encrypted call: the person's own ticket from a linked box whose Jamie is in it, else the call server's.
+                val ticket = engine.callTicket(link) { name -> Boxes.calls.ticket(link, name) }
                 // Stale by the time the ticket came back (left, or moved on).
                 if (phase !== requested) return@launch
                 // Another device of this account is already on the call: asked before anything connects.

@@ -379,4 +379,7 @@ object Boxes {
 
     /// The boxes as tribes' Jamies ([BoxJamies]): the tribe details' Jamie row, and Jamie's join requests approved.
     val jamies: BoxJamies by lazy { BoxJamies(model, dispatcher = Dispatchers.Main.immediate) }
+
+    /// The boxes in group calls ([BoxCalls]): Jamie in a chat's call menu, and the person's own ticket into a call one is in.
+    val calls: BoxCalls by lazy { BoxCalls(model, dispatcher = Dispatchers.Main.immediate) }
 }

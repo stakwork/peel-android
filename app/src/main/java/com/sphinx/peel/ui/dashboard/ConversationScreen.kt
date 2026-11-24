@@ -122,6 +122,9 @@ import com.sphinx.peel.engine.BOOST_MESSAGE_TYPE
 import com.sphinx.peel.engine.declaredAmountMsat
 import com.sphinx.peel.engine.CALL_MESSAGE_TYPE
 import com.sphinx.peel.engine.CallLink
+import com.sphinx.peel.engine.Boxes
+import com.sphinx.peel.engine.TalkHome
+import com.sphinx.peel.call.CallController
 import com.sphinx.peel.engine.DELETE_MESSAGE_TYPE
 import com.sphinx.peel.engine.DIRECT_PAYMENT_MESSAGE_TYPE
 import com.sphinx.peel.engine.INVOICE_MESSAGE_TYPE
@@ -437,13 +440,24 @@ fun ConversationScreen(
     // holding the actual call above this screen (`MainTabs`) to join it
     // in-app — the same `onJoinCall` a received call card's own Join
     // already calls.
+    //
+    // With a box's Jamie picked in the call menu (docs/phases/56-box-group-calls.md), the call is end-to-end encrypted: a new room
+    // and key, the box asked in first, then the link posted with the key after `#`. A box that can't join posts nothing and says why.
     var startingCall by remember(chat) { mutableStateOf(false) }
     fun startCall(audioOnly: Boolean) {
         scope.launch {
             startingCall = true
             error = null
             try {
-                val row = engine.startCall(chat, isTribe, audioOnly)
+                val made = engine.callServer()?.let { server ->
+                    val box = Boxes.calls.pick(chat, server) ?: return@let null
+                    // One call at a time: never a Jamie waiting in a call this device then won't join.
+                    if (CallController.talk.isOn) throw IllegalStateException(context.str(R.string.call_hang_up_jamie_first))
+                    sendingLabel = context.str(R.string.conv_call_bringing_jamie)
+                    CallLink.new(server, audioOnly, TalkHome.newKey()).also { Boxes.calls.bring(box, it, Boxes.calls.records(chat)) }
+                }
+                sendingLabel = null
+                val row = engine.startCall(chat, isTribe, audioOnly, made)
                 reload()
                 val server = engine.callServer()
                 val link = server?.let { CallLink.inMessage(previewContent(row), isCallType = true, server = it) }
@@ -451,6 +465,7 @@ fun ConversationScreen(
             } catch (e: Exception) {
                 error = e.message ?: context.str(R.string.conv_err_call)
             } finally {
+                sendingLabel = null
                 startingCall = false
             }
         }
@@ -569,8 +584,13 @@ fun ConversationScreen(
             // Only when this account has a call server at all (`callServer()`'s
             // own doc comment: null on a local test server, never configured) -
             // on an account with none, calling is off, not merely unreachable.
-            if (engine.callServer() != null) {
+            val callServer = engine.callServer()
+            if (callServer != null) {
                 var callMenuOpen by remember { mutableStateOf(false) }
+                // Which linked boxes can bring Jamie into a call: asked as the chat opens and again as the menu does.
+                LaunchedEffect(chat, callMenuOpen) {
+                    if (Boxes.model.links.isNotEmpty()) Boxes.calls.read(ifOlderThanMs = if (callMenuOpen) 60_000 else 5 * 60_000)
+                }
                 Box {
                     IconButton(onClick = { callMenuOpen = true }, enabled = !startingCall) {
                         Icon(Icons.Filled.Call, contentDescription = stringResource(R.string.conv_start_call), tint = Theme.colors.text)
@@ -584,6 +604,7 @@ fun ConversationScreen(
                             text = { Text(stringResource(R.string.conv_start_video_call)) },
                             onClick = { callMenuOpen = false; startCall(audioOnly = false) },
                         )
+                        CallJamieItems(chat, callServer)
                     }
                 }
             }
