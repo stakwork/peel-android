@@ -19,7 +19,7 @@ class ScanLabelTest {
     fun `peel links have names`() {
         assertEquals("Open strut.example.com in Peel", label("peel://open?url=https%3A%2F%2Fstrut.example.com"))
         assertEquals("Open in Peel", label("peel://open"))
-        assertEquals("Link a box", label("peel://strut/link?url=https%3A%2F%2Fbox&challenge=abc"))
+        assertEquals("Link a Stadeum server", label("peel://strut/link?url=https%3A%2F%2Fbox&challenge=abc"))
     }
 
     @Test

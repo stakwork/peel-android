@@ -118,7 +118,7 @@ class StadeumTest {
         m.connect("Pixel")
         eventually { m.problem }
         assertEquals(StadeumModel.Status.Off, m.status)
-        assertEquals("It was turned down in Stadeum.", m.problem)
+        assertEquals("It was turned down in Hive.", m.problem)
         m.close()
     }
 

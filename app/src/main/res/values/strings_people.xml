@@ -168,9 +168,9 @@
     <string name="ppl_jamie">Jamie</string>
     <string name="ppl_jamie_answers_from">Answers from</string>
     <string name="ppl_jamie_none">No Jamie</string>
-    <string name="ppl_jamie_pick_helper">Pick one of your boxes: Jamie joins #%1$s and answers @jamie there from that box, using your access to it.</string>
+    <string name="ppl_jamie_pick_helper">Pick one of your Stadeum servers: Jamie joins #%1$s and answers @jamie there from that server, using your access to it.</string>
     <string name="ppl_jamie_answers_helper">Anyone in #%1$s can ask @jamie. Jamie answers from %2$s, using your access to it.</string>
-    <string name="ppl_jamie_asking">Asking your boxes…</string>
+    <string name="ppl_jamie_asking">Asking your Stadeum servers…</string>
     <string name="ppl_jamie_try_again">Try again</string>
     <plurals name="ppl_replies">
         <item quantity="one">%1$d reply</item>

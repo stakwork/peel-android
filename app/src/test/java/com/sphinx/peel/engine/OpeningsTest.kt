@@ -196,7 +196,7 @@ class OpeningsTest {
         // A link beats the reason a handle does not open.
         assertEquals("example.com", where(artifact(AgentHandle.app("@globex/board"), url = "https://example.com/p")))
         val offline = Openings(emptyList(), connected = false)
-        assertEquals("Connect Stadeum in You to open", com.sphinx.peel.ui.apps.ArtifactOpening.whereTo(artifact(AgentHandle.app("@acme/board"))) { offline.opening(it) })
+        assertEquals("Connect Hive in You to open", com.sphinx.peel.ui.apps.ArtifactOpening.whereTo(artifact(AgentHandle.app("@acme/board"))) { offline.opening(it) })
     }
 
     @Test fun `a tap opens its page on its orgs strut, else its link, else nothing`() {

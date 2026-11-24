@@ -53,7 +53,7 @@ class TribeJamieSectionUiTest {
         rule.onNodeWithText("Jamie").assertExists()
         rule.onNodeWithText("No Jamie").assertExists()
         rule.onNodeWithText(
-            "Pick one of your boxes: Jamie joins #Builders and answers @jamie there from that box, using your access to it.",
+            "Pick one of your Stadeum servers: Jamie joins #Builders and answers @jamie there from that server, using your access to it.",
         ).assertExists()
 
         rule.onNodeWithText("Answers from").performClick()

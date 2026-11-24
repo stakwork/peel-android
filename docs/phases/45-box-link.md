@@ -135,6 +135,16 @@ question and the Boxes rows (covered end to end only); the store read on the mai
 `./gradlew testDebugUnitTest` on this Mac's JDK 21: 1287 tests, one failure, `ConversationDateTest.todayShowsTime`, which is JDK 21's
 time format (U+202F before "PM", which the test's `\s` does not replace), not this branch; the project targets JDK 17.
 
+## Words (2026-11-24)
+
+Evan ruled that what a person reads calls a box a **Stadeum server**, and the Hive connection (Peel's "Stadeum" pairing, its
+@hive/@cabal workspaces) **Hive**: You › Stadeum servers ("To link Peel to a Stadeum server, …"), "Link a Stadeum server" for a
+scanned link, the tribe's Jamie row ("Pick one of your Stadeum servers…"), the box errors; You › Hive (Connect Hive, Open Hive,
+"Hive knows your Sphinx account…"), "Connect Hive in You to open", Jamie's tool lines ("Looked at your Hive workspaces"), Hive's
+errors. Spanish follows ("servidores Stadeum", "Conectar Hive"). Code names (`Stadeum`, `StadeumModel`, `Boxes`, `BoxesSection`,
+the string resource names, file names) and log text are unchanged, so "box" and "Stadeum" in code and in these docs still mean what
+they did. Same change as Peel for iOS/Mac.
+
 ## Open
 
 - Not run on a phone (GrapheneOS or otherwise); the QR scanned by a phone's camera opening Peel was not tried (the emulator was

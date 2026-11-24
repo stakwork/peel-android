@@ -224,8 +224,8 @@ object AgentToolTitle {
         "job_get" to "Checked on a job",
         "job_read" to "Read a job's file",
         // Hive workspaces, paired as peers.
-        "strut_list-peers" to "Looked at your Stadeum workspaces",
-        "strut_run-workflow" to "Asked a Stadeum workspace",
+        "strut_list-peers" to "Looked at your Hive workspaces",
+        "strut_run-workflow" to "Asked a Hive workspace",
     )
 
     /// strut's orchestrator's tools, as the bridge names them (`sphinx/unseen` as `sphinx_unseen`), by the tool of Peel's earlier loop that did the

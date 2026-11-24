@@ -157,10 +157,10 @@ class BoxJamies(
         working = working + tribe.key
         problems = problems - tribe.key
         val chosen = all.firstOrNull { it.box.url == id }
-        var couldNot = if (id == TribeJamie.NONE) "remove Jamie" else "add Jamie from ${chosen?.box?.host ?: "that box"}"
+        var couldNot = if (id == TribeJamie.NONE) "remove Jamie" else "add Jamie from ${chosen?.box?.host ?: "that Stadeum server"}"
         try {
             if (id != TribeJamie.NONE) {
-                chosen ?: throw BoxException("Peel is no longer linked to that box.")
+                chosen ?: throw BoxException("Peel is no longer linked to that Stadeum server.")
                 val linked = boxes.asMember(chosen.box) { clientFor(it).link(tribe) }
                 changes++
                 val was = (reads[key(chosen.box)] as? Read.Places)?.places ?: BoxPlaces.NONE

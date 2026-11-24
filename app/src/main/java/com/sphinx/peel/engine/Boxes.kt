@@ -73,7 +73,7 @@ class BoxesModel(
             links = BoxLink.read(store)
         } catch (e: Exception) {
             unreadable = true
-            problem = noted(e, "read your linked boxes")
+            problem = noted(e, "read your linked Stadeum servers")
         }
         keepRenewed()
     }
@@ -99,7 +99,7 @@ class BoxesModel(
         val store = store
         close()
         asking = null
-        try { store?.delete() } catch (e: Exception) { problem = noted(e, "forget your linked boxes") }
+        try { store?.delete() } catch (e: Exception) { problem = noted(e, "forget your linked Stadeum servers") }
     }
 
     // Linking
@@ -147,7 +147,7 @@ class BoxesModel(
             return null
         }
         if (unreadable) {
-            problem = "Peel couldn't read the boxes it keeps, so it won't change them now. Quit and reopen Peel, then link again."
+            problem = "Peel couldn't read the Stadeum servers it keeps, so it won't change them now. Quit and reopen Peel, then link again."
             return null
         }
         offer.problem(now().toEpochMilli(), allowsLoopback)?.let { problem = it; return null }
@@ -176,7 +176,7 @@ class BoxesModel(
     fun forget(box: BoxLink) {
         val store = store ?: return
         if (unreadable) {
-            problem = "Peel couldn't read the boxes it keeps, so it won't change them now. Quit and reopen Peel, then try again."
+            problem = "Peel couldn't read the Stadeum servers it keeps, so it won't change them now. Quit and reopen Peel, then try again."
             return
         }
         val kept = links.filter { it.url != box.url }
@@ -364,7 +364,7 @@ object BoxWords {
     }
 
     /// Where a box is linked from, for the rows.
-    const val HOW_TO_LINK = "To link Peel to a box, choose Link Peel in Connect in its Jamie app."
+    const val HOW_TO_LINK = "To link Peel to a Stadeum server, choose Link Peel in Connect in its Jamie app."
 }
 
 /// The boxes of the open account: one [BoxesModel] (iOS `AppModel.boxes`), beside [Stadeum], never in it. Its work runs on the

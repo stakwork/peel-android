@@ -117,7 +117,7 @@ sections for code that isn't written yet.
   - `engine/ModelSight.kt` (`ModelSight`: which pending pictures the model may see), `AttachmentMetadata.kt` (`vision`, `merged`: `{"peel":{"v":1,"vision":true}}` merged into the time-zone metadata), `AgentAttachments` in `AttachmentRules.kt` (32 MB send limit, 4096 px, the Mac note, `jpegName`),
     `AgentToolTitle`/`AgentRequest.words` for `read_attachment`/`attachments.read` — attachments in the agent's DM (`docs/phases/44-agent-attachments.md`): files are held pending until Send (`ui/dashboard/PendingAttachments.kt`, `PendingTray`), pictures become JPEGs; threads still send on pick.
   - `engine/BoxLink.kt` (`PeelLink`, `BoxChallenge`, `BoxLinkOffer`, `BoxLink`, `BoxClient`/`BoxHttp`), `engine/Boxes.kt` (`BoxesModel`, `Boxes.model`, `BoxWords`), `account/BoxStore.kt` (`KeystoreBoxStore`), `Engine.signBoxLink` — Peel linked to a strut box
-    (`docs/phases/45-box-link.md`, port of peel#574): `peel://strut/link`, the box list beside Hive's pairing (never in it), renewal, You › Boxes; a box's page is the one page host's.
+    (`docs/phases/45-box-link.md`, port of peel#574): `peel://strut/link`, the box list beside Hive's pairing (never in it), renewal, You › Stadeum servers; a box's page is the one page host's.
   - `engine/BoxPlaces.kt` (`BoxPlaces`, `PlacesClient`), `engine/BoxJamies.kt` (`TribeJamie`, `BoxJamies`, `Boxes.jamies`), `BoxesModel.asMember`,
     `Engine.approveWaitingMember`/`incoming`, `ui/details/TribeJamieSection.kt` — Jamie in a tribe from a box (`docs/phases/54-jamie-from-a-box.md`,
     strut's jamie-in-tribes item 7): the owner's Jamie row picks a linked box (`/people/places`), Jamie's join approved by the box's key.

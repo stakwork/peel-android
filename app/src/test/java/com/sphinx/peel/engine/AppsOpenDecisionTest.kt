@@ -32,9 +32,9 @@ class AppsOpenDecisionTest {
     }
 
     @Test fun `the empty words`() {
-        assertEquals("Connect Stadeum under You to open the apps your workspaces pin.", AppsOpenDecision.emptyText(true, emptyList()))
-        assertEquals("Connect Stadeum under You to open the apps your workspaces pin.", AppsOpenDecision.emptyText(true, listOf("Acme")))
-        assertEquals("Apps your Stadeum workspaces pin show here.", AppsOpenDecision.emptyText(false, emptyList()))
+        assertEquals("Connect Hive under You to open the apps your workspaces pin.", AppsOpenDecision.emptyText(true, emptyList()))
+        assertEquals("Connect Hive under You to open the apps your workspaces pin.", AppsOpenDecision.emptyText(true, listOf("Acme")))
+        assertEquals("Apps your Hive workspaces pin show here.", AppsOpenDecision.emptyText(false, emptyList()))
         assertEquals("Acme, Beta did not answer. Pull to try again.", AppsOpenDecision.emptyText(false, listOf("Acme", "Beta")))
         assertEquals("Couldn't read Acme, Beta just now. Pull to try again.", AppsOpenDecision.unreadNote(listOf("Acme", "Beta")))
     }

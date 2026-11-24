@@ -150,7 +150,7 @@
     <string name="scan_no_app">No app can open that.</string>
     <string name="scan_label_open_peel">Open in Peel</string>
     <string name="scan_label_open_host_peel">Open %1$s in Peel</string>
-    <string name="scan_label_link_box">Link a box</string>
+    <string name="scan_label_link_box">Link a Stadeum server</string>
     <string name="scan_label_invite">Sphinx invite</string>
     <string name="scan_label_contact">Contact</string>
     <string name="scan_label_tribe">Tribe</string>

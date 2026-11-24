@@ -81,7 +81,7 @@ class AgentArtifactLinesUiTest {
 
     @Test fun `an app with no workspace connected shows why and does not open`() {
         show(listOf(app), openings = Openings(emptyList(), connected = false))
-        rule.onNodeWithText("· Connect Stadeum in You to open").assertExists()
+        rule.onNodeWithText("· Connect Hive in You to open").assertExists()
         rule.onNodeWithText("Open").assertDoesNotExist()
         rule.onNodeWithText("App: Board").performClick()
         assertTrue(opened.isEmpty() && links.isEmpty())
