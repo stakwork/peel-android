@@ -316,6 +316,8 @@ fun MainTabs(
             announce = { toast.show(it, com.sphinx.peel.ui.toast.ToastType.Warning) },
             system = { com.sphinx.peel.ui.apps.openInBrowser(context, it) },
             tribe = { openTribe(it) },
+            // As an external `peel://open` link: not invited, so the page asks for sign-in with Peel's sheet.
+            publicApp = { text -> com.sphinx.peel.engine.PublicAppLink.parse(text)?.let { pages.open(it, ready = true); true } ?: false },
         )
         com.sphinx.peel.ui.apps.LinkOpener { handler.open(it) }
     }

@@ -74,8 +74,12 @@ class AppLinkHandler(
     private val system: (String) -> Unit,
     /// A tribe link (`TribeLinks`): taken inside Peel (true) and never handed to the system.
     private val tribe: (String) -> Boolean = { false },
+    /// A public app's link (`peel://open?url=…`, [PublicAppLink.parse]): taken inside Peel (true), as an external one is, and never
+    /// handed to the system.
+    private val publicApp: (String) -> Boolean = { false },
 ) {
     fun open(url: String) {
+        if (PublicAppLink.parse(url) != null && publicApp(url)) return
         if (TribeLinks.parse(url) != null && tribe(url)) return
         when (val tapped = tap(url)) {
             is LinkTap.Open -> (reopen(tapped.page) as? Opening.Page)?.let { openPage(it.request) }

@@ -184,7 +184,7 @@ internal fun attributed(
                     // Isolated left to right, so a direction override in the
                     // text before it cannot turn the host around.
                     withStyle(SpanStyle(color = palette.secondaryText)) {
-                        append(" (\u2066${MessageMarkup.host(kind.url) ?: kind.url}\u2069)")
+                        append(" (\u2066${MessageMarkup.destination(kind.url) ?: kind.url}\u2069)")
                     }
                 }
             }

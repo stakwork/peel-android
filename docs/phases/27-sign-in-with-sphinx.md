@@ -107,3 +107,12 @@ JVM: `VisitorSignInTest` (challenge, seller, request vectors from strut), `Publi
 `StorageWalletConnectionTest`, `WalletProtocolTest`, `TextLineTest`, `SeedDerivationTest` (JDK PBKDF2), `PublicPageRouterTest`.
 `@Ignore`d (needs the native library): the signature vector in `VisitorSignatureVectorTest` and iOS's engine signing test
 (`EngineSignVisitorTest`: domain keys for site.com / app.example.com, root key and signature shape).
+
+## Journal: `peel://open` links in a chat message
+A `peel://open?url=<address>` link in a message (bare or `[text](…)`) is tappable and opens the public app in the in-app page view,
+never the system browser (iOS `publicAppLinks`). `MessageMarkup.publicAppLinks` finds them (kept only when `PublicAppLink.parse`
+accepts, which has iOS's rules unchanged) and adds them with tribe links before the named-link pass; they win over an https address
+inside them. A bare one reads "Open <app> on <host>" (`linkLabel`); a named one shows `MessageMarkup.destination` beside it (the
+app's host, a tribe's server, else the address's host). `AppLinkHandler.publicApp` (wired in `MainTabs` to `PublicPageRouter.open`,
+`invited = false`) takes it before the system. Grant policy unchanged: only an invite-opened page is granted, so a chat-opened link
+shows Peel's sign-in sheet. Tested in `MessageMarkupTest` and `TribeLinksTest`. 
