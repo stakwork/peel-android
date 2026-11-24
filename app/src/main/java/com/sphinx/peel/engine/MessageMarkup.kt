@@ -246,8 +246,8 @@ object MessageMarkup {
     /// links and mentions, in order and never overlapping. A backtick inside a
     /// link is part of the link; a link or mention inside code is code.
     fun spans(text: String): List<Span> {
-        var links = withTribeLinks(text, findLinks(text))
-        // A named link opens only an address read as an https link, the whole
+        var links = withOwnLinks(text, findLinks(text))
+        // A named link opens only an address read as a link above, the whole
         // of it, so it follows the same rules as one typed out.
         if (links.isNotEmpty() && text.contains("](")) {
             var next = 0
@@ -360,13 +360,40 @@ object MessageMarkup {
         return links
     }
 
-    /// [links] with the tribe links in `text` (`sphinx.chat://?action=tribeV2…`, `peel://tribe?…`: [TribeLinks]) added, in order. Their
-    /// url is the text as written; the app's link opener routes them inside Peel, never the system's.
-    private fun withTribeLinks(text: String, links: List<Span>): List<Span> {
-        val tribes = TribeLinks.inText(text)
-            .filter { r -> links.none { it.start <= r.last && r.first < it.end } }
+    /// `peel://open?…`, not glued to a word before it, up to white space or a character no address holds.
+    private val publicAppAddress = Regex("(?<![A-Za-z0-9])peel://open\\?[^\\s<>\"\\[\\]{}|\\\\^]+", RegexOption.IGNORE_CASE)
+
+    /// Where public-app links (`peel://open?url=<address>`) sit in `text`: trimmed as tribe links are, and kept only when
+    /// [PublicAppLink.parse] accepts them; anything else stays text (iOS `publicAppLinks`).
+    internal fun publicAppLinks(text: String): List<IntRange> {
+        if (!text.contains("://")) return emptyList()
+        val found = ArrayList<IntRange>()
+        for (m in publicAppAddress.findAll(text)) {
+            val start = m.range.first
+            var end = m.range.last + 1
+            while (end > start) {
+                val c = text[end - 1]
+                val drop = when {
+                    c in ".,;:!?'" || c in emphasisMarks -> true
+                    c == ')' -> text.substring(start, end).let { s -> s.count { it == ')' } > s.count { it == '(' } }
+                    else -> false
+                }
+                if (!drop) break
+                end--
+            }
+            if (PublicAppLink.parse(text.substring(start, end)) != null) found.add(start until end)
+        }
+        return found
+    }
+
+    /// [links] with Peel's own links in `text` added, in order: tribe links (`sphinx.chat://?action=tribeV2…`, `peel://tribe?…`:
+    /// [TribeLinks]) and public-app links (`peel://open?…`). Their url is the text as written; the app's link opener routes them
+    /// inside Peel, never the system's. They win over an https address inside them.
+    private fun withOwnLinks(text: String, links: List<Span>): List<Span> {
+        val own = (TribeLinks.inText(text) + publicAppLinks(text)).sortedBy { it.first }
             .map { Span(Kind.Link(text.substring(it.first, it.last + 1)), it.first, it.last + 1, text.substring(it.first, it.last + 1)) }
-        return if (tribes.isEmpty()) links else (links + tribes).sortedBy { it.start }
+        if (own.isEmpty()) return links
+        return (own + links.filter { l -> own.none { it.start < l.end && l.start < it.end } }).sortedBy { it.start }
     }
 
     /// The URL for what follows `https://`, or null when it is not one we open.
@@ -395,11 +422,21 @@ object MessageMarkup {
         return name.takeIf { it.isNotEmpty() }
     }
 
+    /// Where a link goes, as the person reads it beside a named link: the host of a public app's `peel://open` link (its address's,
+    /// never "open"), the tribes server of a tribe link, else the address's own host ([host]). Null when it names none.
+    fun destination(url: String): String? {
+        PublicAppLink.parse(url)?.let { return it.host }
+        TribeLinks.parse(url)?.host?.let { return it }
+        return host(url)
+    }
+
     /// How a link reads in a message: the whole address as written, scheme and
     /// all, never shortened, so selecting it copies a working link. The host
     /// is never disguised: one written in another script shows as the address
     /// names it (`host`).
     fun linkLabel(text: String, url: String): String {
+        // A public app's link carries its address percent-encoded: said as what it opens, the host never disguised.
+        PublicAppLink.parse(url)?.let { return it.app?.let { app -> "Open $app on ${it.host}" } ?: "Open ${it.host}" }
         val at = text.indexOf("://")
         val start = if (at >= 0) at + 3 else 0
         val hostEnd = text.indexOfFirst(start) { it in "/?#" }.let { if (it < 0) text.length else it }

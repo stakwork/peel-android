@@ -278,4 +278,52 @@ class MessageMarkupTest {
         assertTrue(!Mentions.mentions("@Tom_Smith_2", me))
         assertTrue(!Mentions.mentions("mail@Tom_Smith", me))
     }
+
+    private val tasks = "peel://open?url=https%3A%2F%2Fstrut.stadeum.stakwork.ai%2F%3Fapp%3Dstrut%2Fworker"
+
+    @Test
+    fun `a public app link is a link labelled by what it opens`() {
+        assertEquals(listOf(Triple("link", tasks, tasks)), spans(tasks))
+        assertEquals(listOf("Open ", "$tasks[link $tasks]", " now"), shown("Open $tasks now"))
+        assertEquals("Open strut/worker on strut.stadeum.stakwork.ai", MessageMarkup.linkLabel(tasks, tasks))
+        val plain = "peel://open?url=https%3A%2F%2Fa.co%2F"
+        assertEquals("Open a.co", MessageMarkup.linkLabel(plain, plain))
+        val app = PublicAppLink.parse(tasks)!!
+        assertEquals("strut/worker", app.app)
+        assertEquals("strut.stadeum.stakwork.ai", app.host)
+        assertTrue(PublicAppLink.isAppName("strut/worker"))
+    }
+
+    @Test
+    fun `a public app link loses its trailing punctuation`() {
+        assertEquals(listOf("(", "$tasks[link $tasks]", ")."), shown("($tasks)."))
+        assertEquals(listOf("$tasks[b link $tasks]"), shown("**$tasks**"))
+        assertEquals(3, shown("see PEEL://OPEN?url=https%3A%2F%2Fa.co%2F, ok").size)
+    }
+
+    @Test
+    fun `a named public app link`() {
+        assertEquals(listOf("Open Tasks[named $tasks]", " now"), shown("[Open Tasks]($tasks) now"))
+    }
+
+    @Test
+    fun `a named link shows where it goes`() {
+        assertEquals("strut.stadeum.stakwork.ai", MessageMarkup.destination(tasks))
+        assertEquals("a.co", MessageMarkup.destination("https://a.co/x"))
+        val tribe = "peel://tribe?pubkey=${"ab".repeat(33)}&host=tribes.sphinx.chat"
+        assertEquals("tribes.sphinx.chat", MessageMarkup.destination(tribe))
+    }
+
+    @Test
+    fun `a public app link Peel would not open stays text`() {
+        for (text in listOf(
+            "peel://open?url=http%3A%2F%2Fa.co%2F", "peel://open?url=https%3A%2F%2Fa.co%2F&x=1",
+            "peel://open?url=https%3A%2F%2Fa.co%2F%3Fapp%3D..%2Fx", "peel://open?x=1",
+            "peel://open/path?url=https%3A%2F%2Fa.co", "[x](peel://open?url=http%3A%2F%2Fa.co%2F)",
+            "xpeel://open?url=https%3A%2F%2Fa.co%2F",
+        )) {
+            assertTrue(text, MessageMarkup.inlines(text).all { it.kind == null })
+            assertEquals(text, listOf(text), shown(text))
+        }
+    }
 }

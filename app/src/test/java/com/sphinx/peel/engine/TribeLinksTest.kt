@@ -117,4 +117,19 @@ class TribeLinksTest {
         assertEquals(listOf(official, peel), taken)
         assertEquals(listOf("https://a.co"), system)
     }
+
+    @Test
+    fun `the link handler takes a public app link inside the app and never hands it to the system`() {
+        val taken = ArrayList<String>()
+        val system = ArrayList<String>()
+        val handler = AppLinkHandler(
+            tap = { LinkTap.NotOurs }, reopen = { Opening.OnMac }, openPage = {}, announce = {},
+            system = { system.add(it) }, publicApp = { taken.add(it); true },
+        )
+        val tasks = "peel://open?url=https%3A%2F%2Fstrut.stadeum.stakwork.ai%2F%3Fapp%3Dstrut%2Fworker"
+        handler.open(tasks)
+        handler.open("peel://open?url=http%3A%2F%2Fa.co%2F")
+        assertEquals(listOf(tasks), taken)
+        assertEquals(listOf("peel://open?url=http%3A%2F%2Fa.co%2F"), system)
+    }
 }
