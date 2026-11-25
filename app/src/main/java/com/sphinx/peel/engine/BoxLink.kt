@@ -155,8 +155,10 @@ data class BoxLink(
     /// When the token was last made: at linking, or renewed.
     val renewedAt: Instant,
 ) {
-    /// The box's host as the person reads it.
+    /// The box's host, its full address: for a linked server, shown only under [shortName] in You › Stadeum servers.
     val host: String get() = Seller.host(url) ?: url
+    /// The name a person reads for this server everywhere else ([shortName] of its address).
+    val shortName: String get() = shortName(url)
     /// Who Peel is linked as there: their name, else their actor.
     val person: String get() = person(name, actor) ?: ""
     /// The id its page carries ([home]), which says whose page it is ([BoxesModel.shows]).
@@ -182,6 +184,16 @@ data class BoxLink(
         const val RENEW_EVERY_MS = 24L * 3600 * 1000
         /// iOS `TextLine.maxName`.
         private const val MAX_NAME = 60
+
+        /// A Stadeum server's short name (iOS `BoxLink.shortName`), from its address alone, nothing stored or asked: the host without
+        /// a leading `strut.`, then its first label. `strut.stadeum.stakwork.ai` is "stadeum", `strut.stadeum1.sphinx.chat`
+        /// "stadeum1", `jamie.example.com` "jamie". An IP address stays whole (it has no labels to cut). strut's `GET /self` label
+        /// would come first once a box sets one, but strut sets none yet and Peel reads nothing per box that would carry it.
+        fun shortName(url: String): String {
+            val host = Seller.host(url) ?: return url
+            if (':' in host || host.all { it.isDigit() || it == '.' }) return host
+            return host.removePrefix("strut.").substringBefore('.').ifEmpty { host }
+        }
 
         /// A member as the person reads them: their name, else their actor, cleaned.
         fun person(name: String?, actor: String?): String? =
@@ -249,7 +261,7 @@ class OkHttpBox(
             client.newBuilder().callTimeout(timeoutSeconds, TimeUnit.SECONDS).build().newCall(builder.build()).execute().use { r ->
                 val source = r.body?.source()
                 val bytes = source?.let { it.request(limit + 1L); it.buffer.snapshot().toByteArray() } ?: ByteArray(0)
-                if (bytes.size > limit) throw BoxException("${Seller.host(url) ?: "The Stadeum server"}'s answer was too large.")
+                if (bytes.size > limit) throw BoxException("${Seller.host(url)?.let { BoxLink.shortName(url) } ?: "The Stadeum server"}'s answer was too large.")
                 BoxResponse(r.code, String(bytes, Charsets.UTF_8))
             }
         }
@@ -258,7 +270,10 @@ class OkHttpBox(
 /// strut's three routes for Peel on a box (strut's specs/API.md §13.6; iOS `BoxClient`), none with a credential but the
 /// signature, and a token's check on use.
 class BoxClient(val box: String, private val http: BoxHttp = OkHttpBox()) {
+    /// The box's host: what a challenge must name, and how linking (before anything is kept) names the box.
     val host: String get() = Seller.host(box) ?: "the Stadeum server"
+    /// How a renewal or the token check names the box, already kept: its short name.
+    private val name: String get() = Seller.host(box)?.let { BoxLink.shortName(box) } ?: "the Stadeum server"
 
     /// What a link or a renewal answers: the member and their token. Never described with its token.
     class Answer(val actor: String, val name: String?, val token: String, val exp: Instant) {
@@ -292,9 +307,9 @@ class BoxClient(val box: String, private val http: BoxHttp = OkHttpBox()) {
         val r = request("GET", "people/challenge", null)
         if (r.status != 200) throw failure(r.status, r.body, linking = false)
         val challenge = (json(r.body)?.opt("challenge") as? String)?.let(BoxChallenge::parse)
-            ?: throw BoxException("$host's answer for renewing Peel's link could not be read.")
+            ?: throw BoxException("$name's answer for renewing Peel's link could not be read.")
         if (challenge.host != host) {
-            throw BoxException("$host gave a challenge for ${TextLine.clean(challenge.host, 80)}, so Peel didn't sign it.")
+            throw BoxException("$name gave a challenge for ${TextLine.clean(challenge.host, 80)}, so Peel didn't sign it.")
         }
         val signed = sign(challenge)
         val renewed = request(
@@ -302,7 +317,7 @@ class BoxClient(val box: String, private val http: BoxHttp = OkHttpBox()) {
         )
         if (renewed.status == 403) return Renewal.Unlinked
         if (renewed.status != 200) throw failure(renewed.status, renewed.body, linking = false)
-        val answer = answer(renewed.body, now, host)
+        val answer = answer(renewed.body, now, name)
         return Renewal.Renewed(link.copy(actor = answer.actor, name = answer.name, token = answer.token, exp = answer.exp, renewedAt = now))
     }
 
@@ -323,14 +338,15 @@ class BoxClient(val box: String, private val http: BoxHttp = OkHttpBox()) {
         status: Int, body: String, linking: Boolean, couldNot: String = if (linking) "link Peel" else "renew Peel's link",
     ): BoxException {
         val said = (json(body)?.opt("error") as? String)?.let { TextLine.clean(it, 200) }
+        val who = if (linking) host else name
         return BoxException(
             when {
-                status == 401 && linking -> "$host didn't take the link: it ran out or was already used. Choose Link Peel in Connect there again."
-                status == 401 -> "$host didn't take Peel's signature."
-                status == 409 -> "Your Sphinx account is already linked to someone else on $host. They remove it in Connect there first."
-                status == 413 -> "$host refused the link as too large."
-                status == 429 -> "$host is busy. Try again in a minute."
-                else -> "$host could not $couldNot: ${said ?: "HTTP $status"}."
+                status == 401 && linking -> "$who didn't take the link: it ran out or was already used. Choose Link Peel in Connect there again."
+                status == 401 -> "$who didn't take Peel's signature."
+                status == 409 -> "Your Sphinx account is already linked to someone else on $who. They remove it in Connect there first."
+                status == 413 -> "$who refused the link as too large."
+                status == 429 -> "$who is busy. Try again in a minute."
+                else -> "$who could not $couldNot: ${said ?: "HTTP $status"}."
             },
         )
     }

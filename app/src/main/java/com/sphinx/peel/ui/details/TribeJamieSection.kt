@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -36,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.R
 import com.sphinx.peel.engine.BoxJamies
@@ -112,30 +112,34 @@ private fun AnswersFrom(options: List<TribeJamie.Option>, pick: String, working:
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // The label keeps its one line and its width; the server's name takes what is left and is cut short instead.
             Text(
                 stringResource(R.string.ppl_jamie_answers_from),
                 style = MaterialTheme.typography.bodyMedium,
                 color = Theme.colors.text,
-                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                softWrap = false,
             )
-            if (working) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-            }
+            Spacer(Modifier.width(12.dp))
             Text(
                 picked,
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (working) Theme.colors.secondaryText else Theme.colors.text,
                 textAlign = TextAlign.End,
                 maxLines = 1,
-                modifier = Modifier.widthIn(max = 200.dp),
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
+            if (working) {
+                Spacer(Modifier.width(8.dp))
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
             Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = Theme.colors.secondaryText)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option.name) },
+                    text = { Text(option.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     trailingIcon = if (option.id == pick) ({ Icon(Icons.Filled.Check, contentDescription = null) }) else null,
                     onClick = {
                         open = false

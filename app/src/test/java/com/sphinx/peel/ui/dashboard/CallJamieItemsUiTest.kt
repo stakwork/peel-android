@@ -29,8 +29,8 @@ class CallJamieItemsUiTest {
     @get:Rule val rule = createComposeRule()
 
     private val callServer = "chat.sphinx.chat"
-    private val a = BoxFixture.box("https://a.example.com")
-    private val b = BoxFixture.box("https://bee.example.com")
+    private val a = BoxFixture.box("https://strut.alpha.example.com")
+    private val b = BoxFixture.box("https://strut.bee.example.com")
 
     private fun show(calls: BoxCalls) = rule.setContent { PeelTheme { Column { CallJamieItems("chat1", callServer, calls) } } }
 
@@ -47,12 +47,12 @@ class CallJamieItemsUiTest {
         runBlocking { calls.read() }
         show(calls)
         rule.onNodeWithText("Jamie").assertExists()
-        rule.onNodeWithText("bee.example.com").assertDoesNotExist()
+        rule.onNodeWithText("bee").assertDoesNotExist()
         rule.onNodeWithText("No Jamie").assertIsSelected()
         rule.onNodeWithText("Record on the canvas").assertDoesNotExist()
 
-        rule.onNodeWithText("a.example.com").performClick()
-        rule.onNodeWithText("a.example.com").assertIsSelected()
+        rule.onNodeWithText("alpha").performClick()
+        rule.onNodeWithText("alpha").assertIsSelected()
         assertEquals(a.url, calls.pick("chat1", callServer)?.url)
         rule.onNodeWithText("Record on the canvas").assertIsOff().performClick()
         rule.onNodeWithText("Record on the canvas").assertIsOn()

@@ -17,8 +17,8 @@ import org.robolectric.RobolectricTestRunner
 /// asks to join a tribe the person linked there. Against stand-in struts ([PlacesStrut]).
 @RunWith(RobolectricTestRunner::class)
 class BoxJamiesTest {
-    private val a = BoxFixture.box("https://a.example.com")
-    private val b = BoxFixture.box("https://bee.example.com")
+    private val a = BoxFixture.box("https://strut.alpha.example.com")
+    private val b = BoxFixture.box("https://strut.bee.example.com")
     private val tribe = TribePlace(PlacesStrut.TRIBE, PlacesStrut.LINK, "Builders")
     private val sleeps = mutableListOf<Long>()
 
@@ -40,7 +40,7 @@ class BoxJamiesTest {
 
         jamies.read()
         assertTrue(TribeJamie.shows(jamies.boxes(), tribe.key))
-        assertEquals(listOf("a.example.com", "No Jamie"), options(jamies))
+        assertEquals(listOf("alpha", "No Jamie"), options(jamies))
         assertEquals(TribeJamie.NONE, TribeJamie.pick(jamies.boxes(), tribe.key))
         assertEquals(listOf("" to "No Jamie"), TribeJamie.options(jamies.boxes(), tribe.key, "No Jamie").drop(1).map { it.id to it.name })
 
@@ -64,7 +64,7 @@ class BoxJamiesTest {
         strutA.linkAs(PlacesStrut.ADA, tribe.key)
         jamies.read()
         assertTrue(TribeJamie.shows(jamies.boxes(), tribe.key))
-        assertEquals(listOf("a.example.com", "No Jamie"), options(jamies))
+        assertEquals(listOf("alpha", "No Jamie"), options(jamies))
         assertEquals(a.url, TribeJamie.pick(jamies.boxes(), tribe.key))
     }
 
@@ -82,7 +82,7 @@ class BoxJamiesTest {
         )
         failing.read()
         val only = failing.boxes().single()
-        assertEquals("Could not read which tribes have Jamie on bee.example.com. bee.example.com could not read its tribes: down.", only.problem)
+        assertEquals("Could not read which tribes have Jamie on bee. Bee could not read its tribes: down.", only.problem)
         assertTrue(TribeJamie.shows(failing.boxes(), tribe.key))
         assertNull(TribeJamie.pick(failing.boxes(), tribe.key))
         assertTrue(TribeJamie.options(failing.boxes(), tribe.key, "No Jamie").isEmpty())
@@ -91,7 +91,7 @@ class BoxJamiesTest {
         strutA.linkAs(PlacesStrut.ADA, tribe.key)
         jamies.read()
         val mixed = jamies.boxes().map { if (it.box.url == b.url) it.copy(read = BoxJamies.Read.Failed("down", 0)) else it }
-        assertEquals(listOf("a.example.com", "No Jamie"), TribeJamie.options(mixed, tribe.key, "No Jamie").map { it.name })
+        assertEquals(listOf("alpha", "No Jamie"), TribeJamie.options(mixed, tribe.key, "No Jamie").map { it.name })
         assertEquals(a.url, TribeJamie.pick(mixed, tribe.key))
     }
 
@@ -136,7 +136,7 @@ class BoxJamiesTest {
         jamies.read()
         jamies.pick(a.url, tribe)
         assertEquals(
-            "Could not add Jamie from a.example.com. Someone else on a.example.com already added Jamie to this tribe.",
+            "Could not add Jamie from alpha. Someone else on alpha already added Jamie to this tribe.",
             jamies.problems[tribe.key],
         )
         assertEquals(TribeJamie.NONE, TribeJamie.pick(jamies.boxes(), tribe.key))
@@ -144,7 +144,7 @@ class BoxJamiesTest {
         strutA.linkers.clear()
         strutA.jamie = null
         jamies.pick(a.url, tribe)
-        assertEquals("Could not add Jamie from a.example.com. a.example.com isn't ready for tribes yet.", jamies.problems[tribe.key])
+        assertEquals("Could not add Jamie from alpha. Alpha isn't ready for tribes yet.", jamies.problems[tribe.key])
 
         // A pick that goes through clears it.
         strutA.jamie = PlacesStrut.JAMIE

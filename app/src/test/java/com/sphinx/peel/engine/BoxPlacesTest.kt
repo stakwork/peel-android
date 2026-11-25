@@ -20,7 +20,7 @@ import org.robolectric.RobolectricTestRunner
 /// `src/createStrut.ts` does at strut main (#787).
 @RunWith(RobolectricTestRunner::class)
 class BoxPlacesTest {
-    private val box = BoxFixture.box("https://box.example.com")
+    private val box = BoxFixture.box("https://strut.stadeum.example.com")
     private val tribe = TribePlace(PlacesStrut.TRIBE, PlacesStrut.LINK, "Builders")
 
     private fun <T> refused(block: suspend () -> T): BoxException = try {
@@ -43,7 +43,7 @@ class BoxPlacesTest {
         assertNotNull(places.place(tribe.key.uppercase()))
         assertNull(places.place("02" + "00".repeat(32)))
         val call = strut.http.calls.single()
-        assertEquals("GET" to "https://box.example.com/people/places", call.method to call.url)
+        assertEquals("GET" to "https://strut.stadeum.example.com/people/places", call.method to call.url)
         assertEquals(box.token, call.bearer)
     }
 
@@ -62,10 +62,10 @@ class BoxPlacesTest {
         assertTrue(refused { PlacesClient(box, expired).read() } is BoxTokenRefused)
 
         val garbled = FakeBox { _, _, _, _ -> BoxResponse(200, "<html>") }
-        assertEquals("box.example.com's answer about Jamie could not be read.", refused { PlacesClient(box, garbled).read() }.message)
+        assertEquals("stadeum's answer about Jamie could not be read.", refused { PlacesClient(box, garbled).read() }.message)
 
         val down = FakeBox { _, _, _, _ -> BoxResponse(500, """{"error":"it broke"}""") }
-        assertEquals("box.example.com could not read its tribes: it broke.", refused { PlacesClient(box, down).read() }.message)
+        assertEquals("stadeum could not read its tribes: it broke.", refused { PlacesClient(box, down).read() }.message)
     }
 
     /// A pick posts the tribe for the Sphinx host, its key, link and name; the answer is the place and the box's Jamie.
@@ -76,7 +76,7 @@ class BoxPlacesTest {
         assertEquals(tribe.key, linked.place.key)
         assertEquals("sphinx:${PlacesStrut.ADA}", linked.place.account)
         val call = strut.http.calls.single()
-        assertEquals("POST" to "https://box.example.com/people/places", call.method to call.url)
+        assertEquals("POST" to "https://strut.stadeum.example.com/people/places", call.method to call.url)
         assertEquals(box.token, call.bearer)
         val body = JSONObject(call.json!!)
         assertEquals(listOf("sphinx", tribe.key, tribe.link, "Builders"), listOf("host", "key", "link", "name").map { body.getString(it) })
@@ -92,29 +92,29 @@ class BoxPlacesTest {
     @Test fun `a link's refusals in words`() {
         val taken = PlacesStrut(box).apply { linkAs("02" + "cd".repeat(32), tribe.key) }
         assertEquals(
-            "Someone else on box.example.com already added Jamie to this tribe.",
+            "Someone else on stadeum already added Jamie to this tribe.",
             refused { PlacesClient(box, taken.http).link(tribe) }.message,
         )
         val notReady = PlacesStrut(box, jamie = null)
-        assertEquals("box.example.com isn't ready for tribes yet.", refused { PlacesClient(box, notReady.http).link(tribe) }.message)
+        assertEquals("stadeum isn't ready for tribes yet.", refused { PlacesClient(box, notReady.http).link(tribe) }.message)
         // A 404 that is not strut's no_host: a strut from before places.
         val old = FakeBox { _, _, _, _ -> BoxResponse(404, "{}") }
-        assertEquals("box.example.com could not add Jamie: HTTP 404.", refused { PlacesClient(box, old).link(tribe) }.message)
+        assertEquals("stadeum could not add Jamie: HTTP 404.", refused { PlacesClient(box, old).link(tribe) }.message)
         val bad = FakeBox { _, _, _, _ -> BoxResponse(400, """{"error":"key: no spaces"}""") }
-        assertEquals("box.example.com could not add Jamie: key: no spaces.", refused { PlacesClient(box, bad).link(tribe) }.message)
+        assertEquals("stadeum could not add Jamie: key: no spaces.", refused { PlacesClient(box, bad).link(tribe) }.message)
         val busy = FakeBox { _, _, _, _ -> BoxResponse(429, "{}") }
-        assertEquals("box.example.com is busy. Try again in a minute.", refused { PlacesClient(box, busy).link(tribe) }.message)
+        assertEquals("stadeum is busy. Try again in a minute.", refused { PlacesClient(box, busy).link(tribe) }.message)
         val expired = FakeBox { _, _, _, _ -> BoxResponse(401, "{}") }
         assertTrue(refused { PlacesClient(box, expired).link(tribe) } is BoxTokenRefused)
         // An answer for another tribe, or without the host's key, is not taken.
         val wrong = FakeBox { _, _, _, _ ->
             BoxResponse(200, JSONObject().put("place", PlacesStrut.place("02" + "00".repeat(32), PlacesStrut.ADA)).put("account", "sphinx:${PlacesStrut.JAMIE}").toString())
         }
-        assertEquals("box.example.com's answer about Jamie could not be read.", refused { PlacesClient(box, wrong).link(tribe) }.message)
+        assertEquals("stadeum's answer about Jamie could not be read.", refused { PlacesClient(box, wrong).link(tribe) }.message)
         val keyless = FakeBox { _, _, _, _ ->
             BoxResponse(200, JSONObject().put("place", PlacesStrut.place(tribe.key, PlacesStrut.ADA)).put("account", "sphinx:nope").toString())
         }
-        assertEquals("box.example.com's answer about Jamie could not be read.", refused { PlacesClient(box, keyless).link(tribe) }.message)
+        assertEquals("stadeum's answer about Jamie could not be read.", refused { PlacesClient(box, keyless).link(tribe) }.message)
     }
 
     /// No Jamie deletes the person's place by its key; one that was not theirs is no removal.
@@ -123,7 +123,7 @@ class BoxPlacesTest {
         strut.linkAs(PlacesStrut.ADA, tribe.key)
         assertTrue(runBlocking { PlacesClient(box, strut.http).unlink(tribe.key) })
         val call = strut.http.calls.single()
-        assertEquals("DELETE" to "https://box.example.com/people/places/sphinx/${tribe.key}", call.method to call.url)
+        assertEquals("DELETE" to "https://strut.stadeum.example.com/people/places/sphinx/${tribe.key}", call.method to call.url)
         assertEquals(box.token, call.bearer)
         assertFalse(runBlocking { PlacesClient(box, strut.http).unlink(tribe.key) })
         // A key is one path segment, whatever it holds.

@@ -25,7 +25,7 @@ import org.robolectric.RobolectricTestRunner
 class TribeJamieSectionUiTest {
     @get:Rule val rule = createComposeRule()
 
-    private val box = BoxFixture.box("https://a.example.com")
+    private val box = BoxFixture.box("https://strut.alpha.example.com")
     private val tribe = TribePlace(PlacesStrut.TRIBE, PlacesStrut.LINK, "Builders")
     private val approved = mutableListOf<String>()
     private val approver = JamieApprover { _, key -> approved += key; true }
@@ -57,10 +57,10 @@ class TribeJamieSectionUiTest {
         ).assertExists()
 
         rule.onNodeWithText("Answers from").performClick()
-        rule.onNodeWithText("a.example.com").performClick()
+        rule.onNodeWithText("alpha").performClick()
         rule.waitForIdle()
         assertEquals(PlacesStrut.ADA, strut.linkers[tribe.key])
-        rule.onNodeWithText("Anyone in #Builders can ask @jamie. Jamie answers from a.example.com, using your access to it.").assertExists()
+        rule.onNodeWithText("Anyone in #Builders can ask @jamie. Jamie answers from alpha, using your access to it.").assertExists()
     }
 
     /// A refusal is said in place of the line under the row.
@@ -68,10 +68,10 @@ class TribeJamieSectionUiTest {
         val strut = PlacesStrut(box).apply { linkAs("02" + "cd".repeat(32), PlacesStrut.TRIBE) }
         show(boxJamies(box to strut))
         rule.onNodeWithText("Answers from").performClick()
-        rule.onNodeWithText("a.example.com").performClick()
+        rule.onNodeWithText("alpha").performClick()
         rule.waitForIdle()
         rule.onNodeWithText(
-            "Could not add Jamie from a.example.com. Someone else on a.example.com already added Jamie to this tribe.",
+            "Could not add Jamie from alpha. Someone else on alpha already added Jamie to this tribe.",
         ).assertExists()
     }
 
@@ -81,7 +81,7 @@ class TribeJamieSectionUiTest {
         show(boxJamies(box to strut), waiting = true)
         rule.waitForIdle()
         assertEquals(listOf(PlacesStrut.JAMIE), approved)
-        rule.onNodeWithText("Anyone in #Builders can ask @jamie. Jamie answers from a.example.com, using your access to it.").assertExists()
+        rule.onNodeWithText("Anyone in #Builders can ask @jamie. Jamie answers from alpha, using your access to it.").assertExists()
     }
 
     /// Nothing waiting: nobody is approved.

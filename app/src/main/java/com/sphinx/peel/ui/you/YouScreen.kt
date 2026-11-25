@@ -72,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -1339,7 +1340,7 @@ private fun BoxesSection(model: BoxesModel) {
                             Modifier.fillMaxWidth()
                                 .combinedClickable(
                                     enabled = opening == null,
-                                    onClickLabel = stringResource(R.string.misc_you_box_open, box.host, box.person),
+                                    onClickLabel = stringResource(R.string.misc_you_box_open, box.shortName, box.person),
                                     onLongClickLabel = stringResource(R.string.misc_forget),
                                     onLongClick = { menuFor = box.url },
                                     onClick = { open(box) },
@@ -1347,7 +1348,11 @@ private fun BoxesSection(model: BoxesModel) {
                                 .heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(box.host, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                            // Its short name, and under it the one place its full address shows.
+                            Column(Modifier.weight(1f)) {
+                                Text(box.shortName, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(box.host, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                             if (opening == box.url) {
                                 androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                             } else {
