@@ -353,6 +353,11 @@ class OrgPageRequest(
         return OrgRequest(there, token)
     }
 
+    /// `link`'s app alone on this org's strut, at the view it names, as a page of its own with this page's token (Jamie's screen
+    /// in a call, `JamieScreen`). Null when this page's address is not a URL.
+    fun app(link: StrutAppLink, title: String? = this.title): OrgPageRequest? =
+        StrutUI.page(url, "app", link.app.app, input = link.input)?.let { OrgPageRequest(it, token, peer, workspace, title) }
+
     /// The script that hands the token to strut's UI (its `strut/apiKey` in `sessionStorage`), run before the page's own and only
     /// in its folder on the org's origin. The strings as JSON literals, no `/` escaped: the literals are a script's, never inside
     /// a tag. As iOS's `handOver`, character for character.

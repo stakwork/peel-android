@@ -1,6 +1,8 @@
 package com.sphinx.peel.ui.call
 
+import com.sphinx.peel.engine.CallParticipant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -35,6 +37,26 @@ class CallSessionTest {
     @Test
     fun `earliestStart ignores null join times`() {
         assertEquals(200L, CallSession.earliestStart(null, listOf(null, 200L, null), 999L))
+    }
+
+    private fun tile(identity: String, screen: Boolean = false) =
+        CallTile(identity, CallParticipant(identity, identity, null), isYou = false, speaking = false, muted = false, video = null, isScreen = screen)
+
+    @Test
+    fun `the big tile is the one pinned, else the first screen not sent back to the grid`() {
+        val ada = tile("ada")
+        val jamieScreen = tile("jamie", screen = true)
+        val bobScreen = tile("bob", screen = true)
+        val tiles = listOf(ada, tile("jamie"), jamieScreen, tile("bob"), bobScreen)
+        // A screen shared takes the big spot by itself.
+        assertEquals(jamieScreen, CallSession.focus(tiles, pinned = null, grid = emptySet()))
+        assertEquals(ada, CallSession.focus(tiles, pinned = ada.id, grid = emptySet()))
+        // Sent back to the grid: the next screen, then none (the grid).
+        assertEquals(bobScreen, CallSession.focus(tiles, pinned = null, grid = setOf(jamieScreen.id)))
+        assertNull(CallSession.focus(tiles, pinned = null, grid = setOf(jamieScreen.id, bobScreen.id)))
+        // Pinned again from the grid: big again.
+        assertEquals(jamieScreen, CallSession.focus(tiles, pinned = jamieScreen.id, grid = setOf(jamieScreen.id, bobScreen.id)))
+        assertNull(CallSession.focus(listOf(ada), pinned = null, grid = emptySet()))
     }
 
     @Test

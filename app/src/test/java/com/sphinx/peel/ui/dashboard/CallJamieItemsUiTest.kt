@@ -63,4 +63,15 @@ class CallJamieItemsUiTest {
         assertFalse(calls.records("chat1"))
         rule.onNodeWithText("Record on the canvas").assertDoesNotExist()
     }
+
+    @Test fun `Record on the canvas only with a box that can record`() {
+        val calls = boxCalls(a to VoiceStrut(a, record = false), b to VoiceStrut(b, record = true))
+        runBlocking { calls.read() }
+        show(calls)
+        rule.onNodeWithText("alpha").performClick()
+        rule.onNodeWithText("alpha").assertIsSelected()
+        rule.onNodeWithText("Record on the canvas").assertDoesNotExist()
+        rule.onNodeWithText("bee").performClick()
+        rule.onNodeWithText("Record on the canvas").assertIsOff()
+    }
 }

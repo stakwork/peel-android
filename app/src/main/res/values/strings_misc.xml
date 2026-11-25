@@ -123,6 +123,7 @@
     <string name="misc_call_rejoin">Rejoin</string>
     <string name="misc_call_recorded">This call is being recorded</string>
     <string name="misc_call_recording_canvas">Jamie is recording this call on the canvas</string>
+    <string name="misc_call_show_everyone">Show everyone</string>
     <string name="misc_call_close_chat">Close the chat</string>
     <string name="misc_call_chat_hint">Messages here are only for people on this call.</string>
     <string name="misc_call_message">Message</string>

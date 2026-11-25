@@ -341,7 +341,13 @@ fun MainTabs(
         // One area for the call screen, an open chat or page, and the tab in front.
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (callInFront && phase != null) {
-                CallScreen(phase, onHide = { CallController.callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall)
+                CallScreen(
+                    phase, onHide = { CallController.callScreenShown = false }, onLeave = ::leaveCall, onRetry = ::retryCall,
+                    // Jamie's screen, live for a person linked to its box: the one page host, bare.
+                    livePage = { page, modifier ->
+                        com.sphinx.peel.ui.apps.OrgPageScreen(page, engine.walletHost, onClose = null, modifier = modifier, locations = storage, bare = true)
+                    },
+                )
             } else if (appsPage != null) {
                 com.sphinx.peel.ui.apps.OrgPageScreen(
                     appsPage, engine.walletHost, onClose = { if (publicLink != null) pages.close() else pages.closeOrg() },

@@ -127,6 +127,10 @@ sections for code that isn't written yet.
     (with the key after `#`) is posted, encrypted group rooms (`CallSession.options`; the data channel's encryption is turned on by hand),
     and the person's own ticket from the box in the call. `CallChat.sender` names an in-call chat line by the identity LiveKit's server
     stamped (`DataReceived.participantIdentity`, livekit-android ≥ 2.31.0), never by the payload except a line Jamie relays.
+  - `engine/JamieScreen.kt` (`JamieScreen.link`/`place`), `OrgPageRequest.app`, `BoxCallStatus.record`/`BoxCalls.recordable`,
+    `CallSession.showGrid`/`gridScreens`, `CallScreen`'s `livePage` (`OrgPageScreen(bare = true)` from `MainTabs`) — Jamie's screen as the
+    live app (`docs/phases/57-live-canvas-tile.md`): the app its `screen` attribute names, opened in the big tile on a linked box with the
+    person's token; the people above the big tile; a button back to the grid; "Record on the canvas" only when the box says `record`.
   - `engine/AppsListing.kt` + the Apps tab (`MainTab.APPS`; replaced the former Tasks tab, `TasksTab`/`TasksList` removed) — Apps
     (`docs/phases/48-tasks-tab.md`): first in the bar once a `strut/worker` page was opened, its page kept alive (composed, not placed) behind the other tabs; Apps lists the other public apps.
   - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
