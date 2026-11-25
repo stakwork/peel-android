@@ -24,18 +24,22 @@ import org.json.JSONObject
 // `HiveClient.startCall` is kept unused, docs/phases/26-talk-to-jamie.md).
 
 /// What a box says of its group calls (`GET /voice/calls`): whether its Jamie can join one now (true once strut's streaming
-/// recognizer has answered), and the LiveKit server it joins.
-data class BoxCallStatus(val group: Boolean, val livekit: String) {
+/// recognizer has answered), the LiveKit server it joins, and whether it can record a call on the canvas ([record]: false when no
+/// package says what a call records onto, plans/call-canvas.md §8; null from a voice service before that, which always could).
+data class BoxCallStatus(val group: Boolean, val livekit: String, val record: Boolean? = null) {
+    /// Whether "Record on the canvas" is offered with this box: unless it says it can't.
+    val records: Boolean get() = record != false
+
     companion object {
         /// A box that can't join group calls: a strut from before the routes, or one with no voice service.
         val NONE = BoxCallStatus(false, "")
 
-        /// `{ group, livekit }`; null when it is not that.
+        /// `{ group, livekit, record? }`; null when it is not that. A `record` that is not true or false is as if absent.
         fun parse(body: String): BoxCallStatus? {
             val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
             val group = json.opt("group") as? Boolean ?: return null
             val livekit = json.opt("livekit") as? String ?: return null
-            return BoxCallStatus(group, livekit)
+            return BoxCallStatus(group, livekit, json.opt("record") as? Boolean)
         }
     }
 }
@@ -216,8 +220,13 @@ class BoxCalls(
         picks = if (box == null) picks - chat else picks + (chat to box.url)
     }
 
-    /// Whether calls with Jamie in [chat] are recorded on the canvas.
-    fun records(chat: String): Boolean = chat in recorded
+    /// Whether [box] can record a call on the canvas, as it last said ([BoxCallStatus.records]): "Record on the canvas" is offered
+    /// with it only then.
+    fun recordable(box: BoxLink): Boolean = reads[key(box)]?.status?.records ?: false
+
+    /// Whether calls with Jamie in [chat] are recorded on the canvas: chosen there, with a box that can.
+    fun records(chat: String): Boolean =
+        chat in recorded && picks[chat]?.let { url -> boxes.links.firstOrNull { it.url == url } }?.let(::recordable) == true
 
     fun record(chat: String, on: Boolean) {
         recorded = if (on) recorded + chat else recorded - chat

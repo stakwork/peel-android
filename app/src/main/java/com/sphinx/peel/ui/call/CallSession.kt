@@ -17,6 +17,7 @@ import com.sphinx.peel.engine.CallLink
 import com.sphinx.peel.engine.CallParticipant
 import com.sphinx.peel.engine.CallServer
 import com.sphinx.peel.engine.CallTicket
+import com.sphinx.peel.engine.JamieScreen
 import io.livekit.android.LiveKit
 import io.livekit.android.RoomOptions
 import io.livekit.android.annotations.Beta
@@ -56,7 +57,8 @@ data class CallDevice(val id: String, val label: String, val selected: Boolean)
 /// One tile in the grid: a person, or (isScreen) what a person is sharing.
 /// Names and photos are what each joiner sent — not an identity. Ported from
 /// PeelCore's `IOSCallSession.Tile`. [id] is unique per tile (a person who
-/// shares has two); [identity] is the person's.
+/// shares has two); [identity] is the person's. [screen] is the app a box's
+/// Jamie says its screen shows ([JamieScreen.link]), on Jamie's screen tile only.
 data class CallTile(
     val identity: String,
     val person: CallParticipant,
@@ -65,6 +67,7 @@ data class CallTile(
     val muted: Boolean,
     val video: VideoTrack?,
     val isScreen: Boolean = false,
+    val screen: String? = null,
 ) {
     val id: String get() = if (isScreen) "$identity#screen" else identity
 }
@@ -164,12 +167,26 @@ class CallSession(
     var pinnedId by mutableStateOf<String?>(null)
         private set
 
-    /// The big tile: the one you pinned, else the first screen share.
+    /// The screen shares you sent back to the grid ([showGrid]): they take the
+    /// big spot again only when pinned, or once shared anew.
+    var gridScreens by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /// The big tile: the one you pinned, else the first screen share not sent
+    /// back to the grid.
     val focusTile: CallTile?
-        get() = tiles.firstOrNull { it.id == pinnedId } ?: tiles.firstOrNull { it.isScreen }
+        get() = focus(tiles, pinnedId, gridScreens)
 
     fun togglePin(id: String) {
         pinnedId = if (pinnedId == id) null else id
+    }
+
+    /// Everyone in the grid again: nothing pinned, and every screen shared now
+    /// in the grid (PeelCore's `showGrid`). A live app in Jamie's screen takes
+    /// every tap, so its tile has a button for this.
+    fun showGrid() {
+        pinnedId = null
+        gridScreens = gridScreens + tiles.filter { it.isScreen }.map { it.id }
     }
 
     /// The in-call chat: lines in order, how many arrived while the panel was
@@ -286,6 +303,11 @@ class CallSession(
                 audioTrackPublishDefaults = AudioTrackPublishDefaults(dtx = false, red = false),
             )
         }
+
+        /// The big tile of [tiles]: the one [pinned], else the first screen
+        /// share not in [grid].
+        internal fun focus(tiles: List<CallTile>, pinned: String?, grid: Set<String>): CallTile? =
+            tiles.firstOrNull { it.id == pinned } ?: tiles.firstOrNull { it.isScreen && it.id !in grid }
 
         /// The call's start: the earliest known join time (epoch ms) of
         /// anyone in the room. Never later than [current] (so it survives
@@ -632,6 +654,8 @@ class CallSession(
         val everyone: List<Pair<Participant, Boolean>> = others.map { it to false } + (local to true)
         val next = everyone.flatMap { (participant, isYou) -> listOfNotNull(tile(participant, isYou), screenTile(participant, isYou)) }
         if (pinnedId != null && next.none { it.id == pinnedId }) pinnedId = null
+        // A share that stopped leaves the grid's list: shared again, it takes the big spot again.
+        gridScreens.filter { id -> next.any { it.id == id } }.toSet().let { if (it != gridScreens) gridScreens = it }
         val shared = local.getTrackPublication(Track.Source.SCREEN_SHARE)?.let { !it.muted } == true
         if (shared != sharing) sharing = shared
         if (next != tiles) tiles = next
@@ -680,11 +704,14 @@ class CallSession(
         return CallTile(identity, person, isYou, speaking = participant.isSpeaking, muted = muted, video = video)
     }
 
-    /// What a person is sharing, as its own tile; null when nothing is.
+    /// What a person is sharing, as its own tile; null when nothing is. A box's
+    /// Jamie also names the app it shows ([JamieScreen]), which the call
+    /// screen opens live when this phone is linked to that box.
     private fun screenTile(participant: Participant, isYou: Boolean): CallTile? {
         val video = participant.getTrackPublication(Track.Source.SCREEN_SHARE)?.takeIf { !it.muted }?.track as? VideoTrack ?: return null
         val base = tile(participant, isYou) ?: return null
-        return base.copy(speaking = false, muted = false, video = video, isScreen = true)
+        val screen = if (isYou) null else JamieScreen.link(participant.name, participant.attributes)
+        return base.copy(speaking = false, muted = false, video = video, isScreen = true, screen = screen)
     }
 
     /// For rendering: a renderer attaches to this (and detaches with

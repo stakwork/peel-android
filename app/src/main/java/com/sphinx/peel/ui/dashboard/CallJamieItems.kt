@@ -30,8 +30,8 @@ import com.sphinx.peel.engine.Boxes
 import com.sphinx.peel.ui.theme.Theme
 
 /// The call menu's Jamie (docs/phases/56-box-group-calls.md; iOS `ConversationScreen.jamiePicker`): each linked box whose Jamie can
-/// join a call on [callServer] now ([BoxCalls.offered]), by its short name ([BoxLink.shortName]), No Jamie, and, with a box picked,
-/// Record on the canvas. Choosing keeps the menu open; Audio or Video call then starts the call with it. Nothing at all while no box
+/// join a call on [callServer] now ([BoxCalls.offered]), by its short name ([BoxLink.shortName]), No Jamie, and, with a box picked
+/// that can record ([BoxCalls.recordable]), Record on the canvas. Choosing keeps the menu open; Audio or Video call then starts the call with it. Nothing at all while no box
 /// is offered.
 @Composable
 fun ColumnScope.CallJamieItems(chat: String, callServer: String, calls: BoxCalls = Boxes.calls) {
@@ -62,7 +62,8 @@ fun ColumnScope.CallJamieItems(chat: String, callServer: String, calls: BoxCalls
         onClick = { calls.choose(chat, null) },
         modifier = Modifier.semantics { selected = picked == null; role = Role.RadioButton },
     )
-    if (picked != null) {
+    // Only with a box that can record (its `GET /voice/calls` said `record`, or said nothing of it).
+    if (picked != null && calls.recordable(picked)) {
         val records = calls.records(chat)
         DropdownMenuItem(
             text = { Text(stringResource(R.string.conv_call_record_canvas)) },

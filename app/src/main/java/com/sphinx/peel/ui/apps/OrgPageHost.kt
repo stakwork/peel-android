@@ -710,10 +710,13 @@ internal fun makeOrgWebView(context: Context, controller: OrgPageController): We
 /// everything (a link or a deliverable from a chat), with ✕ to close. Either way Reload waits in ⋮, out of a thumb's way: one slip
 /// there loses what the page has not sent. [onClose] null is a page with no way out of its own; [shown] false is a page kept alive
 /// behind another screen: it is treated as a page not showing (paused, no prompt, no Back) and gives up the keyboard.
+///
+/// [bare] is the page alone, inside something else (Jamie's screen tile in a call, docs/phases/57-live-canvas-tile.md): no bar and
+/// no Back of its own; what holds it has the way out.
 @Composable
 fun OrgPageScreen(
     page: PhonePage, wallet: WalletHost, onClose: (() -> Unit)?, modifier: Modifier = Modifier, sheets: PhoneWalletSheets? = null,
-    locations: SiteLocationStore? = null, shown: Boolean = true, inApps: Boolean = false, title: String? = null,
+    locations: SiteLocationStore? = null, shown: Boolean = true, inApps: Boolean = false, title: String? = null, bare: Boolean = false,
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -808,7 +811,7 @@ fun OrgPageScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    BackHandler(enabled = shown && (controller.canGoBack || onClose != null)) { if (controller.canGoBack) controller.goBack() else onClose?.invoke() }
+    BackHandler(enabled = shown && !bare && (controller.canGoBack || onClose != null)) { if (controller.canGoBack) controller.goBack() else onClose?.invoke() }
     // The notifications the wallet host has for this page's scope go into its main frame (iOS `listenToWallet`).
     LaunchedEffect(controller) { wallet.notifications.collect { controller.wallet?.push(it) } }
     DisposableEffect(controller) {
@@ -825,7 +828,7 @@ fun OrgPageScreen(
     }
 
     Column(modifier.fillMaxSize().background(Theme.colors.background)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!bare) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (inApps) {
                 // One ←: the page's own history first, then back to Apps.
                 val backTo = if (controller.canGoBack) stringResource(R.string.misc_back) else stringResource(R.string.tab_apps)
@@ -861,7 +864,7 @@ fun OrgPageScreen(
                 }
             }
         }
-        if (!controller.walletOffered && page.walletScope.visitorHost != null) {
+        if (!bare && !controller.walletOffered && page.walletScope.visitorHost != null) {
             Text(
                 stringResource(R.string.misc_apps_no_signin),
                 Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText,

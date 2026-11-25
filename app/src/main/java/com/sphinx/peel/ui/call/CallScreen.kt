@@ -25,6 +25,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.sphinx.peel.push.Notifications
+import androidx.compose.material.icons.filled.GridView
+import com.sphinx.peel.engine.Boxes
+import com.sphinx.peel.engine.BoxesModel
+import com.sphinx.peel.engine.JamieScreen
+import com.sphinx.peel.engine.OrgPageRequest
+import kotlinx.coroutines.CancellationException
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -92,8 +98,12 @@ import kotlinx.coroutines.delay
 /// background.md`): this screen comes and goes (the chevron hides it, a
 /// tap on `CallBanner` brings it back) without the call itself ending —
 /// only `onLeave` does that.
+///
+/// [livePage] shows a box's app in a tile: Jamie's screen, live, for a person
+/// linked to the box ([JamieScreen]; docs/phases/57-live-canvas-tile.md).
+/// `MainTabs` gives the one page host, bare; with none, the tile keeps the video.
 @Composable
-fun CallScreen(phase: CallPhase, onHide: () -> Unit, onLeave: () -> Unit, onRetry: () -> Unit) {
+fun CallScreen(phase: CallPhase, onHide: () -> Unit, onLeave: () -> Unit, onRetry: () -> Unit, livePage: LivePage? = null) {
     when (phase) {
         is CallPhase.Connecting -> Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
             CallHeader(title = phase.title, status = stringResource(R.string.misc_connecting), onBack = onHide)
@@ -115,7 +125,7 @@ fun CallScreen(phase: CallPhase, onHide: () -> Unit, onLeave: () -> Unit, onRetr
             Column(Modifier.fillMaxSize().background(Theme.colors.background)) {
                 CallHeader(title = session.title, status = CallStatusText(session), onBack = onHide)
                 Box(Modifier.weight(1f).fillMaxSize()) {
-                    CallStage(session)
+                    CallStage(session, livePage)
                     if (session.chatOpen) {
                         CallChatPanel(session, onClose = { session.showChat(false) }, modifier = Modifier.align(Alignment.CenterEnd))
                     }
@@ -159,20 +169,33 @@ private fun CallHeader(title: String, status: String, onBack: () -> Unit) {
     }
 }
 
+/// A box's app shown in a tile, live: the page host, bare (`OrgPageScreen`).
+typealias LivePage = @Composable (page: OrgPageRequest, modifier: Modifier) -> Unit
+
 /// The tiles: a grid, or — with a screen share or a pinned tile — that one
-/// large over a strip of the rest (PeelCore's own `IOSCallStage`). Tap a tile
-/// to pin it; tap it again to let go.
+/// large under a strip of the rest (PeelCore's own `IOSCallStage`, with the
+/// people above, plans/call-canvas.md §6.5). Tap a tile to make it the large
+/// one; tap the large one for the grid again. Jamie's screen, when its app
+/// opens live here, takes every tap itself: its grid is a button.
 @Composable
-private fun CallStage(session: CallSession) {
+private fun CallStage(session: CallSession, livePage: LivePage?) {
     val tiles = session.tiles
     val focus = session.focusTile
     if (focus != null && tiles.size > 1) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            CallTileView(focus, session, pinned = focus.id == session.pinnedId, contain = focus.isScreen, modifier = Modifier.weight(1f).fillMaxWidth())
             LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(tiles.filter { it.id != focus.id }, key = { it.id }) { tile ->
-                    CallTileView(tile, session, pinned = false, modifier = Modifier.width(120.dp).aspectRatio(1f))
+                    CallTileView(tile, session, pinned = false, onTap = { session.togglePin(tile.id) }, modifier = Modifier.width(120.dp).aspectRatio(1f))
                 }
+            }
+            val live = if (livePage != null) jamieScreenPage(focus.screen) else null
+            if (live != null && livePage != null) {
+                LiveScreenTile(live, session, livePage, Modifier.weight(1f).fillMaxWidth())
+            } else {
+                CallTileView(
+                    focus, session, pinned = focus.id == session.pinnedId, contain = focus.isScreen, onTap = session::showGrid,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
             }
         }
         return
@@ -188,16 +211,55 @@ private fun CallStage(session: CallSession) {
         items(tiles, key = { it.id }) { tile ->
             // 4:3 for one or two people stacked in a single column; square
             // once there are enough people to need a real grid.
-            CallTileView(tile, session, pinned = tile.id == session.pinnedId, modifier = Modifier.fillMaxWidth().aspectRatio(if (columns == 1) 4f / 3f else 1f))
+            CallTileView(
+                tile, session, pinned = tile.id == session.pinnedId, onTap = { session.togglePin(tile.id) },
+                modifier = Modifier.fillMaxWidth().aspectRatio(if (columns == 1) 4f / 3f else 1f),
+            )
+        }
+    }
+}
+
+/// The app Jamie's screen [link] names, to show live: once the box it is on, one this phone is linked to, has taken the person's
+/// token, as any of its pages opens ([BoxesModel.home]). Null meanwhile, and for a link to anything else or a box that can't be
+/// opened now: the tile keeps the video then.
+@Composable
+private fun jamieScreenPage(link: String?, boxes: BoxesModel = Boxes.model): OrgPageRequest? {
+    val place = remember(link, boxes.links) { JamieScreen.place(link, boxes.links) }
+    // Keyed on the box's address, not its link: a renewed token does not load the page again.
+    val page by produceState<OrgPageRequest?>(null, place?.box?.url, place?.app) {
+        value = null
+        val at = place ?: return@produceState
+        value = try {
+            boxes.home(at.box).app(at.app, title = at.box.shortName)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+    return page
+}
+
+/// Jamie's screen as the app itself ([JamieScreen]): taps and scrolls are the page's, and the grid is the button in its corner.
+@Composable
+private fun LiveScreenTile(page: OrgPageRequest, session: CallSession, livePage: LivePage, modifier: Modifier = Modifier) {
+    Box(modifier.clip(RoundedCornerShape(16.dp)).background(Theme.colors.fieldFill)) {
+        livePage(page, Modifier.fillMaxSize())
+        IconButton(
+            onClick = session::showGrid,
+            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(36.dp).clip(CircleShape)
+                .background(Theme.colors.background.copy(alpha = 0.75f)),
+        ) {
+            Icon(Icons.Filled.GridView, contentDescription = stringResource(R.string.misc_call_show_everyone), tint = Theme.colors.text, modifier = Modifier.size(18.dp))
         }
     }
 }
 
 @Composable
-private fun CallTileView(tile: CallTile, session: CallSession, pinned: Boolean, modifier: Modifier = Modifier, contain: Boolean = false) {
+private fun CallTileView(tile: CallTile, session: CallSession, pinned: Boolean, onTap: () -> Unit, modifier: Modifier = Modifier, contain: Boolean = false) {
     val shape = RoundedCornerShape(16.dp)
     Box(
-        modifier.clip(shape).background(Theme.colors.fieldFill).clickable { session.togglePin(tile.id) }
+        modifier.clip(shape).background(Theme.colors.fieldFill).clickable(onClick = onTap)
             .then(if (tile.speaking) Modifier.border(2.dp, Theme.colors.accent, shape) else Modifier),
     ) {
         val video = tile.video

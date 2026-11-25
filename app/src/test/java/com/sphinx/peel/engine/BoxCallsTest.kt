@@ -78,6 +78,38 @@ class BoxCallsTest {
         assertNull(calls.pick("chat1", callServer))
     }
 
+    @Test fun `a box records on the canvas unless it says it can't`() = runBlocking {
+        assertEquals(true, BoxCallStatus.parse("""{"group":true,"livekit":"wss://l","record":true}""")?.record)
+        assertEquals(false, BoxCallStatus.parse("""{"group":true,"livekit":"wss://l","record":false}""")?.record)
+        // A voice service from before `record` (or one that says something else): as before, it can.
+        assertNull(BoxCallStatus.parse("""{"group":true,"livekit":"wss://l"}""")?.record)
+        assertNull(BoxCallStatus.parse("""{"group":true,"livekit":"wss://l","record":"yes"}""")?.record)
+        assertTrue(BoxCallStatus(true, "wss://l").records)
+        assertTrue(BoxCallStatus(true, "wss://l", record = true).records)
+        assertFalse(BoxCallStatus(true, "wss://l", record = false).records)
+
+        val strut = VoiceStrut(a, record = false)
+        val calls = boxCalls(a to strut)
+        calls.read()
+        calls.choose("chat1", a)
+        calls.record("chat1", true)
+        // Still offered for Jamie, but not for recording: the choice left from before is not sent.
+        assertEquals(a.url, calls.pick("chat1", callServer)?.url)
+        assertFalse(calls.recordable(a))
+        assertFalse(calls.records("chat1"))
+
+        // The box's packages now say what a call records onto.
+        strut.record = true
+        calls.read()
+        assertTrue(calls.recordable(a))
+        assertTrue(calls.records("chat1"))
+        strut.record = null
+        calls.read()
+        assertTrue(calls.records("chat1"))
+        // A box not asked yet is not offered, and records nothing.
+        assertFalse(calls.recordable(b))
+    }
+
     @Test fun `a box from before the routes, or one with no voice service, is not offered, nor one that fails`() = runBlocking {
         val old = VoiceStrut(a).apply { status = 404 }
         val none = VoiceStrut(b).apply { status = 503 }
@@ -212,6 +244,8 @@ class VoiceStrut(
     var token: String = box.token,
     var group: Boolean = true,
     private val livekit: String = "wss://livekit.sphinx.chat",
+    /// `GET /voice/calls`'s `record` (plans/call-canvas.md §8); null leaves it out, as a voice service before it does.
+    var record: Boolean? = null,
 ) {
     /// `GET /voice/calls`'s status, when not 200.
     var status: Int = 200
@@ -238,7 +272,7 @@ class VoiceStrut(
             path == "/voice/calls" && method == "GET" -> {
                 seen += "$method $url $bearer"
                 if (status != 200) BoxResponse(status, """{"error":"no"}""")
-                else BoxResponse(200, JSONObject().put("group", group).put("livekit", livekit).toString())
+                else BoxResponse(200, JSONObject().put("group", group).put("livekit", livekit).also { r -> record?.let { r.put("record", it) } }.toString())
             }
             path == "/voice/calls" && method == "POST" -> {
                 joins += json!!
