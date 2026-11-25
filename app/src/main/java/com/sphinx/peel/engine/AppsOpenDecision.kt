@@ -14,8 +14,8 @@ object AppsOpenDecision {
     /// they are still in use.
     fun unreadNames(unreadIds: List<String>, live: List<HivePeer>): List<String> = unreadIds.mapNotNull { id -> live.firstOrNull { it.id == id }?.name }
 
-    const val CONNECT_STADEUM = "Connect Stadeum under You to open the apps your workspaces pin."
-    const val NO_APPS = "Apps your Stadeum workspaces pin show here."
+    const val CONNECT_STADEUM = "Connect Hive under You to open the apps your workspaces pin."
+    const val NO_APPS = "Apps your Hive workspaces pin show here."
 
     /// The words under the Talk rows when the apps are empty (iOS footer).
     fun emptyText(liveEmpty: Boolean, unread: List<String>): String = when {

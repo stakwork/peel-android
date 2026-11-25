@@ -22,8 +22,8 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class BoxCallsTest {
     private val callServer = "chat.sphinx.chat"
-    private val a = BoxFixture.box("https://a.example.com")
-    private val b = BoxFixture.box("https://bee.example.com")
+    private val a = BoxFixture.box("https://strut.alpha.example.com")
+    private val b = BoxFixture.box("https://strut.bee.example.com")
     private val key = TalkHome.newKey()
     private val link = CallLink.new(callServer, audioOnly = false, encryptionKey = key)
 
@@ -52,7 +52,7 @@ class BoxCallsTest {
 
         calls.read()
         assertEquals(listOf(a.url), calls.offered(callServer).map { it.url })
-        assertEquals(listOf("GET https://a.example.com/voice/calls ${a.token}"), strutA.seen)
+        assertEquals(listOf("GET https://strut.alpha.example.com/voice/calls ${a.token}"), strutA.seen)
 
         calls.choose("chat1", calls.offered(callServer).first())
         calls.record("chat1", true)
@@ -111,7 +111,7 @@ class BoxCallsTest {
         val calls = boxCalls(a to strut)
         val clear = CallLink.new(callServer, audioOnly = false)
         val e = assertThrows(BoxException::class.java) { runBlocking { calls.bring(a, clear, record = false) } }
-        assertEquals("Peel brings Jamie from a.example.com only into an encrypted call.", e.message)
+        assertEquals("Peel brings Jamie from alpha only into an encrypted call.", e.message)
         assertTrue(strut.joins.isEmpty())
     }
 
@@ -120,23 +120,23 @@ class BoxCallsTest {
             val strut = VoiceStrut(a).apply { join = status to body }
             return runCatching { runBlocking { boxCalls(a to strut).bring(a, link, record = false) } }.exceptionOrNull()?.message
         }
-        assertEquals("Jamie from a.example.com is already in this call.", refusal(409, """{"error":"Jamie from this box is already in that call"}"""))
+        assertEquals("Jamie from alpha is already in this call.", refusal(409, """{"error":"Jamie from this box is already in that call"}"""))
         assertEquals(
-            "Jamie from a.example.com can't join a call right now: group calls are not ready yet: the speech recognizer is loading.",
+            "Jamie from alpha can't join a call right now: group calls are not ready yet: the speech recognizer is loading.",
             refusal(503, """{"error":"group calls are not ready yet: the speech recognizer is loading"}"""),
         )
-        assertEquals("Jamie from a.example.com can't join a call right now.", refusal(503, ""))
+        assertEquals("Jamie from alpha can't join a call right now.", refusal(503, ""))
         assertEquals(
-            "a.example.com could not bring Jamie into the call: key must be 32 bytes, as base64.",
+            "alpha could not bring Jamie into the call: key must be 32 bytes, as base64.",
             refusal(400, """{"error":"key must be 32 bytes, as base64"}"""),
         )
-        assertEquals("a.example.com could not bring Jamie into the call: HTTP 403.", refusal(403, ""))
+        assertEquals("alpha could not bring Jamie into the call: HTTP 403.", refusal(403, ""))
         // A voice service that did not take the key: never a call in the clear.
         assertEquals(
-            "a.example.com can't join an encrypted call yet: its voice service needs an update.",
+            "alpha can't join an encrypted call yet: its voice service needs an update.",
             refusal(200, """{"agent":"agent-7"}"""),
         )
-        assertEquals("a.example.com's answer about the call could not be read.", refusal(200, """{"encrypted":true}"""))
+        assertEquals("alpha's answer about the call could not be read.", refusal(200, """{"encrypted":true}"""))
     }
 
     @Test fun `a token the box refused is renewed once and the join asked again`() = runBlocking {

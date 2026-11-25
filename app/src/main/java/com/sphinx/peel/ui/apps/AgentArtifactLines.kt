@@ -61,7 +61,7 @@ object ArtifactOpening {
             is Opening.Page -> opened.request.workspace
             else -> when {
                 artifact.url != null -> host(artifact.url)
-                opened == Opening.ConnectFirst -> "Connect Stadeum in You to open"
+                opened == Opening.ConnectFirst -> "Connect Hive in You to open"
                 opened is Opening.NotPaired -> "@${opened.peer} isn't connected here"
                 else -> "On your Mac"
             }

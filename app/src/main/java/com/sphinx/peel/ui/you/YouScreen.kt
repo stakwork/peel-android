@@ -72,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -356,7 +357,7 @@ private fun YouMain(
         item { VoiceModeSection(appContext) }
         item { Spacer(Modifier.height(24.dp)) }
 
-        item { SectionHeader("Stadeum") }
+        item { SectionHeader("Hive") }
         item { StadeumSection(Stadeum.model) }
         item { Spacer(Modifier.height(24.dp)) }
         item { BoxesSection(Boxes.model) }
@@ -1237,9 +1238,9 @@ private fun VoiceModeSection(context: android.content.Context) {
     }
 }
 
-/// You › Stadeum (iOS `StadeumSection`): Connect Stadeum (a code to approve
+/// You › Hive (iOS `StadeumSection`): Connect Hive (a code to approve
 /// there, its page opened in the browser), each workspace paired, Connect
-/// again once Stadeum no longer knows this phone, and Disconnect.
+/// again once Hive no longer knows this phone, and Disconnect.
 @Composable
 private fun StadeumSection(model: StadeumModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -1252,7 +1253,7 @@ private fun StadeumSection(model: StadeumModel) {
             context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }
-    // The approval page opens by itself once a code is ready; Open Stadeum opens it again.
+    // The approval page opens by itself once a code is ready; Open Hive opens it again.
     val pairing = (status as? StadeumModel.Status.Pairing)?.pairing
     LaunchedEffect(pairing?.userCode) { pairing?.let { open(it.verificationUriComplete) } }
 
@@ -1308,7 +1309,7 @@ private fun StadeumSection(model: StadeumModel) {
     }
 }
 
-/// You › Boxes (iOS `BoxesSection`, docs/phases/45-box-link.md): the strut boxes this account is linked to, each as its member. A tap
+/// You › Stadeum servers (iOS `BoxesSection`, docs/phases/45-box-link.md): the strut boxes this account is linked to, each as its member. A tap
 /// opens the box's own strut UI as them, where its apps are ([BoxesModel.page]); a long press offers Forget. Shown once there is
 /// something to show: a box is linked from its own Connect, by its QR code or Open in Peel.
 @Composable
@@ -1339,7 +1340,7 @@ private fun BoxesSection(model: BoxesModel) {
                             Modifier.fillMaxWidth()
                                 .combinedClickable(
                                     enabled = opening == null,
-                                    onClickLabel = stringResource(R.string.misc_you_box_open, box.host, box.person),
+                                    onClickLabel = stringResource(R.string.misc_you_box_open, box.shortName, box.person),
                                     onLongClickLabel = stringResource(R.string.misc_forget),
                                     onLongClick = { menuFor = box.url },
                                     onClick = { open(box) },
@@ -1347,7 +1348,11 @@ private fun BoxesSection(model: BoxesModel) {
                                 .heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(box.host, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                            // Its short name, and under it the one place its full address shows.
+                            Column(Modifier.weight(1f)) {
+                                Text(box.shortName, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(box.host, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                             if (opening == box.url) {
                                 androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                             } else {

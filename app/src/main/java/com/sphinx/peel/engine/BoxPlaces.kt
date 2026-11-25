@@ -104,11 +104,12 @@ data class TribePlace(val key: String, val link: String, val name: String?)
 data class PlaceLinked(val place: BoxPlace, val jamie: String)
 
 /// The box refused the token (`401`): it ran out, or the member removed the link. [BoxesModel.asMember] renews it once.
-class BoxTokenRefused(host: String) : BoxException("$host didn't take Peel's link. Link Peel again from Connect there.")
+class BoxTokenRefused(name: String) : BoxException("$name didn't take Peel's link. Link Peel again from Connect there.")
 
 /// strut's place routes for a person (API.md §13.6, "Places"), on one box with the token Peel holds there.
 class PlacesClient(private val box: BoxLink, private val http: BoxHttp) {
-    private val host: String get() = box.host
+    /// The box as its messages name it.
+    private val name: String get() = box.shortName
 
     /// The person's places and the host ready to take one (`GET /people/places`). A strut from before places (`404`) has neither:
     /// Jamie isn't offered from it.
@@ -116,7 +117,7 @@ class PlacesClient(private val box: BoxLink, private val http: BoxHttp) {
         val r = http.call("GET", "${box.url}/people/places", null, box.token, LIMIT, 20)
         if (r.status == 404) return BoxPlaces.NONE
         refused(r, "read its tribes")?.let { throw it }
-        return BoxPlaces.parse(r.body) ?: throw BoxException("$host's answer about Jamie could not be read.")
+        return BoxPlaces.parse(r.body) ?: throw BoxException("$name's answer about Jamie could not be read.")
     }
 
     /// Links [tribe] for the box's Sphinx host (`POST /people/places`): its Jamie joins it and answers `@jamie` there, as this
@@ -129,14 +130,14 @@ class PlacesClient(private val box: BoxLink, private val http: BoxHttp) {
         val r = http.call("POST", "${box.url}/people/places", body.toString(), box.token, LIMIT, 30)
         when {
             r.status == 409 && code(r.body) == "place_linked" ->
-                throw BoxException("Someone else on $host already added Jamie to this tribe.")
-            r.status == 404 && code(r.body) == "no_host" -> throw BoxException("$host isn't ready for tribes yet.")
+                throw BoxException("Someone else on $name already added Jamie to this tribe.")
+            r.status == 404 && code(r.body) == "no_host" -> throw BoxException("$name isn't ready for tribes yet.")
         }
         refused(r, "add Jamie")?.let { throw it }
         val json = runCatching { JSONObject(r.body) }.getOrNull()
         val place = BoxPlace.parse(json?.optJSONObject("place"))?.takeIf { it.isTribe(tribe.key) }
         val jamie = (json?.opt("account") as? String)?.let(BoxPlaces::sphinxKey)
-        if (place == null || jamie == null) throw BoxException("$host's answer about Jamie could not be read.")
+        if (place == null || jamie == null) throw BoxException("$name's answer about Jamie could not be read.")
         return PlaceLinked(place, jamie)
     }
 
@@ -151,9 +152,9 @@ class PlacesClient(private val box: BoxLink, private val http: BoxHttp) {
     /// Null for a 200; else strut's refusal in words, the token's own ([BoxTokenRefused]) for a 401.
     private fun refused(r: BoxResponse, couldNot: String): BoxException? = when (r.status) {
         200 -> null
-        401 -> BoxTokenRefused(host)
-        429 -> BoxException("$host is busy. Try again in a minute.")
-        else -> BoxException("$host could not $couldNot: ${said(r.body) ?: "HTTP ${r.status}"}.")
+        401 -> BoxTokenRefused(name)
+        429 -> BoxException("$name is busy. Try again in a minute.")
+        else -> BoxException("$name could not $couldNot: ${said(r.body) ?: "HTTP ${r.status}"}.")
     }
 
     companion object {

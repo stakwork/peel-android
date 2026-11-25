@@ -135,6 +135,27 @@ question and the Boxes rows (covered end to end only); the store read on the mai
 `./gradlew testDebugUnitTest` on this Mac's JDK 21: 1287 tests, one failure, `ConversationDateTest.todayShowsTime`, which is JDK 21's
 time format (U+202F before "PM", which the test's `\s` does not replace), not this branch; the project targets JDK 17.
 
+## Words (2026-11-24)
+
+Evan ruled that what a person reads calls a box a **Stadeum server**, and the Hive connection (Peel's "Stadeum" pairing, its
+@hive/@cabal workspaces) **Hive**: You › Stadeum servers ("To link Peel to a Stadeum server, …"), "Link a Stadeum server" for a
+scanned link, the tribe's Jamie row ("Pick one of your Stadeum servers…"), the box errors; You › Hive (Connect Hive, Open Hive,
+"Hive knows your Sphinx account…"), "Connect Hive in You to open", Jamie's tool lines ("Looked at your Hive workspaces"), Hive's
+errors. Spanish follows ("servidores Stadeum", "Conectar Hive"). Code names (`Stadeum`, `StadeumModel`, `Boxes`, `BoxesSection`,
+the string resource names, file names) and log text are unchanged, so "box" and "Stadeum" in code and in these docs still mean what
+they did. Same change as Peel for iOS/Mac (stakwork/peel#609).
+
+A server is named by a **short name** (`BoxLink.shortName`, the one place it is worked out; nothing stored or asked): its host
+without a leading `strut.`, first label only (`strut.stadeum.stakwork.ai` → "stadeum", `strut.stadeum1.sphinx.chat` →
+"stadeum1", `jamie.example.com` → "jamie"); an IP address stays whole. strut's `GET /self` label would come first, but strut sets
+none yet and Peel reads nothing per box that carries it. The short name is in the call menu's Jamie rows, the tribe's Jamie
+picker and every message about a linked server (forget, open, no longer linked, renewal, calls, tribes). The full address
+(`BoxLink.host`) shows in one place for a linked server, the second line of its row in You › Stadeum servers; it also stays in the
+link question ("Link Peel to <host> as <name>?"), the "Linking Peel to <host>…" row and linking's errors, since there the person
+decides which address to trust and a short name can't tell `strut.stadeum.stakwork.ai` from `strut.stadeum.evil.example`. "Answers
+from" in the tribe row keeps its one line; the server's name beside it is cut short instead. Android's call chat has no Jamie
+picker (the Mac's has), so nothing changed there.
+
 ## Open
 
 - Not run on a phone (GrapheneOS or otherwise); the QR scanned by a phone's camera opening Peel was not tried (the emulator was

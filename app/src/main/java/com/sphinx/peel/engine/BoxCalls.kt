@@ -85,7 +85,8 @@ data class BoxTicket(
 /// strut's group-call routes on one box (strut#881, forwarded to its voice service's `/calls`), with the token Peel holds there
 /// ([BoxLink.token]): strut takes the person from it, as the starter or as whom a ticket is minted for.
 class BoxCallsClient(private val box: BoxLink, private val http: BoxHttp) {
-    private val host: String get() = box.host
+    /// The box as its messages name it.
+    private val name: String get() = box.shortName
 
     /// Whether the box's Jamie can join a group call now, and on which LiveKit. A strut without the route (`404`), or with no
     /// voice service (`503`), can't.
@@ -93,7 +94,7 @@ class BoxCallsClient(private val box: BoxLink, private val http: BoxHttp) {
         val r = http.call("GET", "${box.url}/voice/calls", null, box.token, LIMIT, STATUS_SECONDS)
         if (r.status == 404 || r.status == 503) return BoxCallStatus.NONE
         refused(r, "say whether Jamie can join a call")?.let { throw it }
-        return BoxCallStatus.parse(r.body) ?: throw BoxException("$host's answer about calls could not be read.")
+        return BoxCallStatus.parse(r.body) ?: throw BoxException("$name's answer about calls could not be read.")
     }
 
     /// Brings the box's Jamie into [room] with the call's [key], recording it on the canvas with [record]
@@ -103,15 +104,15 @@ class BoxCallsClient(private val box: BoxLink, private val http: BoxHttp) {
         if (record) body.put("record", true)
         val r = http.call("POST", "${box.url}/voice/calls", body.toString(), box.token, LIMIT, JOIN_SECONDS)
         when (r.status) {
-            409 -> throw BoxException("Jamie from $host is already in this call.")
-            503 -> throw BoxException("Jamie from $host can't join a call right now" + (said(r.body)?.let { ": $it." } ?: "."))
+            409 -> throw BoxException("Jamie from $name is already in this call.")
+            503 -> throw BoxException("Jamie from $name can't join a call right now" + (said(r.body)?.let { ": $it." } ?: "."))
         }
         refused(r, "bring Jamie into the call")?.let { throw it }
-        val json = runCatching { JSONObject(r.body) }.getOrNull() ?: throw BoxException("$host's answer about the call could not be read.")
+        val json = runCatching { JSONObject(r.body) }.getOrNull() ?: throw BoxException("$name's answer about the call could not be read.")
         // Never a call in the clear: a voice service that did not take the key is refused.
-        if (json.opt("encrypted") != true) throw BoxException("$host can't join an encrypted call yet: its voice service needs an update.")
+        if (json.opt("encrypted") != true) throw BoxException("$name can't join an encrypted call yet: its voice service needs an update.")
         return (json.opt("agent") as? String)?.takeIf { CallServer.isIdentity(it) }
-            ?: throw BoxException("$host's answer about the call could not be read.")
+            ?: throw BoxException("$name's answer about the call could not be read.")
     }
 
     /// The person's own ticket into [room], seen there as [name]; null when the box's Jamie is not in that call (`404`).
@@ -120,16 +121,16 @@ class BoxCallsClient(private val box: BoxLink, private val http: BoxHttp) {
         val r = http.call("POST", "${box.url}/voice/calls/ticket", body, box.token, LIMIT, TICKET_SECONDS)
         if (r.status == 404) return null
         refused(r, "let you into the call")?.let { throw it }
-        return BoxTicket.parse(r.body, room, box.url) ?: throw BoxException("$host's answer about the call could not be read.")
+        return BoxTicket.parse(r.body, room, box.url) ?: throw BoxException("$name's answer about the call could not be read.")
     }
 
     /// Null for a 200; else strut's refusal in words, the token's own ([BoxTokenRefused]) for a 401, which
     /// [BoxesModel.asMember] renews once.
     private fun refused(r: BoxResponse, couldNot: String): BoxException? = when (r.status) {
         200 -> null
-        401 -> BoxTokenRefused(host)
-        429 -> BoxException("$host is busy. Try again in a minute.")
-        else -> BoxException("$host could not $couldNot: ${said(r.body) ?: "HTTP ${r.status}"}.")
+        401 -> BoxTokenRefused(name)
+        429 -> BoxException("$name is busy. Try again in a minute.")
+        else -> BoxException("$name could not $couldNot: ${said(r.body) ?: "HTTP ${r.status}"}.")
     }
 
     companion object {
@@ -225,7 +226,7 @@ class BoxCalls(
     /// Brings Jamie from [box] into [link]'s call, before the link is posted (group-calls.md §5): the box's token makes the room.
     /// [link] must be encrypted; a box never joins a call in the clear. Jamie's identity there; throws why not, in words.
     suspend fun bring(box: BoxLink, link: CallLink, record: Boolean): String {
-        val key = link.encryptionKey ?: throw BoxException("Peel brings Jamie from ${box.host} only into an encrypted call.")
+        val key = link.encryptionKey ?: throw BoxException("Peel brings Jamie from ${box.shortName} only into an encrypted call.")
         return boxes.asMember(box) { clientFor(it).join(link.room, key, record) }
     }
 

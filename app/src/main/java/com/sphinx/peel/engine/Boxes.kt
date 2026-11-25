@@ -73,7 +73,7 @@ class BoxesModel(
             links = BoxLink.read(store)
         } catch (e: Exception) {
             unreadable = true
-            problem = noted(e, "read your linked boxes")
+            problem = noted(e, "read your linked Stadeum servers")
         }
         keepRenewed()
     }
@@ -99,7 +99,7 @@ class BoxesModel(
         val store = store
         close()
         asking = null
-        try { store?.delete() } catch (e: Exception) { problem = noted(e, "forget your linked boxes") }
+        try { store?.delete() } catch (e: Exception) { problem = noted(e, "forget your linked Stadeum servers") }
     }
 
     // Linking
@@ -147,7 +147,7 @@ class BoxesModel(
             return null
         }
         if (unreadable) {
-            problem = "Peel couldn't read the boxes it keeps, so it won't change them now. Quit and reopen Peel, then link again."
+            problem = "Peel couldn't read the Stadeum servers it keeps, so it won't change them now. Quit and reopen Peel, then link again."
             return null
         }
         offer.problem(now().toEpochMilli(), allowsLoopback)?.let { problem = it; return null }
@@ -176,7 +176,7 @@ class BoxesModel(
     fun forget(box: BoxLink) {
         val store = store ?: return
         if (unreadable) {
-            problem = "Peel couldn't read the boxes it keeps, so it won't change them now. Quit and reopen Peel, then try again."
+            problem = "Peel couldn't read the Stadeum servers it keeps, so it won't change them now. Quit and reopen Peel, then try again."
             return
         }
         val kept = links.filter { it.url != box.url }
@@ -185,7 +185,7 @@ class BoxesModel(
             links = kept
             problem = null
         } catch (e: Exception) {
-            problem = noted(e, "forget ${box.host}")
+            problem = noted(e, "forget ${box.shortName}")
         }
     }
 
@@ -195,7 +195,7 @@ class BoxesModel(
     /// is renewed once; a box that no longer links the key is let go ([notice]), as is one that refuses even a renewed token.
     /// Throws why it does not open.
     suspend fun home(box: BoxLink): OrgPageRequest {
-        val kept = links.firstOrNull { it.url == box.url } ?: throw BoxException("Peel is no longer linked to ${box.host}.")
+        val kept = links.firstOrNull { it.url == box.url } ?: throw BoxException("Peel is no longer linked to ${box.shortName}.")
         if (clientFor(kept.url).accepts(kept)) return kept.home
         val renewed = renew(kept) ?: throw BoxException(unlinked(kept))
         if (!clientFor(renewed.url).accepts(renewed)) {
@@ -217,7 +217,7 @@ class BoxesModel(
         } catch (e: Superseded) {
             null
         } catch (e: Exception) {
-            if (gen == generation && links.any { it.url == box.url }) problem = noted(e, "open ${box.host}")
+            if (gen == generation && links.any { it.url == box.url }) problem = noted(e, "open ${box.shortName}")
             null
         }
     }
@@ -229,7 +229,7 @@ class BoxesModel(
     /// ([BoxTokenRefused]) is renewed once and [call] made again, as [home] does; a box that no longer links the key is let go
     /// ([notice]) and that is thrown in words.
     suspend fun <T> asMember(box: BoxLink, call: suspend (BoxLink) -> T): T {
-        val gone = BoxException("Peel is no longer linked to ${box.host}.")
+        val gone = BoxException("Peel is no longer linked to ${box.shortName}.")
         val kept = links.firstOrNull { it.url == box.url } ?: throw gone
         try {
             return call(kept)
@@ -280,7 +280,7 @@ class BoxesModel(
                 if (gen != generation) return
             } catch (e: Exception) {
                 if (gen != generation) return
-                problem = noted(e, "renew Peel's link to ${box.host}")
+                problem = noted(e, "renew Peel's link to ${box.shortName}")
             }
         }
     }
@@ -326,7 +326,7 @@ class BoxesModel(
 
     companion object {
         /// What is said of a box that no longer links the key.
-        fun unlinked(box: BoxLink): String = "${box.host} removed Peel's link, so Peel let it go. Link it again from Connect there."
+        fun unlinked(box: BoxLink): String = "${box.shortName} removed Peel's link, so Peel let it go. Link it again from Connect there."
 
         /// One HTTP client for every box: its connections and threads shared, as one `URLSession` is on iOS.
         private val sharedHttp: BoxHttp by lazy { OkHttpBox() }
@@ -364,7 +364,7 @@ object BoxWords {
     }
 
     /// Where a box is linked from, for the rows.
-    const val HOW_TO_LINK = "To link Peel to a box, choose Link Peel in Connect in its Jamie app."
+    const val HOW_TO_LINK = "To link Peel to a Stadeum server, choose Link Peel in Connect in its Jamie app."
 }
 
 /// The boxes of the open account: one [BoxesModel] (iOS `AppModel.boxes`), beside [Stadeum], never in it. Its work runs on the

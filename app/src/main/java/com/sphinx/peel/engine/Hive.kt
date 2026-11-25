@@ -153,7 +153,7 @@ class OkHttpHive(
             client.newBuilder().callTimeout(timeoutSeconds, TimeUnit.SECONDS).build().newCall(builder.build()).execute().use { r ->
                 val source = r.body?.source()
                 val bytes = source?.let { it.request(HiveClient.LIMIT + 1L); it.buffer.snapshot().toByteArray() } ?: ByteArray(0)
-                if (bytes.size > HiveClient.LIMIT) throw HiveException("Stadeum's answer was too large.")
+                if (bytes.size > HiveClient.LIMIT) throw HiveException("Hive's answer was too large.")
                 HiveResponse(r.code, String(bytes, Charsets.UTF_8))
             }
         }
@@ -185,7 +185,7 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
     suspend fun start(name: String): Pairing {
         val (status, body) = request("POST", "api/strut-devices/pair", JSONObject().put("name", name).toString())
         if (status != 200) throw failure(status, body, "start pairing")
-        val j = json(body) ?: throw HiveException("Stadeum's pairing code could not be read.")
+        val j = json(body) ?: throw HiveException("Hive's pairing code could not be read.")
         val pairing = Pairing(
             deviceCode = j.optString("deviceCode"), userCode = j.optString("userCode"),
             verificationUri = j.optString("verificationUri"), verificationUriComplete = j.optString("verificationUriComplete"),
@@ -193,11 +193,11 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
         )
         // Only Hive's own page is ever shown or opened.
         for (page in listOf(pairing.verificationUri, pairing.verificationUriComplete)) {
-            if (!isHive(page)) throw HiveException("Stadeum gave a pairing page on another site (${hostOf(page) ?: "none"}); nothing was opened.")
+            if (!isHive(page)) throw HiveException("Hive gave a pairing page on another site (${hostOf(page) ?: "none"}); nothing was opened.")
         }
         if (pairing.interval !in 1..600 || pairing.expiresIn !in 1..3600 || pairing.deviceCode.isEmpty() ||
             pairing.userCode.isEmpty() || pairing.userCode.length > 32
-        ) throw HiveException("Stadeum's pairing code could not be read.")
+        ) throw HiveException("Hive's pairing code could not be read.")
         return pairing
     }
 
@@ -209,11 +209,11 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
     /// returned unchecked: the caller checks it against the account's call
     /// server (`CallLink.hive`).
     suspend fun startCall(link: HiveLink, workspace: String): String {
-        if (link.revokedAt != null) throw HiveException("Stadeum no longer knows this device; connect again in You.")
+        if (link.revokedAt != null) throw HiveException("Hive no longer knows this device; connect again in You.")
         val (status, body) = request("POST", "api/strut-devices/calls", JSONObject().put("workspace", workspace).toString(), link.credential)
         if (status != 200) throw failure(status, body, "start the call")
         val url = json(body)?.optString("url", "")?.takeIf { it.isNotEmpty() }
-            ?: throw HiveException("Stadeum's call link could not be read.")
+            ?: throw HiveException("Hive's call link could not be read.")
         return url
     }
 
@@ -232,10 +232,10 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
             val failure = failure(status, body, "pair")
             throw if (status == 429 || status >= 500) Unanswered(failure) else failure
         }
-        val j = json(body) ?: throw HiveException("Stadeum's device credential could not be read.")
+        val j = json(body) ?: throw HiveException("Hive's device credential could not be read.")
         val credential = j.optString("credential")
-        if (!credential.startsWith("hivedev_")) throw HiveException("Stadeum's device credential could not be read.")
-        val device = j.optJSONObject("device") ?: throw HiveException("Stadeum's device credential could not be read.")
+        if (!credential.startsWith("hivedev_")) throw HiveException("Hive's device credential could not be read.")
+        val device = j.optJSONObject("device") ?: throw HiveException("Hive's device credential could not be read.")
         val (peers, refused) = reachable(HiveLink.peers(j.optJSONArray("peers")))
         return Poll.Paired(
             HiveLink(
@@ -274,8 +274,8 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
     suspend fun renew(link: HiveLink, now: Instant = Instant.now()): HiveLink? {
         val (status, body) = request("GET", "api/strut-devices/peers", null, bearer = link.credential)
         if (status == 401) return null
-        if (status != 200) throw failure(status, body, "renew the Stadeum workspaces")
-        val j = json(body) ?: throw HiveException("Stadeum could not renew the Stadeum workspaces: unreadable answer.")
+        if (status != 200) throw failure(status, body, "renew the Hive workspaces")
+        val j = json(body) ?: throw HiveException("Hive could not renew the Hive workspaces: unreadable answer.")
         val (peers, refused) = reachable(HiveLink.peers(j.optJSONArray("peers")))
         return link.copy(
             actor = actor(j.optString("actor")), peers = peers, errors = HiveLink.errors(j.optJSONArray("errors")) + refused,
@@ -293,7 +293,7 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
         return when (status) {
             200 -> SphinxRegistration.Linked
             401, 404 -> SphinxRegistration.NotYet
-            409 -> SphinxRegistration.Refused(said(body) ?: "This Sphinx account is linked to another Stadeum user.")
+            409 -> SphinxRegistration.Refused(said(body) ?: "This Sphinx account is linked to another Hive user.")
             else -> throw failure(status, body, "link your Sphinx account")
         }
     }
@@ -332,7 +332,7 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
     }
 
     private fun failure(status: Int, body: String, couldNot: String) =
-        HiveException("Stadeum could not $couldNot: ${said(body) ?: "HTTP $status"}.")
+        HiveException("Hive could not $couldNot: ${said(body) ?: "HTTP $status"}.")
 
     /// Hive's own words in an answer (`{ "error": … }`), cleaned for showing.
     private fun said(body: String): String? = json(body)?.optString("error", "")?.let { WorkspaceApp.clean(it, 200) }?.ifEmpty { null }
@@ -355,7 +355,7 @@ class HiveClient(val hive: String = PRODUCTION, private val http: HiveHttp = OkH
 
         /// The person's actor: the first part of a strut session id, so plain.
         internal fun actor(actor: String): String {
-            if (!ACTOR.matches(actor)) throw HiveException("Stadeum named this account in a way Peel cannot use (${WorkspaceApp.clean(actor, 40)}).")
+            if (!ACTOR.matches(actor)) throw HiveException("Hive named this account in a way Peel cannot use (${WorkspaceApp.clean(actor, 40)}).")
             return actor
         }
     }

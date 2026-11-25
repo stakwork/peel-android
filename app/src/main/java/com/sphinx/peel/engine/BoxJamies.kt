@@ -43,7 +43,7 @@ object TribeJamie {
     fun options(boxes: List<JamieBox>, tribe: String, noJamie: String): List<Option> {
         val offered = boxes.filter { b -> b.places?.let { it.jamie != null || it.place(tribe) != null } == true }
         if (offered.isEmpty()) return emptyList()
-        return offered.map { Option(it.box.url, it.box.host) } + Option(NONE, noJamie)
+        return offered.map { Option(it.box.url, it.box.shortName) } + Option(NONE, noJamie)
     }
 
     /// The box the tribe is answered from (its address), or "" for none: the first box where the person linked it. Null until
@@ -133,7 +133,7 @@ class BoxJamies(
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            Read.Failed(BoxesModel.noted(e, "read which tribes have Jamie on ${box.host}"), nowMs())
+                            Read.Failed(BoxesModel.noted(e, "read which tribes have Jamie on ${box.shortName}"), nowMs())
                         }
                     }
                 }.awaitAll()
@@ -157,10 +157,10 @@ class BoxJamies(
         working = working + tribe.key
         problems = problems - tribe.key
         val chosen = all.firstOrNull { it.box.url == id }
-        var couldNot = if (id == TribeJamie.NONE) "remove Jamie" else "add Jamie from ${chosen?.box?.host ?: "that box"}"
+        var couldNot = if (id == TribeJamie.NONE) "remove Jamie" else "add Jamie from ${chosen?.box?.shortName ?: "that Stadeum server"}"
         try {
             if (id != TribeJamie.NONE) {
-                chosen ?: throw BoxException("Peel is no longer linked to that box.")
+                chosen ?: throw BoxException("Peel is no longer linked to that Stadeum server.")
                 val linked = boxes.asMember(chosen.box) { clientFor(it).link(tribe) }
                 changes++
                 val was = (reads[key(chosen.box)] as? Read.Places)?.places ?: BoxPlaces.NONE
@@ -169,7 +169,7 @@ class BoxJamies(
             for (other in all) {
                 if (other.box.url == id) continue
                 val place = other.places?.place(tribe.key) ?: continue
-                couldNot = "remove Jamie from ${other.box.host}"
+                couldNot = "remove Jamie from ${other.box.shortName}"
                 boxes.asMember(other.box) { clientFor(it).unlink(place.key) }
                 changes++
                 reads = reads + (key(other.box) to Read.Places(other.places!!.unlinking(tribe.key), nowMs()))

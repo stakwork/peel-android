@@ -93,9 +93,9 @@ class StadeumModel(
         close()
         this.store = store
         try {
-            link = store.read()?.let { text -> HiveLink.parse(text) ?: throw HiveException("Peel could not read your Stadeum connection.") }
+            link = store.read()?.let { text -> HiveLink.parse(text) ?: throw HiveException("Peel could not read your Hive connection.") }
         } catch (e: Exception) {
-            problem = noted(e, "read your Stadeum connection")
+            problem = noted(e, "read your Hive connection")
         }
         val restored = restoredBeforeOpen
         restoredBeforeOpen = false
@@ -167,13 +167,13 @@ class StadeumModel(
                 val deadline = asked.plusSeconds(pairing.expiresIn.toLong())
                 when (val poll = client.answer(pairing, name, deadline) { napUntilNextPoll(it) }) {
                     HiveClient.Poll.Pending -> return@launch
-                    HiveClient.Poll.Denied -> settle("It was turned down in Stadeum.")
+                    HiveClient.Poll.Denied -> settle("It was turned down in Hive.")
                     HiveClient.Poll.Expired -> {
                         val minutes = maxOf(1, (pairing.expiresIn + 59) / 60)
                         settle(
                             if (!now().isBefore(deadline))
-                                "The code ran out before pairing finished. Connect again, then approve it in Stadeum and come back to Peel within $minutes ${if (minutes == 1) "minute" else "minutes"}."
-                            else "Stadeum no longer has this code, so pairing didn't finish. Connect again.",
+                                "The code ran out before pairing finished. Connect again, then approve it in Hive and come back to Peel within $minutes ${if (minutes == 1) "minute" else "minutes"}."
+                            else "Hive no longer has this code, so pairing didn't finish. Connect again.",
                         )
                     }
                     is HiveClient.Poll.Paired -> {
@@ -190,7 +190,7 @@ class StadeumModel(
                 }
             } catch (e: CancellationException) {
             } catch (e: Exception) {
-                settle(noted(e, "connect Stadeum"))
+                settle(noted(e, "connect Hive"))
             }
         }
         pairingJob = job
@@ -209,7 +209,7 @@ class StadeumModel(
         val store = store ?: return
         reset()
         reconnectHint = false
-        try { store.delete() } catch (e: Exception) { problem = noted(e, "forget the Stadeum connection") }
+        try { store.delete() } catch (e: Exception) { problem = noted(e, "forget the Hive connection") }
     }
 
     /// Peel came back to the front: a pairing under way polls Hive now (the
@@ -280,7 +280,7 @@ class StadeumModel(
             throw e
         } catch (e: Exception) {
             // Tried again within the hour; the tokens last a week.
-            if (gen == generation && link?.credential == kept.credential) problem = noted(e, "renew your Stadeum workspaces")
+            if (gen == generation && link?.credential == kept.credential) problem = noted(e, "renew your Hive workspaces")
         }
     }
 
@@ -330,7 +330,7 @@ class StadeumModel(
 
     /// An error in words: Hive's own, or what could not be done and why.
     private fun noted(e: Exception, couldNot: String): String =
-        if (e is HiveException) e.message ?: "Stadeum could not $couldNot." else "Peel could not $couldNot: ${e.message ?: e.javaClass.simpleName}."
+        if (e is HiveException) e.message ?: "Hive could not $couldNot." else "Peel could not $couldNot: ${e.message ?: e.javaClass.simpleName}."
 
     private fun reset() {
         generation++
@@ -398,7 +398,7 @@ object Stadeum {
 
     /// What the Stadeum rows say once Stadeum knows the person's Sphinx account.
     const val IDENTIFIED_LINE =
-        "Stadeum knows your Sphinx account: in a tribe where Jamie knows who is speaking, your @jamie runs as you."
+        "Hive knows your Sphinx account: in a tribe where Jamie knows who is speaking, your @jamie runs as you."
 
     internal fun showsApps(live: List<HivePeer>, home: TalkHome?, openedApps: Boolean = false) =
         live.isNotEmpty() || home != null || openedApps

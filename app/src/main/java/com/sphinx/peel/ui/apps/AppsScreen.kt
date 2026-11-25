@@ -78,7 +78,7 @@ import com.sphinx.peel.ui.toast.ToastType
 /// Search, a source filter (with several workspaces), Refresh, long-press to
 /// copy a share link, pull to refresh, lucide icons (`LucideNames`/`AppIcons`), Talk rows' long-press menu
 /// (New conversation, History). Not ported: the Mac-only own-strut apps.
-/// `live` comes from the Stadeum pairing (You › Stadeum) and is observable, so
+/// `live` comes from the Stadeum pairing (You › Hive) and is observable, so
 /// this screen follows a connect or disconnect without a restart.
 /// Android only: this is the Apps tab (docs/phases/48-tasks-tab.md). Its one list is the workspace apps, then every public app opened
 /// here (`Storage.openedApps`, an employer's Tasks page too, last opened first; `AppsListing`), so a worker opens a Stadeum's worker

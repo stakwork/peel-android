@@ -190,6 +190,28 @@ class BoxLinkTest {
         }
     }
 
+    /// A server's short name, from its address alone: no `strut.`, then the first label. An IP address stays whole. Its full
+    /// address stays `host`, for You › Stadeum servers and the link question.
+    @Test fun `a server is named by a short name from its address`() {
+        val names = mapOf(
+            "https://strut.stadeum.stakwork.ai" to "stadeum",
+            "https://strut.stadeum1.sphinx.chat" to "stadeum1",
+            "https://STRUT.Stadeum.Stakwork.AI/" to "stadeum",
+            "https://strut.stadeum.stakwork.ai:8443/lab" to "stadeum",
+            "https://jamie.example.com" to "jamie",
+            "https://box.strut.example.com" to "box",
+            "https://example.com" to "example",
+            "https://strut.localhost" to "localhost",
+            "https://localhost:3400" to "localhost",
+            "http://127.0.0.1:3400" to "127.0.0.1",
+            "http://[::1]:3400" to "::1",
+        )
+        for ((url, name) in names) assertEquals(url, name, BoxLink.shortName(url))
+        val box = BoxFixture.box("https://strut.stadeum.stakwork.ai")
+        assertEquals("stadeum", box.shortName)
+        assertEquals("strut.stadeum.stakwork.ai", box.host)
+    }
+
     /// Due a day after the last renewal, or within a day of the token's end.
     @Test fun `a box is due daily and before its token ends`() {
         val now = BoxFixture.now

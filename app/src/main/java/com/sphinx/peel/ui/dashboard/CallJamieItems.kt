@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sphinx.peel.R
 import com.sphinx.peel.engine.BoxCalls
@@ -29,8 +30,9 @@ import com.sphinx.peel.engine.Boxes
 import com.sphinx.peel.ui.theme.Theme
 
 /// The call menu's Jamie (docs/phases/56-box-group-calls.md; iOS `ConversationScreen.jamiePicker`): each linked box whose Jamie can
-/// join a call on [callServer] now ([BoxCalls.offered]), No Jamie, and, with a box picked, Record on the canvas. Choosing keeps the
-/// menu open; Audio or Video call then starts the call with it. Nothing at all while no box is offered.
+/// join a call on [callServer] now ([BoxCalls.offered]), by its short name ([BoxLink.shortName]), No Jamie, and, with a box picked,
+/// Record on the canvas. Choosing keeps the menu open; Audio or Video call then starts the call with it. Nothing at all while no box
+/// is offered.
 @Composable
 fun ColumnScope.CallJamieItems(chat: String, callServer: String, calls: BoxCalls = Boxes.calls) {
     val offered = calls.offered(callServer)
@@ -41,12 +43,14 @@ fun ColumnScope.CallJamieItems(chat: String, callServer: String, calls: BoxCalls
         stringResource(R.string.ppl_jamie),
         style = MaterialTheme.typography.labelMedium,
         color = Theme.colors.secondaryText,
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
     )
     for (box in offered) {
         val on = picked?.url == box.url
         DropdownMenuItem(
-            text = { Text(box.host) },
+            text = { Text(box.shortName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingIcon = { PickMark(on) },
             onClick = { calls.choose(chat, box) },
             modifier = Modifier.semantics { selected = on; role = Role.RadioButton },

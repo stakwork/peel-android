@@ -24,7 +24,7 @@ class ScanWords(
 ) {
     companion object {
         val English = ScanWords(
-            "Open in Peel", { "Open $it in Peel" }, "Link a box", "Sphinx invite", "Contact", "Tribe",
+            "Open in Peel", { "Open $it in Peel" }, "Link a Stadeum server", "Sphinx invite", "Contact", "Tribe",
             "Lightning invoice", { "Lightning invoice · $it" },
         )
     }

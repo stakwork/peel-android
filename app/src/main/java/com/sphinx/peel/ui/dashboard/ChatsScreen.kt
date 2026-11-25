@@ -261,7 +261,7 @@ private fun ChatListBody(
                 // replies, Mentions the unread mentions; Apps stays 0 and
                 // shows only with a live Stadeum workspace or a development
                 // talk home, as on iOS (`Stadeum` is observable: the row
-                // appears as soon as You › Stadeum pairs), or (Android) with
+                // appears as soon as You › Hive pairs), or (Android) with
                 // a public app opened here.
                 if (!searching) {
                     // Apps has its own tab; this row only folds the pinned apps under it.

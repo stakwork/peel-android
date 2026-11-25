@@ -148,7 +148,7 @@
     <string name="scan_no_app">Ninguna app puede abrir eso.</string>
     <string name="scan_label_open_peel">Abrir en Peel</string>
     <string name="scan_label_open_host_peel">Abrir %1$s en Peel</string>
-    <string name="scan_label_link_box">Vincular una caja</string>
+    <string name="scan_label_link_box">Vincular un servidor Stadeum</string>
     <string name="scan_label_invite">Invitación de Sphinx</string>
     <string name="scan_label_contact">Contacto</string>
     <string name="scan_label_tribe">Tribu</string>
