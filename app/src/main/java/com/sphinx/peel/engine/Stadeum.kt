@@ -368,12 +368,21 @@ object Stadeum {
             if (peers.isEmpty()) { apps = emptyList(); unreadAppIds = emptyList(); return }
             readingApps = true
             try {
-                val results = coroutineScope {
-                    peers.map { peer -> async { peer to runCatching { fetch(peer) } } }.awaitAll()
+                val before = apps
+                val results = ArrayList<Pair<HivePeer, Result<List<WorkspaceApp>>>>()
+                coroutineScope {
+                    val done = kotlinx.coroutines.channels.Channel<Pair<HivePeer, Result<List<WorkspaceApp>>>>(peers.size)
+                    peers.forEach { peer -> launch { done.send(peer to runCatching { fetch(peer) }) } }
+                    repeat(peers.size) {
+                        val answer = done.receive()
+                        (answer.second.exceptionOrNull() as? CancellationException)?.let { throw it }
+                        results += answer
+                        // Answered peers' apps, then what the others (not yet answered, or failed) last listed.
+                        val answered = results.filter { it.second.isSuccess }.map { it.first.id }.toSet()
+                        apps = before.filter { it.peer !in answered && peers.any { p -> p.id == it.peer } } +
+                            results.flatMap { it.second.getOrNull().orEmpty() }
+                    }
                 }
-                results.forEach { (_, r) -> (r.exceptionOrNull() as? CancellationException)?.let { throw it } }
-                val kept = apps.filter { app -> results.any { (p, r) -> p.id == app.peer && r.isFailure } }
-                apps = kept + results.flatMap { it.second.getOrNull().orEmpty() }
                 unreadAppIds = results.filter { it.second.isFailure }.map { it.first.id }
             } finally {
                 readingApps = false
