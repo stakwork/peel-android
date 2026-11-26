@@ -77,7 +77,7 @@ private sealed class Step {
 /// in the background — and hands the engine to `onAccountReady` right away so
 /// the caller can show the restoring screen; a new account instead signs up
 /// with its invite (`Signup.create`: stores the invite, connects, registers)
-/// and opens Peel. A new account never sees its twelve words here (as on
+/// and opens Peel (`onAccountReady` gets `newAccount = true`, so the app lands on You as on iOS). A new account never sees its twelve words here (as on
 /// PeelCore's Onboarding.swift): You › Back up account shows and checks them
 /// later, and says "Not backed up", with a notice at the top of You and a badge on its tab, until then (phase 47).
 ///
@@ -93,7 +93,7 @@ fun OnboardingScreen(
     inviteLink: String? = null,
     onInviteLinkUsed: () -> Unit = {},
     onInviteApp: (PublicAppLink) -> Unit = {},
-    onAccountReady: (engine: Engine) -> Unit,
+    onAccountReady: (engine: Engine, newAccount: Boolean) -> Unit,
 ) {
     com.sphinx.peel.ui.SecureWindow()
     var path by remember { mutableStateOf(Path.NEW_ACCOUNT) }
@@ -166,7 +166,7 @@ fun OnboardingScreen(
                         val created = Signup.create(secretStore, storage, toJoin, name, pin)
                         // An unconfirmed signup registers again, with its stored invite, as it connects.
                         if (!created.isRegistered) created.resume()
-                        onAccountReady(created)
+                        onAccountReady(created, true)
                     }
                     Path.RESTORE -> {
                         val restored = withContext(Dispatchers.Default) {
@@ -189,7 +189,7 @@ fun OnboardingScreen(
                         }
                         // No pairing to show for it: You › Hive says to connect again.
                         com.sphinx.peel.engine.Stadeum.model.accountRestored()
-                        onAccountReady(restored)
+                        onAccountReady(restored, false)
                     }
                 }
                 pin = ""

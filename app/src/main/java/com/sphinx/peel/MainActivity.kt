@@ -232,6 +232,10 @@ private fun PeelApp(
     var screen by remember {
         mutableStateOf<Screen>(if (secretStore.hasMnemonic) Screen.Lock else Screen.Onboarding)
     }
+    /// One-shot, in memory only: set when Home is entered straight from a NEW-account signup, so it opens on You (where the
+    /// "Back up your words" card is), as the iPhone app does. Not the persisted WORDS_CONFIRMED setting, so later launches,
+    /// unlock/relock, restore and existing accounts still open on Chats. Cleared once Home has taken it.
+    var landOnYou by remember { mutableStateOf(false) }
     // The PIN asked at a cold launch (not again for a rotation: the process has noted it once).
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (!coldLockNoted && screen == Screen.Lock) Diagnostics.recordLock(DiagnosticEvent.LockReason.coldLaunch)
@@ -267,7 +271,8 @@ private fun PeelApp(
         Screen.Onboarding -> OnboardingScreen(
             secretStore, storage, inviteLink, onInviteLinkUsed,
             onInviteApp = { router.open(it, ready = false, invited = true) },
-        ) { engine ->
+        ) { engine, newAccount ->
+            landOnYou = newAccount
             screen = if (engine.restoreProgress.value.restoring) Screen.Restoring(engine) else Screen.Home(engine)
         }
         Screen.Lock -> LockScreen(secretStore, storage) { engine -> screen = Screen.Home(engine) }
@@ -299,7 +304,8 @@ private fun PeelApp(
             // The tab shown before Voice Mode took over (Chats, Payments, You/Profile, …): MainTabs itself is torn down and
             // rebuilt across the swap (it's a different composable in this same slot), so its own tab state does not survive
             // on its own -- held here instead, above both, so the grid button returns to where the person actually was.
-            var lastMainTab by rememberSaveable { mutableStateOf<com.sphinx.peel.ui.dashboard.MainTab?>(null) }
+            var lastMainTab by rememberSaveable { mutableStateOf<com.sphinx.peel.ui.dashboard.MainTab?>(if (landOnYou) com.sphinx.peel.ui.dashboard.MainTab.YOU else null) }
+            androidx.compose.runtime.LaunchedEffect(Unit) { landOnYou = false }
             Box(Modifier.fillMaxSize()) {
                 if (route == VoiceModeRoute.VOICE) VoiceModeScreen(current.engine, storage) { voicePrefs.enabled = false }
                 else MainTabs(
