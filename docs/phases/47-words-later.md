@@ -40,3 +40,16 @@ unchanged: "Not checked yet", Check words, Show words. Restore is unchanged.
 
 - A real signup going straight from the PIN to Peel, the row and the check in You, and the check after the app is backgrounded
   mid-way.
+
+## Update (2026-11-26): Back up account
+
+A QA pass (SQA-01) found no clear backup after signup: the row was the only sign. Now, until three words are typed back
+(`WORDS_CONFIRMED` "1"), You opens with a notice (what is at stake, "Back up now"), the row is "Back up account" with
+"Not backed up", and the You tab has an accent "!" badge (`MainTabs.BottomBar`, read again on `Storage.settingsVersion`,
+which moves on any commit that writes a setting). The screen explains the words in four points, then "Back up now": the PIN,
+the words, "I've written them down", three typed back; "Show words again" from the check. Passing removes the notice, the
+status and the badge; there is no Dismiss. "Check words" (straight to the check) is gone: the backup always shows the words
+first. iOS does the same (peel, `YouTab.swift`), and its signup no longer shows the words either.
+
+Not run: the screens on a device or emulator; no Android SDK on the Mac it was written on, so CI's unit tests, lint and
+assembleDebug are the first build.

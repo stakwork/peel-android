@@ -30,7 +30,7 @@ object Signup {
     /// anything connects, so an app killed mid-way still registers with the invite when it opens;
     /// then the engine connects. The profile is removed again only if no register can have
     /// reached the server ([SignupRules.keepAccount]). The words are not returned: the person
-    /// sees them later in You › Twelve words (`WORDS_CONFIRMED` "0" says "Not checked yet").
+    /// sees them later in You › Back up account (`WORDS_CONFIRMED` "0" says "Not backed up").
     ///
     /// The engine returned may not be registered yet (`isRegistered` false): the server has not
     /// confirmed the register, the account is kept, and it registers again on each connect; the

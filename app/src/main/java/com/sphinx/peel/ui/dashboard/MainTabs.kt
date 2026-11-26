@@ -39,7 +39,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.runtime.collectAsState
 import com.sphinx.peel.engine.PublicPage
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -423,7 +427,14 @@ fun MainTabs(
                 }
             }
         }
-        if (onTabs) BottomBar(tab) { tab = it }
+        if (onTabs) {
+            // You's badge until the twelve words are checked (You › Back up account).
+            val settingsVersion by storage.settingsVersion.collectAsState()
+            val backedUp = remember(settingsVersion) {
+                com.sphinx.peel.account.Account.wordsChecked(storage.value(com.sphinx.peel.storage.Setting.WORDS_CONFIRMED))
+            }
+            BottomBar(tab, youNeedsBackup = !backedUp) { tab = it }
+        }
     }
     // Over the call screen too: the call goes on behind it (the session is the store's, not the screen's).
     shownPage?.takeIf { !pages.orgInApps }?.let { com.sphinx.peel.ui.apps.OrgPageScreen(it, engine.walletHost, onClose = pages::closeOrg, locations = storage) }
@@ -451,7 +462,7 @@ private fun CallNoticeBar(notice: CallNotice, onDismiss: () -> Unit) {
 
 /// Chats, Payments, Apps and You in one pill. Search is a button at the top left of Chats, not a tab (iOS `ChatsTab`).
 @Composable
-private fun BottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
+private fun BottomBar(selected: MainTab, youNeedsBackup: Boolean, onSelect: (MainTab) -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -468,20 +479,27 @@ private fun BottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
                     MainTab.PAYMENTS -> Icons.Filled.Bolt to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_payments)
                     MainTab.YOU -> Icons.Filled.Person to androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.tab_you)
                 }
-                TabIcon(icon, label, selected == tab) { onSelect(tab) }
+                TabIcon(icon, label, selected == tab, badge = tab == MainTab.YOU && youNeedsBackup) { onSelect(tab) }
             }
         }
     }
 }
 
 @Composable
-private fun RowScope.TabIcon(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+private fun RowScope.TabIcon(icon: ImageVector, label: String, selected: Boolean, badge: Boolean = false, onClick: () -> Unit) {
     val tint = if (selected) Theme.colors.accent else Theme.colors.secondaryText
+    val notBackedUp = androidx.compose.ui.res.stringResource(com.sphinx.peel.R.string.misc_you_not_backed_up)
     Column(
-        Modifier.weight(1f).clickable(onClick = onClick).padding(vertical = 10.dp),
+        Modifier.weight(1f).clickable(onClick = onClick).padding(vertical = 10.dp)
+            .then(if (badge) Modifier.semantics { stateDescription = notBackedUp } else Modifier),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(icon, contentDescription = label, tint = tint)
+        // Accent, as iOS's tab badge: a prompt, not an error.
+        BadgedBox(badge = {
+            if (badge) Badge(containerColor = Theme.colors.accent, contentColor = Theme.colors.buttonText) { Text("!") }
+        }) {
+            Icon(icon, contentDescription = label, tint = tint)
+        }
         Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
     }
 }

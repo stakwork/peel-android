@@ -46,7 +46,7 @@ internal fun Context.findActivity(): Activity? {
 ///
 /// Decision (docs/phases/17-lock-hardening.md): FLAG_SECURE on every screen
 /// that shows or takes a secret — lock/PIN, onboarding (words, PIN, restore),
-/// Twelve words, Change PIN, biometric setup. NOT on the whole app: chats are
+/// Back up account, Change PIN, biometric setup. NOT on the whole app: chats are
 /// often screenshotted on purpose; instead the Recents thumbnail alone is
 /// hidden app-wide on API 33+ (`MainActivity`).
 @Composable

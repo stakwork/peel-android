@@ -457,7 +457,14 @@ class Storage(context: Context, account: String = "default") : com.sphinx.peel.e
         if (commit.payments.isNotEmpty() || commit.invoices.isNotEmpty() || commit.keysends.isNotEmpty() || commit.preimages.isNotEmpty()) {
             walletRecordsVersionFlow.value += 1
         }
+        if (commit.settings.isNotEmpty() || commit.deleteSettings.isNotEmpty()) settingsVersionFlow.value += 1
     }
+
+    private val settingsVersionFlow = MutableStateFlow(0)
+
+    /// Moves when a commit writes or removes a setting, so a screen showing one (the You tab's
+    /// "not backed up" badge, `Setting.WORDS_CONFIRMED`) reads it again.
+    val settingsVersion: StateFlow<Int> = settingsVersionFlow
 
     /// Every stored message's `chat`, `fromMe` and `sender` — what
     /// `Engine.contactHint` needs, and nothing it doesn't: `backfillContactsIfNeeded`

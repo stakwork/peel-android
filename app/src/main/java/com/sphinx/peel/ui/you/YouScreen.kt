@@ -21,6 +21,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -126,9 +128,9 @@ private enum class YouRoute { WORDS, CHANGE_PIN, DIAGNOSTICS, CONNECTED_APPS, SI
 
 /// "You" (docs/design/iphone.md, screen 6), reworked to match the iOS app's
 /// own Profile: a centred "You" title, the avatar/name/balance header, an
-/// Agent card, one Account card (Twelve words, Change PIN, Ask for the PIN,
+/// Agent card, one Account card (Back up account, Change PIN, Ask for the PIN,
 /// Biometric unlock, Boost amount, Confirm payments, Server), a Debug card
-/// and "Forget this account" in its own card. Twelve words and Change PIN
+/// and "Forget this account" in its own card. Back up account and Change PIN
 /// open their own full screens (round back button, big title); Ask for the
 /// PIN, Boost amount and Confirm payments are dialogs, since each is one
 /// choice from a short list rather than its own flow. Biometric unlock's
@@ -275,6 +277,9 @@ private fun YouMain(
     }
     val hasAgent = remember { storage.contact(engine.agentPubkey) != null }
 
+    // Read again each time You shows (it leaves composition while Back up account is open).
+    val wordsChecked = remember { Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED)) }
+
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
             Text(
@@ -283,6 +288,7 @@ private fun YouMain(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
             )
         }
+        if (!wordsChecked) item { BackupNotice(onBackUp = onOpenWords) }
         item {
             Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Avatar(
@@ -365,10 +371,8 @@ private fun YouMain(
         item { SectionHeader(stringResource(R.string.misc_you_account)) }
         item {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
-                // Read again each time You shows (it leaves composition while Twelve words is open).
-                val wordsChecked = remember { Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED)) }
                 AccountRow(
-                    label = stringResource(R.string.misc_you_twelve_words), value = if (wordsChecked) "" else stringResource(R.string.misc_you_not_checked_yet),
+                    label = stringResource(R.string.misc_you_back_up_account), value = if (wordsChecked) "" else stringResource(R.string.misc_you_not_backed_up),
                     onClick = onOpenWords, chevron = true,
                 )
                 AccountDivider()
@@ -929,12 +933,11 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
 
 private enum class WordsStage { INTRO, PIN, WORDS, CHECK }
 
-/// The twelve words: an intro with "Show words", the PIN, then the words
-/// masked behind "Reveal", hidden again after 30 s (counted down on screen),
-/// on "Hide", or when this screen/app leaves the foreground — PeelCore's own
-/// `WordsScreen`, without Face ID. A signup that skipped onboarding's check
-/// ("Back up later", "Skip for now") is "Not checked against your paper yet":
-/// "Check words" asks the PIN, then three of the words, as iOS does.
+/// Back up account (iOS `WordsScreen`, without Face ID). Not backed up (signup never shows the
+/// words): what they are and how to keep them, then "Back up now": the PIN, the words masked
+/// behind "Reveal", hidden again after 30 s (counted down on screen) or when this screen/app
+/// leaves the foreground, then "I've written them down" and three of them typed back, which sets
+/// `WORDS_CONFIRMED` and takes away You's notice and the tab's badge. Backed up: "Show words".
 @Composable
 private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack: () -> Unit) {
     val strCtx = androidx.compose.ui.platform.LocalContext.current
@@ -949,7 +952,9 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
     var revealedAt by remember { mutableStateOf(0L) }
     var remaining by remember { mutableStateOf(shownForSeconds) }
     var checked by remember { mutableStateOf(Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED))) }
-    // After the PIN: three words asked back, not the twelve shown.
+    // "Back up now": the words shown lead to the check.
+    var backingUp by remember { mutableStateOf(false) }
+    // Three words asked back from paper, after "I've written them down".
     var checking by remember { mutableStateOf(false) }
     var check by remember { mutableStateOf(WordCheck()) }
     val scope = rememberCoroutineScope()
@@ -967,11 +972,29 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
         checking = false
     }
 
-    fun start(toCheck: Boolean) {
-        checking = toCheck
+    fun start(backUp: Boolean) {
+        backingUp = backUp
+        checking = false
         pin = ""
         problem = null
         stage = WordsStage.PIN
+    }
+
+    // From the shown words to typing three back; the words stay in memory, out of sight, and the timer stops.
+    fun startCheck() {
+        visible = false
+        check = WordCheck()
+        problem = null
+        revealedAt = 0L
+        checking = true
+        stage = WordsStage.CHECK
+    }
+
+    fun showWordsAgain() {
+        checking = false
+        problem = null
+        stage = WordsStage.WORDS
+        revealedAt = System.currentTimeMillis()
     }
 
     fun confirm() {
@@ -1016,22 +1039,24 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
         when (stage) {
             WordsStage.INTRO -> {
                 RouteHeader(
-                    stringResource(R.string.misc_you_twelve_words),
-                    if (checked) stringResource(R.string.misc_you_words_checked) else stringResource(R.string.misc_you_words_unchecked),
+                    stringResource(R.string.misc_you_back_up_account),
+                    if (checked) stringResource(R.string.misc_you_backed_up) else stringResource(R.string.misc_you_backup_intro),
                     onBack,
                 )
-                Spacer(Modifier.weight(1f))
-                if (!checked) {
+                if (checked) {
+                    Spacer(Modifier.weight(1f))
                     PillButton(
-                        stringResource(R.string.misc_you_check_words), onClick = { start(toCheck = true) },
+                        stringResource(R.string.misc_you_show_words), onClick = { start(backUp = false) },
+                        container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
+                    )
+                } else {
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 20.dp)) { BackupSteps() }
+                    Spacer(Modifier.height(12.dp))
+                    PillButton(
+                        stringResource(R.string.misc_you_back_up_now), onClick = { start(backUp = true) },
                         container = Theme.colors.accent, content = Theme.colors.buttonText,
                     )
-                    Spacer(Modifier.height(10.dp))
                 }
-                PillButton(
-                    stringResource(R.string.misc_you_show_words), onClick = { start(toCheck = false) },
-                    container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
-                )
                 Spacer(Modifier.height(24.dp))
             }
             WordsStage.PIN -> {
@@ -1044,7 +1069,7 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                 }
                 PinPrompt(
                     title = stringResource(R.string.misc_you_enter_pin),
-                    detail = problem ?: if (checking) stringResource(R.string.misc_you_pin_to_check) else stringResource(R.string.misc_you_pin_to_show),
+                    detail = problem ?: stringResource(R.string.misc_you_pin_to_show),
                     pin = pin, onPinChange = { pin = it }, working = working,
                     onComplete = {
                         working = true
@@ -1056,14 +1081,8 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                                 }
                                 visible = false
                                 problem = null
-                                if (checking) {
-                                    pin = ""
-                                    check = WordCheck()
-                                    stage = WordsStage.CHECK
-                                } else {
-                                    stage = WordsStage.WORDS
-                                    revealedAt = System.currentTimeMillis()
-                                }
+                                stage = WordsStage.WORDS
+                                revealedAt = System.currentTimeMillis()
                             } catch (e: SecretStoreFailure.LockedOut) {
                                 problem = strCtx.str(R.string.misc_you_too_many_pins, LockoutPolicy.describe(e.remainingMs))
                                 pin = ""
@@ -1096,6 +1115,11 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                 PillButton(
                     stringResource(R.string.misc_you_check), onClick = ::confirm, enabled = check.isFilled,
                     container = Theme.colors.accent, content = Theme.colors.buttonText,
+                )
+                Spacer(Modifier.height(10.dp))
+                PillButton(
+                    stringResource(R.string.misc_you_show_again), onClick = ::showWordsAgain,
+                    container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
                 )
                 Spacer(Modifier.height(24.dp))
             }
@@ -1136,15 +1160,27 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
                     )
                 }
                 Spacer(Modifier.height(12.dp))
-                PillButton(
-                    stringResource(R.string.misc_you_reveal), onClick = { visible = true },
-                    container = Theme.colors.accent, content = Theme.colors.buttonText,
-                )
-                Spacer(Modifier.height(10.dp))
-                PillButton(
-                    stringResource(R.string.misc_you_hide), onClick = { hide() },
-                    container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
-                )
+                if (backingUp) {
+                    PillButton(
+                        stringResource(R.string.misc_you_written_down), onClick = ::startCheck,
+                        container = Theme.colors.accent, content = Theme.colors.buttonText,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    PillButton(
+                        stringResource(R.string.misc_you_reveal), onClick = { visible = true }, enabled = !visible,
+                        container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
+                    )
+                } else {
+                    PillButton(
+                        stringResource(R.string.misc_you_reveal), onClick = { visible = true },
+                        container = Theme.colors.accent, content = Theme.colors.buttonText,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    PillButton(
+                        stringResource(R.string.misc_you_hide), onClick = { hide() },
+                        container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
+                    )
+                }
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -1518,5 +1554,43 @@ internal fun SiteLocationScreen(storage: Storage, onBack: () -> Unit) {
             }) { Text(stringResource(R.string.misc_you_forget_all), color = Theme.colors.destructive) }
         }
         item { TextButton(onClick = { settings() }) { Text(stringResource(R.string.misc_you_phone_location)) } }
+    }
+}
+
+/// At the top of You until the words are checked against paper (iOS `BackupNotice`): what is at
+/// stake, and "Back up now". No Dismiss; passing the check is what takes it away, and the tab's badge.
+@Composable
+private fun BackupNotice(onBackUp: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 16.dp).clip(CardShape).background(Theme.colors.fieldFill)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(Icons.Filled.Warning, contentDescription = null, tint = Theme.colors.attention, modifier = Modifier.size(20.dp))
+            Text(stringResource(R.string.misc_you_backup_notice), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+        }
+        TextButton(onClick = onBackUp, modifier = Modifier.padding(start = 20.dp)) {
+            Text(stringResource(R.string.misc_you_back_up_now), color = Theme.colors.accent)
+        }
+    }
+}
+
+/// What the twelve words are and how to keep them, before "Back up now" (iOS `BackupSteps`).
+@Composable
+private fun BackupSteps() {
+    val steps = listOf(
+        R.string.misc_you_backup_step_control, R.string.misc_you_backup_step_reset,
+        R.string.misc_you_backup_step_paper, R.string.misc_you_backup_step_check,
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        steps.forEachIndexed { index, step ->
+            Row(Modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "${index + 1}", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
+                    color = Theme.colors.secondaryText, modifier = Modifier.width(16.dp),
+                )
+                Text(stringResource(step), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+            }
+        }
     }
 }
