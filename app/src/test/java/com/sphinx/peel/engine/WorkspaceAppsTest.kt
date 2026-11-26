@@ -1,5 +1,7 @@
 package com.sphinx.peel.engine
 
+import java.io.IOException
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -75,5 +77,34 @@ class WorkspaceAppsTest {
         assertTrue(Stadeum.showsApps(emptyList(), null, openedApps = true))
         assertFalse(Stadeum.showsApps(emptyList(), null, openedApps = false))
         assertTrue(Stadeum.showsApps(listOf(HivePeer("w1", "https://w1.example.com", "t", null)), null, openedApps = false))
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+class StadeumReadAppsTest {
+    private val fast = HivePeer("fast", "https://fast.example.com", "t", null)
+    private val slow = HivePeer("slow", "https://slow.example.com", "t", null)
+
+    @Test
+    fun `a fast workspace's apps show before a slow one answers`() = kotlinx.coroutines.runBlocking {
+        val gate = kotlinx.coroutines.CompletableDeferred<List<WorkspaceApp>>()
+        val job = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+            Stadeum.readApps(listOf(fast, slow)) { if (it.id == "fast") listOf(WorkspaceApp("fast", "a", "A")) else gate.await() }
+        }
+        assertEquals(listOf("fast"), Stadeum.apps.map { it.peer })
+        assertTrue(Stadeum.readingApps)
+        gate.complete(listOf(WorkspaceApp("slow", "b", "B")))
+        job.join()
+        assertEquals(setOf("fast", "slow"), Stadeum.apps.map { it.peer }.toSet())
+        assertFalse(Stadeum.readingApps)
+        assertTrue(Stadeum.unreadAppIds.isEmpty())
+    }
+
+    @Test
+    fun `a failed workspace keeps its previous apps and is reported`() = kotlinx.coroutines.runBlocking {
+        Stadeum.readApps(listOf(fast, slow)) { listOf(WorkspaceApp(it.id, "x", "X")) }
+        Stadeum.readApps(listOf(fast, slow)) { if (it.id == "slow") throw IOException("down") else listOf(WorkspaceApp("fast", "y", "Y")) }
+        assertEquals(setOf("slow:x", "fast:y"), Stadeum.apps.map { "${it.peer}:${it.name}" }.toSet())
+        assertEquals(listOf("slow"), Stadeum.unreadAppIds)
     }
 }
