@@ -77,9 +77,9 @@ private sealed class Step {
 /// in the background — and hands the engine to `onAccountReady` right away so
 /// the caller can show the restoring screen; a new account instead signs up
 /// with its invite (`Signup.create`: stores the invite, connects, registers)
-/// and opens Peel. A new account never sees its twelve words here (unlike
-/// PeelCore's Onboarding.swift): You › Twelve words shows and checks them
-/// later, and says "Not checked yet" until then (phase 47).
+/// and opens Peel. A new account never sees its twelve words here (as on
+/// PeelCore's Onboarding.swift): You › Back up account shows and checks them
+/// later, and says "Not backed up", with a notice at the top of You and a badge on its tab, until then (phase 47).
 ///
 /// `inviteLink` is what a `sphinx.chat://` link the app was opened with held:
 /// it fills the invite step in (`onInviteLinkUsed` is called once it has).
@@ -177,7 +177,7 @@ fun OnboardingScreen(
                             // own `Account.swift` sets this the same way
                             // (`needsRestore ? "1" : "0"`). Left unset here
                             // before this fix: a restored account's own
-                            // Profile would have shown "Not checked yet"
+                            // Profile would have shown "Not backed up"
                             // forever, nothing in this port ever having
                             // written it true for that path.
                             storage.apply(
