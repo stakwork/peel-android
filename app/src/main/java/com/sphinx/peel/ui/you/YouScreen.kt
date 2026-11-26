@@ -20,11 +20,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.UnfoldMore
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import com.sphinx.peel.ui.payments.QrCodeImage
@@ -52,7 +56,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -126,30 +129,33 @@ import kotlinx.coroutines.withContext
 
 private enum class YouRoute { WORDS, CHANGE_PIN, DIAGNOSTICS, CONNECTED_APPS, SITE_LOCATION }
 
-/// "You" (docs/design/iphone.md, screen 6), reworked to match the iOS app's
-/// own Profile: a centred "You" title, the avatar/name/balance header, an
-/// Agent card, one Account card (Back up account, Change PIN, Ask for the PIN,
-/// Biometric unlock, Boost amount, Confirm payments, Server), a Debug card
-/// and "Forget this account" in its own card. Back up account and Change PIN
-/// open their own full screens (round back button, big title); Ask for the
-/// PIN, Boost amount and Confirm payments are dialogs, since each is one
-/// choice from a short list rather than its own flow. Biometric unlock's
-/// own screen is the PIN check `beginBiometric` needs before enrolling it.
-///
-/// Not ported (see `docs/phases/11-profile-preferences.md`):
-///  - "Auto download media": Android has no auto-download yet; the row is
-///    in the code, commented out, with a TODO.
+/// "You" (docs/design/iphone.md, screen 6; iOS `YouTab`): a centred "You" title, then you in one
+/// card (photo, whose tap offers add/change/remove; name, whose tap edits it; balance; the
+/// contact-code button that opens [ContactSheet]), "Back up your account" under it until the
+/// words are checked, then the sections Security (the words, Change PIN, Ask for the PIN,
+/// Biometric unlock), Agent (Peel, Voice), Apps (Hive, Stadeum servers, Connected apps, Site
+/// location), Payments (Boost amount, Confirm payments), Media (Auto download media, Compress
+/// large videos), Help (Diagnostics, Check for updates, Server), a Debug card and "Forget this
+/// account" in its own card. The words, Change PIN, Diagnostics, Connected apps and Site location
+/// open their own full screens (round back button, big title); Ask for the PIN, Boost amount and
+/// Confirm payments are dialogs, since each is one choice from a short list rather than its own flow.
 @Composable
 fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForgotten: () -> Unit) {
     var route by remember { mutableStateOf<YouRoute?>(null) }
+    // "Words checked" under the title, once, right after the check passes; it goes after a few seconds or when You leaves.
+    var justChecked by remember { mutableStateOf(false) }
     when (route) {
-        YouRoute.WORDS -> TwelveWordsScreen(secretStore, storage, onBack = { route = null })
+        YouRoute.WORDS -> TwelveWordsScreen(
+            secretStore, storage, onBack = { route = null },
+            onChecked = { justChecked = true; route = null },
+        )
         YouRoute.CHANGE_PIN -> ChangePinScreen(secretStore, onBack = { route = null })
         YouRoute.DIAGNOSTICS -> com.sphinx.peel.ui.diagnostics.DiagnosticsScreen(onBack = { route = null })
         YouRoute.CONNECTED_APPS -> ConnectedAppsScreen(storage, onBack = { route = null })
         YouRoute.SITE_LOCATION -> SiteLocationScreen(storage, onBack = { route = null })
         null -> YouMain(
             engine, storage, secretStore, onForgotten,
+            checkedNote = justChecked, onCheckedNoteGone = { justChecked = false },
             onOpenWords = { route = YouRoute.WORDS },
             onOpenChangePin = { route = YouRoute.CHANGE_PIN },
             onOpenDiagnostics = { route = YouRoute.DIAGNOSTICS },
@@ -161,50 +167,81 @@ fun YouScreen(engine: Engine, storage: Storage, secretStore: SecretStore, onForg
 
 private val CardShape = RoundedCornerShape(24.dp)
 
-/// "Your contact info" (the Mac app's Account › Profile card): a QR and a copy
-/// button for the full `<pubkey>_<lsp>_<scid>`; never a bare pubkey.
+/// "Your contact info" (iOS `ContactSheet`; the Mac app's Account › Profile card), from You's
+/// contact-code button: the QR of the full `<pubkey>_<lsp>_<scid>`, never a bare pubkey, then
+/// Copy and Share. Before the contact info is stored, only "Not ready yet".
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ContactInfoCard(contactInfo: String?) {
+private fun ContactSheet(contactInfo: String?, name: String?, photoUrl: String?, hue: PersonHue, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val clipboard = LocalClipboardManager.current
     val toast = LocalToast.current
     val copiedText = stringResource(R.string.misc_copied)
-    Box(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill).padding(16.dp)) {
-        if (contactInfo == null) {
-            Column {
-                Text(stringResource(R.string.misc_you_contact_info), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.misc_you_contact_info_not_ready), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
+    val title = stringResource(R.string.misc_you_contact_info)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Theme.colors.background) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text(
+                    title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text,
+                    textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(horizontal = 64.dp),
+                )
+                TextButton(
+                    onClick = { scope.launch { sheetState.hide(); onDismiss() } },
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                ) { Text(stringResource(R.string.misc_done), color = Theme.colors.accent, fontWeight = FontWeight.SemiBold) }
             }
-            return@Box
-        }
-        val qr: @Composable () -> Unit = { QrCodeImage(contactInfo, 120.dp, stringResource(R.string.misc_you_contact_info_qr)) }
-        val text: @Composable (Modifier) -> Unit = { modifier ->
-            Column(modifier) {
-                Text(stringResource(R.string.misc_you_contact_info), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = {
-                    clipboard.setText(AnnotatedString(contactInfo))
-                    toast.show(copiedText, ToastType.Success)
-                }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                    Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.misc_you_contact_info_copy), fontSize = 14.sp, maxLines = 1, softWrap = false)
-                }
+            Spacer(Modifier.height(24.dp))
+            Avatar(name = name ?: stringResource(R.string.misc_you_title), url = photoUrl, size = 64.dp, hue = hue, shape = AvatarShape.CIRCLE)
+            if (name != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Theme.colors.text,
+                    textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
             }
-        }
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            if (maxWidth < 320.dp) {
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    qr()
-                    Spacer(Modifier.height(12.dp))
-                    text(Modifier.fillMaxWidth())
-                }
+            Spacer(Modifier.height(24.dp))
+            if (contactInfo == null) {
+                Text(
+                    stringResource(R.string.misc_you_contact_info_not_ready), style = MaterialTheme.typography.bodyMedium,
+                    color = Theme.colors.secondaryText, textAlign = TextAlign.Center,
+                )
             } else {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    qr()
-                    Spacer(Modifier.width(16.dp))
-                    text(Modifier.weight(1f))
+                // QrCodeImage draws on white, so the code scans in dark mode too.
+                Box(
+                    Modifier.clip(RoundedCornerShape(16.dp)).border(1.dp, Theme.colors.divider, RoundedCornerShape(16.dp))
+                        .background(Color.White).padding(12.dp),
+                ) {
+                    QrCodeImage(contactInfo, 216.dp, stringResource(R.string.misc_you_contact_info_qr))
                 }
+                Spacer(Modifier.height(20.dp))
+                Text(
+                    stringResource(R.string.misc_you_contact_info_hint), style = MaterialTheme.typography.bodyMedium,
+                    color = Theme.colors.secondaryText, textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(32.dp))
+                PillButton(
+                    stringResource(R.string.misc_you_contact_info_copy),
+                    onClick = {
+                        clipboard.setText(AnnotatedString(contactInfo))
+                        toast.show(copiedText, ToastType.Success)
+                    },
+                    container = Theme.colors.accent, content = Theme.colors.buttonText,
+                )
+                Spacer(Modifier.height(10.dp))
+                PillButton(
+                    stringResource(R.string.misc_you_share),
+                    onClick = {
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(android.content.Intent.EXTRA_TEXT, contactInfo)
+                        runCatching { context.startActivity(android.content.Intent.createChooser(send, title)) }
+                    },
+                    container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
+                )
             }
         }
     }
@@ -216,6 +253,8 @@ private fun YouMain(
     storage: Storage,
     secretStore: SecretStore,
     onForgotten: () -> Unit,
+    checkedNote: Boolean,
+    onCheckedNoteGone: () -> Unit,
     onOpenWords: () -> Unit,
     onOpenChangePin: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -248,6 +287,8 @@ private fun YouMain(
     var uploadingPhoto by remember { mutableStateOf(false) }
     var photoProblem by remember { mutableStateOf<String?>(null) }
     var confirmingRemovePhoto by remember { mutableStateOf(false) }
+    var photoMenu by remember { mutableStateOf(false) }
+    var showingContact by remember { mutableStateOf(false) }
     // Choose, redraw as a small JPEG (iOS `ProfilePhoto.jpeg`), upload to the public route and
     // store the link; the photo changes only once all of that worked.
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -277,8 +318,17 @@ private fun YouMain(
     }
     val hasAgent = remember { storage.contact(engine.agentPubkey) != null }
 
-    // Read again each time You shows (it leaves composition while Back up account is open).
+    // Read again each time You shows (it leaves composition while the words screen is open).
     val wordsChecked = remember { Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED)) }
+
+    if (checkedNote) {
+        LaunchedEffect(Unit) {
+            delay(4_000)
+            onCheckedNoteGone()
+        }
+        // Gone too when You leaves (another of its screens, or another tab), so it never shows twice.
+        DisposableEffect(Unit) { onDispose { onCheckedNoteGone() } }
+    }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
@@ -288,91 +338,87 @@ private fun YouMain(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
             )
         }
-        if (!wordsChecked) item { BackupNotice(onBackUp = onOpenWords) }
+        if (checkedNote) item { CheckedNote() }
         item {
-            Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Avatar(
-                    name = alias ?: stringResource(R.string.misc_you_title), url = photoUrl,
-                    size = 88.dp, hue = PersonHue.of(engine.accountKey), shape = AvatarShape.CIRCLE,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                        enabled = !uploadingPhoto,
-                    ) { Text(if (uploadingPhoto) stringResource(R.string.misc_you_uploading) else if (photoUrl == null) stringResource(R.string.misc_you_add_photo) else stringResource(R.string.misc_you_change_photo)) }
-                    if (photoUrl != null && !uploadingPhoto) {
-                        TextButton(onClick = { confirmingRemovePhoto = true }) { Text(stringResource(R.string.misc_you_remove_photo), color = Theme.colors.destructive) }
+            val photoLabel = if (photoUrl == null) stringResource(R.string.misc_you_add_photo) else stringResource(R.string.misc_you_change_photo)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 16.dp).clip(CardShape).background(Theme.colors.fieldFill)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // The photo's tap offers add/change/remove.
+                Box {
+                    Avatar(
+                        name = alias ?: stringResource(R.string.misc_you_title), url = photoUrl,
+                        size = 56.dp, hue = PersonHue.of(engine.accountKey), shape = AvatarShape.CIRCLE,
+                        modifier = Modifier.clip(CircleShape).clickable(enabled = !uploadingPhoto, onClickLabel = photoLabel) { photoMenu = true },
+                    )
+                    if (uploadingPhoto) {
+                        val uploading = stringResource(R.string.misc_you_uploading)
+                        androidx.compose.material3.CircularProgressIndicator(
+                            Modifier.size(56.dp).semantics { contentDescription = uploading }, color = Theme.colors.accent, strokeWidth = 2.dp,
+                        )
+                    }
+                    DropdownMenu(expanded = photoMenu, onDismissRequest = { photoMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(photoLabel) },
+                            onClick = {
+                                photoMenu = false
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                        )
+                        if (photoUrl != null) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.misc_you_remove_photo), color = Theme.colors.destructive) },
+                                onClick = { photoMenu = false; confirmingRemovePhoto = true },
+                            )
+                        }
                     }
                 }
-                photoProblem?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.destructive, textAlign = TextAlign.Center)
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier.clickable { editingName = true },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
                     Text(
                         alias ?: stringResource(R.string.misc_you_set_name),
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         color = if (alias != null) Theme.colors.text else Theme.colors.secondaryText,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(onClickLabel = stringResource(R.string.misc_you_edit_name)) { editingName = true },
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.misc_you_edit_name), tint = Theme.colors.secondaryText, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.height(2.dp))
+                    // Never cut short: a long balance wraps rather than ellipsizes.
+                    Text(
+                        balanceMsat?.let { Sats.format(it) } ?: "–",
+                        color = Theme.colors.secondaryText,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                    )
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    balanceMsat?.let { Sats.format(it) } ?: "–",
-                    color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-
-        item {
-            ContactInfoCard(YouOptions.contactInfoToShare(storage.value(Setting.CONTACT_INFO)))
-            Spacer(Modifier.height(24.dp))
-        }
-
-        item { SectionHeader(stringResource(R.string.misc_you_agent)) }
-        item {
-            Row(
-                Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)
-                    .heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PeelLogo(size = 32.dp)
                 Spacer(Modifier.width(12.dp))
-                Text("Peel", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
-                Spacer(Modifier.width(8.dp))
-                AgentTag()
-                Spacer(Modifier.weight(1f))
+                IconButton(
+                    onClick = { showingContact = true },
+                    modifier = Modifier.size(44.dp).clip(CircleShape).background(Theme.colors.background),
+                ) {
+                    Icon(Icons.Filled.QrCode, contentDescription = stringResource(R.string.misc_you_show_contact_code), tint = Theme.colors.accent)
+                }
+            }
+            photoProblem?.let {
                 Text(
-                    // This port has no agent-setup flow of its own (bridge,
-                    // device request) — just whether the shared account
-                    // already has the agent's chat as a contact, set up
-                    // from wherever that flow does exist.
-                    if (hasAgent) stringResource(R.string.misc_you_ready) else stringResource(R.string.misc_you_agent_setup),
-                    color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
+                    it, style = MaterialTheme.typography.bodySmall, color = Theme.colors.destructive,
+                    modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 8.dp),
                 )
             }
-            Spacer(Modifier.height(24.dp))
         }
+        if (!wordsChecked) item { BackupNotice(onBackUp = onOpenWords) }
+        item { Spacer(Modifier.height(28.dp)) }
 
-        item { SectionHeader(stringResource(R.string.voice_setting)) }
-        item { VoiceModeSection(appContext) }
-        item { Spacer(Modifier.height(24.dp)) }
-
-        item { SectionHeader("Hive") }
-        item { StadeumSection(Stadeum.model) }
-        item { Spacer(Modifier.height(24.dp)) }
-        item { BoxesSection(Boxes.model) }
-
-        item { SectionHeader(stringResource(R.string.misc_you_account)) }
+        item { SectionHeader(stringResource(R.string.misc_you_security)) }
         item {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+                // No "Backed up" once checked: the person holds the keys, Peel doesn't.
                 AccountRow(
-                    label = stringResource(R.string.misc_you_back_up_account), value = if (wordsChecked) "" else stringResource(R.string.misc_you_not_backed_up),
+                    label = if (wordsChecked) stringResource(R.string.misc_you_recovery_words) else stringResource(R.string.misc_you_back_up_account),
+                    value = if (wordsChecked) "" else stringResource(R.string.misc_you_not_backed_up),
+                    valueColor = Theme.colors.attention,
                     onClick = onOpenWords, chevron = true,
                 )
                 AccountDivider()
@@ -410,18 +456,46 @@ private fun YouMain(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+
+        item { SectionHeader(stringResource(R.string.misc_you_agent)) }
+        item {
+            Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PeelLogo(size = 32.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Peel", style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+                    Spacer(Modifier.width(8.dp))
+                    AgentTag()
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        // This port has no agent-setup flow of its own (bridge,
+                        // device request) — just whether the shared account
+                        // already has the agent's chat as a contact, set up
+                        // from wherever that flow does exist.
+                        if (hasAgent) stringResource(R.string.misc_you_ready) else stringResource(R.string.misc_you_agent_setup),
+                        color = Theme.colors.secondaryText, style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 AccountDivider()
-                AccountRow(
-                    label = stringResource(R.string.misc_you_boost_amount), value = "${boostAmountMsat / 1000} sats",
-                    onClick = { editingBoostAmount = true },
-                )
-                AccountDivider()
-                AccountRow(
-                    label = stringResource(R.string.misc_you_confirm_payments),
-                    value = if (confirmationMsat == 0L) stringResource(R.string.misc_always) else stringResource(R.string.misc_you_over, Sats.format(confirmationMsat)),
-                    onClick = { editingConfirmation = true },
-                )
-                AccountDivider()
+                VoiceModeSection(appContext)
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+
+        // Hive and Stadeum servers keep their own cards (pairing states, the box list and its notes); Connected apps
+        // and Site location follow in one card.
+        item { SectionHeader(stringResource(R.string.misc_you_apps)) }
+        item { StadeumSection(Stadeum.model) }
+        item { Spacer(Modifier.height(16.dp)) }
+        item { BoxesSection(Boxes.model) }
+        item {
+            Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
                 val walletVersion by storage.walletConnectionsVersion.collectAsState()
                 AccountRow(
                     label = stringResource(R.string.misc_you_connected_apps), value = ConnectedAppRow.summary(remember(walletVersion) { storage.walletConnections().size }),
@@ -432,6 +506,47 @@ private fun YouMain(
                 AccountRow(
                     label = stringResource(R.string.misc_you_site_location), value = remember(siteVersion) { storage.siteLocations().size }.let { if (it == 0) stringResource(R.string.misc_none) else "$it" },
                     onClick = onOpenSiteLocation, chevron = true,
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+
+        item { SectionHeader(stringResource(R.string.misc_you_payments)) }
+        item {
+            Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+                AccountRow(
+                    label = stringResource(R.string.misc_you_boost_amount), value = "${boostAmountMsat / 1000} sats",
+                    onClick = { editingBoostAmount = true },
+                )
+                AccountDivider()
+                AccountRow(
+                    label = stringResource(R.string.misc_you_confirm_payments),
+                    value = if (confirmationMsat == 0L) stringResource(R.string.misc_always) else stringResource(R.string.misc_you_over, Sats.format(confirmationMsat)),
+                    onClick = { editingConfirmation = true },
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+
+        item { SectionHeader(stringResource(R.string.misc_you_media)) }
+        item {
+            Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+                var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.misc_you_auto_download), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
+                    Switch(checked = autoDownload, onCheckedChange = {
+                        autoDownload = it
+                        engine.setAutoDownloadsMedia(it)
+                    })
+                }
+                Text(
+                    stringResource(R.string.misc_you_auto_download_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Theme.colors.secondaryText,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
                 )
                 AccountDivider()
                 var compressVideos by remember { mutableStateOf(engine.compressesVideos()) }
@@ -451,25 +566,13 @@ private fun YouMain(
                     color = Theme.colors.secondaryText,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
                 )
-                AccountDivider()
-                var autoDownload by remember { mutableStateOf(engine.autoDownloadsMedia()) }
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(stringResource(R.string.misc_you_auto_download), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
-                    Switch(checked = autoDownload, onCheckedChange = {
-                        autoDownload = it
-                        engine.setAutoDownloadsMedia(it)
-                    })
-                }
-                Text(
-                    stringResource(R.string.misc_you_auto_download_note),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Theme.colors.secondaryText,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                )
-                AccountDivider()
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+
+        item { SectionHeader(stringResource(R.string.misc_you_help)) }
+        item {
+            Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
                 AccountRow(label = stringResource(R.string.misc_you_diagnostics), onClick = onOpenDiagnostics, chevron = true)
                 AccountDivider()
                 UpdateRow()
@@ -528,6 +631,14 @@ private fun YouMain(
             }
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    if (showingContact) {
+        ContactSheet(
+            contactInfo = YouOptions.contactInfoToShare(storage.value(Setting.CONTACT_INFO)),
+            name = alias, photoUrl = photoUrl, hue = PersonHue.of(engine.accountKey),
+            onDismiss = { showingContact = false },
+        )
     }
 
     if (confirmingRemovePhoto) {
@@ -771,7 +882,14 @@ private fun UpdateRow() {
 }
 
 @Composable
-private fun AccountRow(label: String, value: String = "", onClick: (() -> Unit)? = null, chevron: Boolean = false, upDown: Boolean = false) {
+private fun AccountRow(
+    label: String,
+    value: String = "",
+    onClick: (() -> Unit)? = null,
+    chevron: Boolean = false,
+    upDown: Boolean = false,
+    valueColor: Color? = null,
+) {
     Row(
         Modifier.fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
@@ -781,7 +899,7 @@ private fun AccountRow(label: String, value: String = "", onClick: (() -> Unit)?
         Text(label, style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text, modifier = Modifier.weight(1f))
         if (value.isNotEmpty()) {
             Text(
-                value, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText,
+                value, style = MaterialTheme.typography.bodyMedium, color = valueColor ?: Theme.colors.secondaryText,
                 textAlign = TextAlign.End,
             )
         }
@@ -933,13 +1051,15 @@ private fun ChangePinScreen(secretStore: SecretStore, onBack: () -> Unit) {
 
 private enum class WordsStage { INTRO, PIN, WORDS, CHECK }
 
-/// Back up account (iOS `WordsScreen`, without Face ID). Not backed up (signup never shows the
-/// words): what they are and how to keep them, then "Back up now": the PIN, the words masked
-/// behind "Reveal", hidden again after 30 s (counted down on screen) or when this screen/app
-/// leaves the foreground, then "I've written them down" and three of them typed back, which sets
-/// `WORDS_CONFIRMED` and takes away You's notice and the tab's badge. Backed up: "Show words".
+/// The words screen (iOS `WordsScreen`, without Face ID). Not checked yet (signup never shows the
+/// words), "Back up account": what they are and how to keep them, then "Back up now": the PIN, the
+/// words masked behind "Reveal", hidden again after 30 s (counted down on screen) or when this
+/// screen/app leaves the foreground, then "I've written them down" and three of them typed back,
+/// which sets `WORDS_CONFIRMED`, takes away You's card and the tab's badge, and calls [onChecked]
+/// (You closes this screen and shows its one-time note). Checked, "Recovery words": three
+/// reminders, then "Show words" behind the PIN.
 @Composable
-private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack: () -> Unit) {
+private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack: () -> Unit, onChecked: () -> Unit) {
     val strCtx = androidx.compose.ui.platform.LocalContext.current
     val host = strCtx.findActivity() as? androidx.fragment.app.FragmentActivity
     val shownForSeconds = 30
@@ -951,7 +1071,7 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
     var visible by remember { mutableStateOf(false) }
     var revealedAt by remember { mutableStateOf(0L) }
     var remaining by remember { mutableStateOf(shownForSeconds) }
-    var checked by remember { mutableStateOf(Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED))) }
+    val checked = remember { Account.wordsChecked(storage.value(Setting.WORDS_CONFIRMED)) }
     // "Back up now": the words shown lead to the check.
     var backingUp by remember { mutableStateOf(false) }
     // Three words asked back from paper, after "I've written them down".
@@ -1002,8 +1122,8 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
         val wrong = Account.wrongPlaces(check.byPosition, words)
         if (wrong.isEmpty()) {
             storage.apply(Storage.Commit(settings = mapOf(Setting.WORDS_CONFIRMED to "1")))
-            checked = true
             hide()
+            onChecked()
         } else {
             problem = Account.wrongPlacesProblem(wrong)
             check = WordCheck()
@@ -1039,19 +1159,25 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
         when (stage) {
             WordsStage.INTRO -> {
                 RouteHeader(
-                    stringResource(R.string.misc_you_back_up_account),
-                    if (checked) stringResource(R.string.misc_you_backed_up) else stringResource(R.string.misc_you_backup_intro),
+                    if (checked) stringResource(R.string.misc_you_recovery_words) else stringResource(R.string.misc_you_back_up_account),
+                    if (checked) stringResource(R.string.misc_you_recovery_intro) else stringResource(R.string.misc_you_backup_intro),
                     onBack,
                 )
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = if (checked) 32.dp else 20.dp)) {
+                    BackupSteps(if (checked) RecoveryStepTexts else BackupStepTexts)
+                }
+                Spacer(Modifier.height(12.dp))
                 if (checked) {
-                    Spacer(Modifier.weight(1f))
                     PillButton(
                         stringResource(R.string.misc_you_show_words), onClick = { start(backUp = false) },
                         container = Theme.colors.accent.copy(alpha = 0.25f), content = Theme.colors.text,
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.misc_you_asks_pin_first), style = MaterialTheme.typography.bodySmall,
+                        color = Theme.colors.secondaryText, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                    )
                 } else {
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 20.dp)) { BackupSteps() }
-                    Spacer(Modifier.height(12.dp))
                     PillButton(
                         stringResource(R.string.misc_you_back_up_now), onClick = { start(backUp = true) },
                         container = Theme.colors.accent, content = Theme.colors.buttonText,
@@ -1187,8 +1313,8 @@ private fun TwelveWordsScreen(secretStore: SecretStore, storage: Storage, onBack
     }
 }
 
-/// You › Voice Mode, its own section (docs/phases/55-voice-mode.md): the setting, which interaction mode, and subtitles
-/// once a speech-out mode is picked.
+/// You › Agent › Voice Mode (docs/phases/55-voice-mode.md): the setting, which interaction mode, and subtitles
+/// once a speech-out mode is picked. Rows only: they sit in the Agent card under Peel.
 @Composable
 private fun VoiceModeSection(context: android.content.Context) {
     val voicePrefs = remember { com.sphinx.peel.engine.VoiceModePrefs.of(context) }
@@ -1197,7 +1323,7 @@ private fun VoiceModeSection(context: android.content.Context) {
     var subtitles by remember { mutableStateOf(voicePrefs.subtitles) }
     var pickingInteraction by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+    Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1274,7 +1400,7 @@ private fun VoiceModeSection(context: android.content.Context) {
     }
 }
 
-/// You › Hive (iOS `StadeumSection`): Connect Hive (a code to approve
+/// You › Apps › Hive (iOS `StadeumSection`): Connect Hive (a code to approve
 /// there, its page opened in the browser), each workspace paired, Connect
 /// again once Hive no longer knows this phone, and Disconnect.
 @Composable
@@ -1294,6 +1420,9 @@ private fun StadeumSection(model: StadeumModel) {
     LaunchedEffect(pairing?.userCode) { pairing?.let { open(it.verificationUriComplete) } }
 
     Column(Modifier.fillMaxWidth().clip(CardShape).background(Theme.colors.fieldFill)) {
+        // Its name, now that the section header above is Apps.
+        AccountRow(label = "Hive")
+        AccountDivider()
         when (status) {
             StadeumModel.Status.Off -> {
                 StadeumNote(stringResource(R.string.misc_you_stadeum_intro))
@@ -1557,31 +1686,59 @@ internal fun SiteLocationScreen(storage: Storage, onBack: () -> Unit) {
     }
 }
 
-/// At the top of You until the words are checked against paper (iOS `BackupNotice`): what is at
-/// stake, and "Back up now". No Dismiss; passing the check is what takes it away, and the tab's badge.
+/// Under you on You until the words are checked against paper (iOS `BackupNotice`): one tappable
+/// card, what is at stake, opening the words screen. No Dismiss; passing the check is what takes it
+/// away, and the tab's badge.
 @Composable
 private fun BackupNotice(onBackUp: () -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().padding(top = 16.dp).clip(CardShape).background(Theme.colors.fieldFill)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+    Row(
+        Modifier.fillMaxWidth().padding(top = 12.dp).clip(CardShape).background(Theme.colors.attention.copy(alpha = 0.12f))
+            .clickable(onClick = onBackUp).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(Icons.Filled.Warning, contentDescription = null, tint = Theme.colors.attention, modifier = Modifier.size(20.dp))
-            Text(stringResource(R.string.misc_you_backup_notice), style = MaterialTheme.typography.bodyLarge, color = Theme.colors.text)
+        Icon(Icons.Filled.Warning, contentDescription = null, tint = Theme.colors.attention, modifier = Modifier.size(24.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                stringResource(R.string.misc_you_backup_title), style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold, color = Theme.colors.text,
+            )
+            Text(stringResource(R.string.misc_you_backup_notice), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
         }
-        TextButton(onClick = onBackUp, modifier = Modifier.padding(start = 20.dp)) {
-            Text(stringResource(R.string.misc_you_back_up_now), color = Theme.colors.accent)
-        }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Theme.colors.secondaryText)
     }
 }
 
-/// What the twelve words are and how to keep them, before "Back up now" (iOS `BackupSteps`).
+/// Under You's title once, right after the three words were typed back (iOS `CheckedNote`). Neutral:
+/// the person keeps the paper, Peel holds nothing, so never "Backed up".
 @Composable
-private fun BackupSteps() {
-    val steps = listOf(
-        R.string.misc_you_backup_step_control, R.string.misc_you_backup_step_reset,
-        R.string.misc_you_backup_step_paper, R.string.misc_you_backup_step_check,
-    )
+private fun CheckedNote() {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 12.dp).clip(CardShape).background(Theme.colors.fieldFill)
+            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(Icons.Filled.Check, contentDescription = null, tint = Theme.colors.confirmed, modifier = Modifier.size(20.dp))
+        Text(stringResource(R.string.misc_you_words_checked_note), style = MaterialTheme.typography.bodyMedium, color = Theme.colors.text)
+    }
+}
+
+/// The tutorial's four points before "Back up now" (iOS `BackupSteps`).
+private val BackupStepTexts = listOf(
+    R.string.misc_you_backup_step_control, R.string.misc_you_backup_step_reset,
+    R.string.misc_you_backup_step_paper, R.string.misc_you_backup_step_check,
+)
+
+/// Recovery words' three reminders, once the words are checked.
+private val RecoveryStepTexts = listOf(
+    R.string.misc_you_backup_step_control, R.string.misc_you_recovery_step_reset, R.string.misc_you_recovery_step_keep,
+)
+
+/// Numbered points about the twelve words: the tutorial's, or Recovery words' reminders.
+@Composable
+private fun BackupSteps(steps: List<Int>) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         steps.forEachIndexed { index, step ->
             Row(Modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

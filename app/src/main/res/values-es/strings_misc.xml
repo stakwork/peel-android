@@ -16,9 +16,10 @@
     <string name="misc_you_agent">Agente</string>
     <string name="misc_you_ready">Listo</string>
     <string name="misc_you_agent_setup">Configúralo en tu Mac</string>
-    <string name="misc_you_account">Cuenta</string>
+    <string name="misc_you_security">Seguridad</string>
     <string name="misc_you_back_up_account">Respaldar cuenta</string>
     <string name="misc_you_not_backed_up">Sin respaldar</string>
+    <string name="misc_you_recovery_words">Palabras de recuperación</string>
     <string name="misc_you_change_pin">Cambiar PIN</string>
     <string name="misc_you_ask_pin">Pedir el PIN</string>
     <string name="misc_you_biometric">Desbloqueo biométrico</string>
@@ -57,9 +58,14 @@
     <string name="misc_you_wrong_pin">PIN incorrecto</string>
     <string name="misc_you_pin_change_failed_again">%1$s Elige el PIN nuevo otra vez.</string>
     <string name="misc_you_pin_change_failed">No se pudo cambiar el PIN.</string>
-    <string name="misc_you_backed_up">Respaldada. Tus palabras se comprobaron con tu papel.</string>
     <string name="misc_you_backup_intro">Tus doce palabras son tu cuenta. Anótalas para poder recuperarla si pierdes este teléfono.</string>
-    <string name="misc_you_backup_notice">Tu cuenta no está respaldada. Si pierdes este teléfono, pierdes la cuenta y sus sats.</string>
+    <string name="misc_you_backup_title">Respalda tu cuenta</string>
+    <string name="misc_you_backup_notice">Si pierdes este teléfono, pierdes la cuenta y sus sats.</string>
+    <string name="misc_you_words_checked_note">Palabras comprobadas. Guarda tu papel en un lugar seguro.</string>
+    <string name="misc_you_recovery_intro">Tus doce palabras son tu cuenta. Tu copia en papel es la única forma de recuperarla en un teléfono nuevo.</string>
+    <string name="misc_you_recovery_step_reset">Nadie puede restablecerlas, ni siquiera Peel.</string>
+    <string name="misc_you_recovery_step_keep">Guarda el papel en un lugar seguro y sin conexión. No en una captura de pantalla, una nota ni la nube.</string>
+    <string name="misc_you_asks_pin_first">Primero te pide el PIN.</string>
     <string name="misc_you_back_up_now">Respaldar ahora</string>
     <string name="misc_you_backup_step_control">Quien tenga tus palabras controla tu cuenta y sus sats. Nunca las compartas.</string>
     <string name="misc_you_backup_step_reset">Nadie puede restablecerlas, ni siquiera Peel. Si pierdes este teléfono y las palabras, pierdes la cuenta.</string>
@@ -216,6 +222,13 @@
     <string name="misc_you_contact_info_not_ready">Aún no está listo</string>
     <string name="misc_you_contact_info_qr">Código QR de tu información de contacto</string>
     <string name="misc_you_contact_info_copy">Copiar información de contacto</string>
-    <string name="misc_you_compress_videos">Comprimir vídeos para subir</string>
+    <string name="misc_you_contact_info_hint">La gente escanea esto, o abre el enlace que le envías, para añadirte.</string>
+    <string name="misc_you_share">Compartir…</string>
+    <string name="misc_you_show_contact_code">Mostrar mi código de contacto</string>
+    <string name="misc_you_apps">Apps</string>
+    <string name="misc_you_payments">Pagos</string>
+    <string name="misc_you_media">Multimedia</string>
+    <string name="misc_you_help">Ayuda</string>
+    <string name="misc_you_compress_videos">Comprimir vídeos grandes</string>
     <string name="misc_you_compress_videos_note">Comprime automáticamente los vídeos de más de 100 MB antes de subirlos.</string>
 </resources>

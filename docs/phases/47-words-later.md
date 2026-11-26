@@ -44,12 +44,19 @@ unchanged: "Not checked yet", Check words, Show words. Restore is unchanged.
 ## Update (2026-11-26): Back up account
 
 A QA pass (SQA-01) found no clear backup after signup: the row was the only sign. Now, until three words are typed back
-(`WORDS_CONFIRMED` "1"), You opens with a notice (what is at stake, "Back up now"), the row is "Back up account" with
-"Not backed up", and the You tab has an accent "!" badge (`MainTabs.BottomBar`, read again on `Storage.settingsVersion`,
+(`WORDS_CONFIRMED` "1"), You shows a tappable "Back up your account" card under the identity card, the row is "Back up
+account" with "Not backed up", and the You tab has an accent "!" badge (`MainTabs.BottomBar`, read again on `Storage.settingsVersion`,
 which moves on any commit that writes a setting). The screen explains the words in four points, then "Back up now": the PIN,
-the words, "I've written them down", three typed back; "Show words again" from the check. Passing removes the notice, the
-status and the badge; there is no Dismiss. "Check words" (straight to the check) is gone: the backup always shows the words
+the words, "I've written them down", three typed back; "Show words again" from the check. Passing closes the screen, removes
+the card, the status and the badge, and shows "Words checked. Keep your paper somewhere safe." under You's title once, for
+about four seconds; there is no Dismiss and no "Backed up" anywhere (the person holds the keys, not Peel). "Check words" (straight to the check) is gone: the backup always shows the words
 first. iOS does the same (peel, `YouTab.swift`), and its signup no longer shows the words either.
+
+You's layout follows the same design (iOS `YouTab`): one identity card (56 dp photo, whose tap offers add/change/remove;
+name; balance; a QR button opening the "Your contact info" sheet with Copy and Share…), then Security (the words row, "Recovery
+words" once checked, Change PIN, Ask for the PIN, Biometric unlock), Agent (Peel, Voice), Apps (Hive and Stadeum servers in
+their own cards, then Connected apps and Site location), Payments, Media, Help (Diagnostics, Check for updates, Server).
+Recovery words: three reminders, then "Show words" behind the PIN.
 
 Not run: the screens on a device or emulator; no Android SDK on the Mac it was written on, so CI's unit tests, lint and
 assembleDebug are the first build.
