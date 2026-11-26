@@ -70,6 +70,8 @@ class SidebarLayoutState(private val storage: Storage) {
     fun change(next: SidebarLayout) {
         layout = next
         storage.apply(Storage.Commit(settings = mapOf(Setting.SIDEBAR_LAYOUT to SidebarLayout.encode(next, storage.value(Setting.SIDEBAR_LAYOUT)))))
+        // A pin's minimal record is kept (or let go) with it: it shows at launch before a workspace answers.
+        com.sphinx.peel.engine.Stadeum.pinsChanged()
     }
 
     companion object {

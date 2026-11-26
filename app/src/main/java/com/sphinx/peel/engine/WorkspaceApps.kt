@@ -29,6 +29,9 @@ data class WorkspaceApp(
     val version: String? = null,
     val release: String? = null,
     val problems: Int = 0,
+    /// Shown from what was kept of a pinned app ([PinnedAppRecord]) until its workspace answers: it may have been renamed, updated or
+    /// removed since.
+    val refreshing: Boolean = false,
 ) {
     /// strut's key for it: `@<peer>/<name>`.
     val id: String get() = peer?.let { "@$it/$name" } ?: name
@@ -133,7 +136,8 @@ data class WorkspaceApp(
                 val url = peer.baseUrl.trimEnd('/') + "/apps?pinned=1"
                 val request = Request.Builder().url(url).header("Authorization", "Bearer ${peer.token}").build()
                 client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw java.io.IOException("${peer.name} did not list its apps (HTTP ${response.code}).")
+                    // The status travels with the failure: 401, 403 and 404 mean access is lost ([AppsReadException]).
+                    if (!response.isSuccessful) throw AppsReadException(response.code)
                     val body = response.body?.source()?.let { it.request(MAX_BODY + 1L); it.buffer.snapshot().utf8() } ?: ""
                     if (body.length > MAX_BODY) throw java.io.IOException("${peer.name}'s app list is too large.")
                     listing(body, peer.id)

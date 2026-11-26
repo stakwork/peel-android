@@ -406,6 +406,8 @@ private fun StadeumHousekeeping(engine: Engine) {
         val model = com.sphinx.peel.engine.Stadeum.model
         model.sphinxProof = { runCatching { engine.sphinxProof() }.getOrNull() }
         model.open(com.sphinx.peel.account.KeystoreHiveStore(context.applicationContext))
+        // The pinned apps' kept records show at once, before any workspace answers.
+        com.sphinx.peel.engine.Stadeum.attach(engine.storage)
         var first = true
         val observer = LifecycleEventObserver { _, event ->
             if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
@@ -415,6 +417,7 @@ private fun StadeumHousekeeping(engine: Engine) {
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             model.close()
+            com.sphinx.peel.engine.Stadeum.detach()
             model.sphinxProof = null
         }
     }
