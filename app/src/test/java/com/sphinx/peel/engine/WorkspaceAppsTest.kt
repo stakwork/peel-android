@@ -52,6 +52,12 @@ class WorkspaceAppsTest {
         assertNull(WorkspaceApp(null, "x", "T").shareLink())
     }
 
+    // Pins the default Hive to production (iOS `HiveClient.production`): a change to HIVE_PRODUCTION fails here.
+    @Test
+    fun `share link defaults to production hive`() {
+        assertEquals("https://hive.sphinx.chat/w/w1/apps/pkg/a", WorkspaceApp("w1", "pkg/a", "A").shareLink())
+    }
+
     @Test
     fun `opening builds the solo app url on the peer strut`() {
         val peer = HivePeer("w1", "https://w1.example.com/lab", "tok", null)
