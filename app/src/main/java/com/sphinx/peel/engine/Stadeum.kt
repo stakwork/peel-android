@@ -57,6 +57,9 @@ class StadeumModel(
     var link: HiveLink? by mutableStateOf(null); private set
     /// The last thing that went wrong, in words; null once something works.
     var problem: String? by mutableStateOf(null)
+    /// Called when the workspaces' apps must go: Stadeum disconnected, or the pairing revoked (`Stadeum` lets go of what it kept).
+    var onWorkspacesGone: (() -> Unit)? = null
+
     /// A restored account has no pairing: the section says to connect again.
     var reconnectHint: Boolean by mutableStateOf(false); private set
 
@@ -206,6 +209,8 @@ class StadeumModel(
     /// Disconnect: the credential and the tokens gone from this device.
     /// Stadeum keeps the device until it is revoked there.
     fun disconnect() {
+        // Before anything else: what was kept of the workspaces' apps goes with the pairing (and with the account's sign-out).
+        onWorkspacesGone?.invoke()
         val store = store ?: return
         reset()
         reconnectHint = false
@@ -271,6 +276,7 @@ class StadeumModel(
                 val revokedLink = kept.copy(revokedAt = now())
                 runCatching { store?.write(revokedLink.toJson()) }
                 link = revokedLink
+                onWorkspacesGone?.invoke()
                 if (status !is Status.Pairing) status = Status.NeedsPairing
                 return
             }
@@ -347,10 +353,12 @@ class StadeumModel(
 /// account (iOS `AppModel.stadeum`). The Dashboard's Apps row and Apps read
 /// [live] and [talkHomes] from it; they recompose as the pairing changes.
 object Stadeum {
-    val model = StadeumModel()
+    val model = StadeumModel().also { it.onWorkspacesGone = { forgetPinned() } }
 
     val live: List<HivePeer> get() = model.live
 
+    /// Nothing of this list is kept on disk except the pinned apps' minimal records ([PinnedAppRecord]: id, name, title, icon, version, in the
+    /// account's settings; wiped by [StadeumModel.disconnect], a revoked pairing and forgetting the account).
     /// The workspaces' pinned apps as last read (`readApps`), shared by Apps and the Dashboard's pinned apps; not yet filtered to the
     /// workspaces in use (`AppsOpenDecision.visible`). Observable.
     var apps: List<WorkspaceApp> by mutableStateOf(emptyList()); private set
@@ -359,6 +367,54 @@ object Stadeum {
     /// The workspaces that did not answer the last read.
     var unreadAppIds: List<String> by mutableStateOf(emptyList()); private set
     private val appsReading = kotlinx.coroutines.sync.Mutex()
+
+    /// What is kept of the pinned workspace apps ([PinnedAppRecord]; minimal, in the account's settings). Right after launch a pinned
+    /// app may be listed from its record ([WorkspaceApp.refreshing]) until its workspace answers.
+    @Volatile internal var pinnedRecords: List<PinnedAppRecord> = emptyList()
+    /// The ids of the apps the person pinned (the sidebar layout's); none until [attach].
+    @Volatile internal var pinnedIds: () -> List<String> = { emptyList() }
+    /// Keeps the records in the account's settings; null with none open.
+    @Volatile internal var saveRecords: ((List<PinnedAppRecord>) -> Unit)? = null
+
+    /// The account opened: its kept records show as the pinned apps of the workspaces in use, at once. Starts no read.
+    fun attach(storage: com.sphinx.peel.storage.Storage) {
+        pinnedIds = { com.sphinx.peel.ui.dashboard.SidebarLayout.decode(storage.value(com.sphinx.peel.storage.Setting.SIDEBAR_LAYOUT)).pinnedApps }
+        saveRecords = { storage.apply(com.sphinx.peel.storage.Storage.Commit(settings = mapOf(com.sphinx.peel.storage.Setting.PINNED_APP_RECORDS to PinnedAppRecord.encode(it)))) }
+        seed(PinnedAppRecord.decode(storage.value(com.sphinx.peel.storage.Setting.PINNED_APP_RECORDS)))
+    }
+
+    /// The account closed or locked: nothing is saved for it any more (what is kept stays kept).
+    fun detach() {
+        saveRecords = null
+        pinnedIds = { emptyList() }
+        pinnedRecords = emptyList()
+    }
+
+    /// Takes [records] and lists those of workspaces in use whose apps are not listed yet.
+    internal fun seed(records: List<PinnedAppRecord>) {
+        pinnedRecords = records
+        val peers = live.map { it.id }.toSet()
+        val seeded = records.filter { it.peer in peers && apps.none { app -> app.peer == it.peer } }.map { it.app }
+        if (seeded.isNotEmpty()) apps = apps + seeded
+    }
+
+    /// A pin or unpin: the records follow the pins.
+    fun pinsChanged() = saveIfChanged(PinnedAppRecord.following(pinnedIds(), pinnedRecords, apps))
+
+    /// The workspaces' apps and their records gone, here and from the account's settings.
+    private fun forgetPinned() {
+        apps = emptyList()
+        unreadAppIds = emptyList()
+        if (pinnedRecords.isEmpty()) return
+        pinnedRecords = emptyList()
+        saveRecords?.invoke(emptyList())
+    }
+
+    private fun saveIfChanged(records: List<PinnedAppRecord>) {
+        if (records == pinnedRecords) return
+        pinnedRecords = records
+        saveRecords?.invoke(records)
+    }
 
     /// Reads each live workspace's pinned apps on its own strut, together. A workspace that did not answer keeps the apps it last
     /// listed. Reads one at a time (a second waits for the first), and a read cancelled with its screen lets go cleanly.
@@ -375,17 +431,28 @@ object Stadeum {
                 val publish = Any()
                 // Apps of workspaces no longer read are dropped; the others stay until their own answer replaces them.
                 synchronized(publish) { apps = apps.filter { it.peer in ids } }
-                val failed = coroutineScope {
+                val reads = coroutineScope {
                     peers.map { peer ->
                         async {
                             val r = runCatching { fetch(peer) }
                             (r.exceptionOrNull() as? CancellationException)?.let { throw it }
-                            r.getOrNull()?.let { fresh -> synchronized(publish) { apps = apps.filter { it.peer != peer.id } + fresh } }
-                            peer.id.takeIf { r.isFailure }
+                            val read: PeerRead = r.getOrNull()?.let { PeerRead.Answered(it) } ?: PeerRead.failed(r.exceptionOrNull()!!)
+                            synchronized(publish) {
+                                when (read) {
+                                    // Replaces the workspace's apps, a kept record's included.
+                                    is PeerRead.Answered -> apps = apps.filter { it.peer != peer.id } + read.apps
+                                    // Access lost (401, 403, 404): none listed; anything else keeps what it last listed.
+                                    is PeerRead.Failed -> if (read.lostAccess) apps = apps.filter { it.peer != peer.id }
+                                }
+                                Unit
+                            }
+                            peer.id to read
                         }
-                    }.awaitAll().filterNotNull()
+                    }.awaitAll().toMap()
                 }
-                unreadAppIds = failed
+                unreadAppIds = reads.filterValues { it is PeerRead.Failed }.keys.toList()
+                // The records follow what the workspaces answered.
+                saveIfChanged(PinnedAppRecord.reconcile(pinnedRecords, reads, pinnedIds(), ids))
             } finally {
                 readingApps = false
             }

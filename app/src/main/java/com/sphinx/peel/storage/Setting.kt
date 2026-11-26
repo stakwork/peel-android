@@ -147,6 +147,10 @@ enum class Setting(val key: String) {
     /// Local to a device, as in PeelCore: it is not a synced preference there either.
     SIDEBAR_LAYOUT("sidebarLayout"),
 
+    /// The minimal records of the apps pinned under the Apps row (`PinnedAppRecord`, JSON; PeelCore's `Setting.pinnedAppRecords`):
+    /// shown at launch before a workspace answers. Device-local; wiped with the account and Stadeum's disconnect.
+    PINNED_APP_RECORDS("pinnedAppRecords"),
+
     /// Peel's `peel.chats_recent_view` ("1" Recent / "0" Separated): the chat list's switch, synced.
     /// Unset until chosen here or taken from another device; the layout's own `combinedView` stands until then.
     CHATS_RECENT_VIEW("chatsRecentView"),

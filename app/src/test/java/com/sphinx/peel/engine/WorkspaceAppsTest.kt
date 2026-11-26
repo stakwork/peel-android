@@ -108,3 +108,107 @@ class StadeumReadAppsTest {
         assertEquals(listOf("slow"), Stadeum.unreadAppIds)
     }
 }
+
+@RunWith(RobolectricTestRunner::class)
+class PinnedAppRecordTest {
+    private fun app(peer: String, name: String, title: String = name, version: String? = null) =
+        WorkspaceApp(peer, name, title, version = version)
+
+    private fun records(vararg apps: WorkspaceApp) = apps.mapNotNull { PinnedAppRecord.of(it) }
+
+    @Test
+    fun `a record keeps only what shows the row and comes back refreshing`() {
+        val record = PinnedAppRecord.of(WorkspaceApp("acme", "board", "Board", about = "secret words", icon = "flask-conical", version = "v3"))!!
+        assertEquals(listOf(record), PinnedAppRecord.decode(PinnedAppRecord.encode(listOf(record))))
+        assertFalse(PinnedAppRecord.encode(listOf(record)).contains("secret"))
+        assertTrue(record.app.refreshing)
+        assertEquals("@acme/board", record.app.id)
+        assertNull(record.app.about)
+        assertTrue(PinnedAppRecord.decode("not json").isEmpty() && PinnedAppRecord.decode(null).isEmpty())
+    }
+
+    @Test
+    fun `a workspace that answers replaces its records`() {
+        val old = records(app("acme", "board", "Board", "v1"), app("acme", "gone"))
+        val read = mapOf("acme" to PeerRead.Answered(listOf(app("acme", "board", "Boards", "v2"), app("acme", "new"))))
+        val kept = PinnedAppRecord.reconcile(old, read, listOf("@acme/board", "@acme/gone"), setOf("acme"))
+        // Removed: dropped. Renamed and newer: updated. Not pinned: not stored.
+        assertEquals(listOf("@acme/board"), kept.map { it.id })
+        assertEquals("Boards", kept[0].title)
+        assertEquals("v2", kept[0].version)
+    }
+
+    @Test
+    fun `a refusal drops the workspace's records but a timeout keeps them`() {
+        val old = records(app("acme", "board"), app("globex", "wiki"))
+        val pins = listOf("@acme/board", "@globex/wiki")
+        for (status in listOf(401, 403, 404)) {
+            val kept = PinnedAppRecord.reconcile(old, mapOf("acme" to PeerRead.Failed(status)), pins, setOf("acme", "globex"))
+            assertEquals(listOf("@globex/wiki"), kept.map { it.id })
+        }
+        for (status in listOf(null, 500, 503)) {
+            val kept = PinnedAppRecord.reconcile(old, mapOf("acme" to PeerRead.Failed(status)), pins, setOf("acme", "globex"))
+            assertEquals(pins, kept.map { it.id })
+        }
+    }
+
+    @Test
+    fun `an unpinned app or a workspace no longer live is dropped`() {
+        val old = records(app("acme", "board"), app("globex", "wiki"))
+        assertEquals(listOf("@globex/wiki"), PinnedAppRecord.reconcile(old, emptyMap(), listOf("@globex/wiki"), setOf("acme", "globex")).map { it.id })
+        assertEquals(listOf("@acme/board"), PinnedAppRecord.reconcile(old, emptyMap(), listOf("@acme/board", "@globex/wiki"), setOf("acme")).map { it.id })
+    }
+
+    @Test
+    fun `a pin follows the list and an unpin lets go`() {
+        val old = records(app("acme", "board"))
+        val kept = PinnedAppRecord.following(listOf("@acme/board", "@acme/wiki"), old, listOf(app("acme", "wiki", "Wiki")))
+        assertEquals(listOf("@acme/board", "@acme/wiki"), kept.map { it.id })
+        assertEquals(listOf("@acme/wiki"), PinnedAppRecord.following(listOf("@acme/wiki"), kept, emptyList()).map { it.id })
+    }
+
+    @Test
+    fun `only a refusal of access is lost access`() {
+        assertTrue(listOf(401, 403, 404).all { AppsReadException(it).lostAccess })
+        assertFalse(listOf(null, 408, 429, 500, 502).any { AppsReadException(it).lostAccess })
+        assertEquals(PeerRead.Failed(null), PeerRead.failed(IOException("down")))
+        assertEquals(PeerRead.Failed(403), PeerRead.failed(AppsReadException(403)))
+    }
+
+    @Test
+    fun `a read keeps the records, a refusal drops them, a timeout keeps them, and disconnecting lets them go`() = kotlinx.coroutines.runBlocking {
+        val acme = HivePeer("acme", "https://acme.example.com", "t", null)
+        val globex = HivePeer("globex", "https://globex.example.com", "t", null)
+        var saved: List<PinnedAppRecord>? = null
+        Stadeum.saveRecords = { saved = it }
+        Stadeum.pinnedIds = { listOf("@acme/board", "@globex/wiki") }
+        try {
+            Stadeum.pinnedRecords = records(app("acme", "board", "Old name"))
+            Stadeum.readApps(listOf(acme, globex)) { listOf(app(it.id, if (it.id == "acme") "board" else "wiki", "New")) }
+            assertEquals(listOf("@acme/board", "@globex/wiki"), saved?.map { it.id })
+            assertEquals("New", saved?.first()?.title)
+            // A timeout: kept, as listed before.
+            Stadeum.readApps(listOf(acme, globex)) { if (it.id == "globex") throw IOException("timed out") else listOf(app("acme", "board", "Newer")) }
+            assertEquals(listOf("@acme/board", "@globex/wiki"), saved?.map { it.id })
+            assertEquals(setOf("@acme/board", "@globex/wiki"), Stadeum.apps.map { it.id }.toSet())
+            // Access lost: its apps and records go.
+            Stadeum.readApps(listOf(acme, globex)) { if (it.id == "globex") throw AppsReadException(403) else listOf(app("acme", "board", "Newer")) }
+            assertEquals(listOf("@acme/board"), Stadeum.apps.map { it.id })
+            assertEquals(listOf("@acme/board"), saved?.map { it.id })
+            Stadeum.model.disconnect()
+            assertTrue(saved?.isEmpty() == true && Stadeum.apps.isEmpty() && Stadeum.pinnedRecords.isEmpty())
+        } finally {
+            Stadeum.saveRecords = null
+            Stadeum.pinnedIds = { emptyList() }
+            Stadeum.pinnedRecords = emptyList()
+        }
+    }
+
+    @Test
+    fun `kept records are listed for the workspaces in use until they answer`() {
+        Stadeum.seed(records(app("acme", "board")))
+        // Not in use here (no pairing in a test): nothing is listed for it.
+        assertTrue(Stadeum.apps.none { it.refreshing })
+        Stadeum.pinnedRecords = emptyList()
+    }
+}

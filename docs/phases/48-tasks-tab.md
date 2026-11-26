@@ -106,3 +106,9 @@ no Done and no Back at its first address; a picked page's Done and Back return).
 one keeps its last apps and is listed in `unreadAppIds`; cancellation still lets go cleanly). `WorkspaceApp.pinned` reuses one shared
 `OkHttpClient` (30 s call timeout) and asks `/apps?pinned=1` (an older strut ignores it; `parse` still keeps only pinned). Tests:
 `StadeumReadAppsTest` in `WorkspaceAppsTest.kt`.
+
+- **Pinned apps at launch** (port of peel's `PinnedAppRecord`): for each pinned workspace app, its id, name, title, icon and version
+  (`PinnedAppRecord`, `Setting.PINNED_APP_RECORDS`) are kept in the account's settings, nothing else of the list. `Stadeum.attach` seeds
+  them (`WorkspaceApp.refreshing`) before the first read; each `readApps` reconciles them (an answer replaces a workspace's, 401/403/404 —
+  `AppsReadException` — drops them, a timeout/5xx keeps them). Wiped by `Stadeum.model.disconnect()`, a revoked pairing, and the forget
+  flow. Android has no own-strut apps, so there is no own-first ordering to port.
