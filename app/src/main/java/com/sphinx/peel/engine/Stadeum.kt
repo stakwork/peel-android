@@ -362,19 +362,30 @@ object Stadeum {
 
     /// Reads each live workspace's pinned apps on its own strut, together. A workspace that did not answer keeps the apps it last
     /// listed. Reads one at a time (a second waits for the first), and a read cancelled with its screen lets go cleanly.
-    suspend fun readApps(fetch: suspend (HivePeer) -> List<WorkspaceApp> = { WorkspaceApp.pinned(it) }) {
+    suspend fun readApps(fetch: suspend (HivePeer) -> List<WorkspaceApp> = { WorkspaceApp.pinned(it) }) = readApps(live, fetch)
+
+    /// [readApps] over `peers`. Each workspace's apps are published as its answer arrives (a slow workspace does not hold up the
+    /// others); one that failed keeps the apps it last listed.
+    internal suspend fun readApps(peers: List<HivePeer>, fetch: suspend (HivePeer) -> List<WorkspaceApp>) {
         appsReading.withLock {
-            val peers = live
             if (peers.isEmpty()) { apps = emptyList(); unreadAppIds = emptyList(); return }
             readingApps = true
             try {
-                val results = coroutineScope {
-                    peers.map { peer -> async { peer to runCatching { fetch(peer) } } }.awaitAll()
+                val ids = peers.map { it.id }.toSet()
+                val publish = Any()
+                // Apps of workspaces no longer read are dropped; the others stay until their own answer replaces them.
+                synchronized(publish) { apps = apps.filter { it.peer in ids } }
+                val failed = coroutineScope {
+                    peers.map { peer ->
+                        async {
+                            val r = runCatching { fetch(peer) }
+                            (r.exceptionOrNull() as? CancellationException)?.let { throw it }
+                            r.getOrNull()?.let { fresh -> synchronized(publish) { apps = apps.filter { it.peer != peer.id } + fresh } }
+                            peer.id.takeIf { r.isFailure }
+                        }
+                    }.awaitAll().filterNotNull()
                 }
-                results.forEach { (_, r) -> (r.exceptionOrNull() as? CancellationException)?.let { throw it } }
-                val kept = apps.filter { app -> results.any { (p, r) -> p.id == app.peer && r.isFailure } }
-                apps = kept + results.flatMap { it.second.getOrNull().orEmpty() }
-                unreadAppIds = results.filter { it.second.isFailure }.map { it.first.id }
+                unreadAppIds = failed
             } finally {
                 readingApps = false
             }

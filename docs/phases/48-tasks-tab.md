@@ -99,3 +99,10 @@ no Done and no Back at its first address; a picked page's Done and Back return).
   turning the tab into the list.
 - TalkBack on a page kept out of sight (its web view stays in the view tree, unplaced).
 - A sign-in or a payment sheet from the page in the tab (the same host as over everything, so expected to behave the same).
+
+### Journal: faster Apps loading
+
+`Stadeum.readApps` now publishes each workspace's apps as its answer arrives (a slow workspace no longer holds up the rest; a failed
+one keeps its last apps and is listed in `unreadAppIds`; cancellation still lets go cleanly). `WorkspaceApp.pinned` reuses one shared
+`OkHttpClient` (30 s call timeout) and asks `/apps?pinned=1` (an older strut ignores it; `parse` still keeps only pinned). Tests:
+`StadeumReadAppsTest` in `WorkspaceAppsTest.kt`.

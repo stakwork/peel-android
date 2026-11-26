@@ -127,10 +127,10 @@ data class WorkspaceApp(
             apps.filter { (source == null || it.source == source) && it.matches(query) }
 
         /// The apps `peer` pinned, read on its own strut with the person's
-        /// token: `GET {strut}/apps`, bearer auth, only `pinned == true`.
-        suspend fun pinned(peer: HivePeer, client: OkHttpClient = OkHttpClient()): List<WorkspaceApp> =
+        /// token: `GET {strut}/apps?pinned=1` (an older strut ignores the query; `parse` still keeps only pinned), bearer auth, only `pinned == true`.
+        suspend fun pinned(peer: HivePeer, client: OkHttpClient = shared): List<WorkspaceApp> =
             withContext(Dispatchers.IO) {
-                val url = peer.baseUrl.trimEnd('/') + "/apps"
+                val url = peer.baseUrl.trimEnd('/') + "/apps?pinned=1"
                 val request = Request.Builder().url(url).header("Authorization", "Bearer ${peer.token}").build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) throw java.io.IOException("${peer.name} did not list its apps (HTTP ${response.code}).")
@@ -139,6 +139,9 @@ data class WorkspaceApp(
                     listing(body, peer.id)
                 }
             }
+
+        /// One client for every read: its connection pool and dispatcher are reused, not built per call.
+        private val shared: OkHttpClient = OkHttpClient.Builder().callTimeout(30, java.util.concurrent.TimeUnit.SECONDS).build()
 
         private const val MAX_BODY = 2 * 1024 * 1024
     }
