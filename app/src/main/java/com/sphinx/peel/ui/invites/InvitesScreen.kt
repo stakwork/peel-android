@@ -62,6 +62,8 @@ import com.sphinx.peel.account.AndroidClipboardAccess
 import com.sphinx.peel.account.SensitiveClipboard
 import com.sphinx.peel.engine.Engine
 import com.sphinx.peel.engine.InviteRecord
+import com.sphinx.peel.engine.InviteShare
+import com.sphinx.peel.storage.Setting
 import com.sphinx.peel.engine.InviteRefused
 import com.sphinx.peel.engine.InviteRules
 import com.sphinx.peel.engine.PaymentRefused
@@ -189,6 +191,11 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
     val cancelledText = stringResource(R.string.ppl_invite_cancelled)
     val cancelFailedText = stringResource(R.string.ppl_invite_cancel_failed)
     val couldNotRemoveText = stringResource(R.string.ppl_could_not_remove)
+    val shareText = InviteShare.message(
+        invite.link, storage.value(Setting.ALIAS), invite.message,
+        stringResource(R.string.ppl_invite_share_named), stringResource(R.string.ppl_invite_share_anon),
+    )
+    val shareSubject = stringResource(R.string.ppl_invite_share_subject)
     val shareable = ready || invite.status == InviteRecord.Status.SENDING
 
     fun cancel() {
@@ -238,9 +245,9 @@ fun InviteDetailScreen(engine: Engine, storage: Storage, code: String, onClose: 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 InviteButton(
                     stringResource(R.string.ppl_copy_invite), Icons.Filled.ContentCopy, enabled = shareable, modifier = Modifier.weight(1f),
-                ) { AndroidClipboardAccess.sensitive(context).copy(invite.link, SensitiveClipboard.DEFAULT_CLEAR_MS * 2) }
+                ) { AndroidClipboardAccess.sensitive(context).copy(shareText, SensitiveClipboard.DEFAULT_CLEAR_MS * 2) }
                 InviteButton(stringResource(R.string.ppl_share), Icons.Filled.Share, enabled = shareable, modifier = Modifier.weight(1f)) {
-                    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, invite.link)
+                    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, shareText).putExtra(Intent.EXTRA_SUBJECT, shareSubject)
                     context.startActivity(Intent.createChooser(send, context.str(R.string.ppl_share_invite)))
                 }
                 InviteButton(stringResource(R.string.ppl_qr), Icons.Filled.QrCode, enabled = ready, modifier = Modifier.weight(1f)) { enlarged = true }

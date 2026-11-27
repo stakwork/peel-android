@@ -85,8 +85,10 @@ object InviteLink {
     /// once the account is online), and a signup needs the server it names.
     fun parse(text: String, reader: InviteReader = InviteReader.Native, requireServer: Boolean = true): Invite {
         if (text.toByteArray(Charsets.UTF_8).size > MAX_BYTES) throw InviteProblem.TOO_LONG
-        val trimmed = text.trim()
+        var trimmed = text.trim()
         if (trimmed.isEmpty()) throw InviteProblem.NOT_AN_INVITE
+        // A whole shared message (InviteShare) holds the link among other words: read the link out of it.
+        if (trimmed.any { it.isWhitespace() } && !startsWithLink(trimmed)) find(trimmed)?.let { trimmed = it }
         if (trimmed.length > MAX_LENGTH) throw InviteProblem.TOO_LONG
         val parsed = try {
             reader.read(trimmed)
@@ -120,12 +122,51 @@ object InviteLink {
     /// lands in the invite field.
     fun fromClipboard(text: String?): String? {
         val trimmed = text?.trim() ?: return null
-        if (trimmed.isEmpty() || trimmed.length > MAX_LENGTH || trimmed.any { it.isWhitespace() }) return null
+        if (trimmed.isEmpty() || trimmed.toByteArray(Charsets.UTF_8).size > MAX_BYTES) return null
+        // Not a link on its own: a shared invite message (InviteShare) carries one among its words.
+        if (trimmed.any { it.isWhitespace() }) return if (startsWithLink(trimmed)) null else find(trimmed)
+        if (trimmed.length > MAX_LENGTH) return null
         val prefix = "$SCHEME://?"
         val link = if (trimmed.startsWith(prefix, ignoreCase = true)) trimmed else fromJoinLink(trimmed) ?: return null
         val sections = link.substring(prefix.length).split('&')
         if (sections.count { it == "action=i" } != 1 || sections.none { it.startsWith("d=") && it.length > 2 }) return null
         return fromDeepLink(SCHEME, "i", link)
+    }
+
+    /// Whether the text's first whitespace-separated word is itself an invite link (`sphinx.chat://?…` or a join link). Text
+    /// that begins so is someone's mangled link, not a message about one (iOS's rule), so [fromClipboard] refuses it and
+    /// [parse] reads it as it always did, whole.
+    private fun startsWithLink(text: String): Boolean {
+        val first = text.trimStart().split(Regex("\\s+"), limit = 2)[0]
+        return first.startsWith("$SCHEME://?", ignoreCase = true) || fromJoinLink(first) != null
+    }
+
+    /// The first invite in free text, as its `sphinx.chat://?…` link: the text is split on whitespace, each word stripped of
+    /// punctuation a message wraps a link in, and the first one [fromClipboard] accepts wins. Null when there is none.
+    fun find(text: String): String? {
+        if (text.toByteArray(Charsets.UTF_8).size > MAX_BYTES) return null
+        val edge = "<>()[]\"'`.,;:!?"
+        return text.split(Regex("\\s+")).asSequence()
+            .map { it.trim { c -> c in edge } }
+            .filter { it.isNotEmpty() && it.length <= MAX_LENGTH }
+            .mapNotNull { fromClipboard(it) }
+            .firstOrNull()
+    }
+
+    /// The strut join page the Stadeum "Invite worker" flow uses today (stakwork/strut `src/public-join.ts`); change it
+    /// here to move it. An https link is what a messenger makes tappable and what a phone can open before Peel is installed.
+    const val JOIN_HOST = "https://strut.stadeum.stakwork.ai"
+
+    /// The join link for a core invite link, as strut's `joinLink` (`src/payments/invites.ts`) makes it: the invite after `#`
+    /// so it never reaches a server. Null for anything that is not an invite (no `action=i&`, no `d=`, a `#` or whitespace).
+    /// No `a=` is added: an invite made in Peel opens no app.
+    fun joinLink(link: String, host: String = JOIN_HOST): String? {
+        val trimmed = link.trim()
+        val prefix = "$SCHEME://?"
+        val q = if (trimmed.startsWith(prefix, ignoreCase = true)) trimmed.substring(prefix.length) else trimmed
+        if (!q.startsWith("action=i&") || q.any { it == '#' || it.isWhitespace() }) return null
+        if (q.split('&').none { it.startsWith("d=") && it.length > 2 }) return null
+        return "${host.trimEnd('/')}/public/join#$q"
     }
 
     /// Strut's join page path (stakwork/strut `src/public-join.ts`): the invite rides after its `#`.
