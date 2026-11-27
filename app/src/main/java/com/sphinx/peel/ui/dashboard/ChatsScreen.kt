@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -379,6 +380,8 @@ private fun ConnectionBolt(connected: Boolean) {
     }
 }
 
+/// Two lines, as the Mac's and iPhone's chat lists: the name and its time alone on the first, so every time stays in
+/// one column; the last message under it with the call, count, NEW, @ or muted bell at its end.
 @Composable
 private fun ChatRow(
     conversation: ConversationRow,
@@ -390,8 +393,12 @@ private fun ChatRow(
     val unread = conversation.shownUnread
     // Bold/bright is for something actually unread (PeelCore's own `lit`,
     // ChatListRow): a new contact's row text stays normal, with only the
-    // trailing NEW tag marking it.
+    // NEW tag marking it.
     val bold = unread > 0
+    val label = remember(conversation.lastTimestamp) {
+        dateLabel(conversation.lastTimestamp, Instant.now(), ZoneId.systemDefault(), Locale.getDefault())
+    }
+    val line = conversation.previewLine
     Row(
         Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -400,51 +407,62 @@ private fun ChatRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (isAgent) "Peel" else conversation.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (bold) Theme.colors.text else Theme.colors.secondaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (isAgent) {
-                    Spacer(Modifier.width(8.dp))
-                    AgentTag()
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (isAgent) "Peel" else conversation.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (bold) Theme.colors.text else Theme.colors.secondaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (isAgent) {
+                        Spacer(Modifier.width(8.dp))
+                        AgentTag()
+                    }
                 }
+                if (line != null && label != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        label,
+                        fontSize = 12.sp,
+                        color = Theme.colors.secondaryText.copy(alpha = 0.8f),
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+                if (line == null) ChatRowEnd(conversation, onCall)
             }
-            conversation.previewLine?.let {
-                val label = remember(conversation.lastTimestamp) {
-                    dateLabel(conversation.lastTimestamp, Instant.now(), ZoneId.systemDefault(), Locale.getDefault())
-                }
-                PreviewLine(it, label, unread = unread > 0)
+            if (line != null) PreviewLine(line, unread = unread > 0) { ChatRowEnd(conversation, onCall) }
+        }
+    }
+}
+
+/// What a chat holds for you, at its preview line's end: a call, then the count, NEW, @ or the muted bell.
+@Composable
+private fun ChatRowEnd(conversation: ConversationRow, onCall: Boolean) {
+    val unread = conversation.shownUnread
+    if (onCall) {
+        Spacer(Modifier.width(8.dp))
+        Icon(Icons.Filled.Call, contentDescription = stringResource(R.string.chats_on_call), tint = Theme.colors.confirmed, modifier = Modifier.size(16.dp))
+    }
+    if (unread > 0) {
+        Spacer(Modifier.width(8.dp))
+        UnreadBadge(unread)
+    } else if (conversation.isNew) {
+        Spacer(Modifier.width(8.dp))
+        NewTag()
+    } else {
+        // Nothing unread to show as a count: the chat's own mute state as a glyph (bell-slash/"@").
+        when (conversation.muteLevel) {
+            2 -> {
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Filled.NotificationsOff, contentDescription = stringResource(R.string.chats_muted), tint = Theme.colors.secondaryText, modifier = Modifier.size(16.dp))
             }
-        }
-        if (onCall) {
-            Spacer(Modifier.width(8.dp))
-            Icon(Icons.Filled.Call, contentDescription = stringResource(R.string.chats_on_call), tint = Theme.colors.confirmed, modifier = Modifier.size(18.dp))
-        }
-        if (unread > 0) {
-            Spacer(Modifier.width(8.dp))
-            UnreadBadge(unread)
-        } else if (conversation.isNew) {
-            Spacer(Modifier.width(8.dp))
-            NewTag()
-        } else {
-            // Nothing unread to show as a count — PeelCore's own
-            // `ChatListRow` still shows the chat's own mute state as a
-            // trailing glyph (bell-slash/"@"), state already stored and
-            // read (Phase 6), just never shown here until now.
-            when (conversation.muteLevel) {
-                2 -> {
-                    Spacer(Modifier.width(8.dp))
-                    Icon(Icons.Filled.NotificationsOff, contentDescription = stringResource(R.string.chats_muted), tint = Theme.colors.secondaryText, modifier = Modifier.size(18.dp))
-                }
-                1 -> {
-                    Spacer(Modifier.width(8.dp))
-                    Text("@", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
-                }
+            1 -> {
+                Spacer(Modifier.width(8.dp))
+                Text("@", style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText)
             }
         }
     }
@@ -500,9 +518,9 @@ private fun PendingInviteRow(invite: InviteRecord, onClick: () -> Unit) {
 
 /// A chat's last message under its name on one line (PeelCore's
 /// `PreviewLine`): muted and regular when read; primary text, semibold,
-/// with an accent dot in front when unread.
+/// with an accent dot in front when unread; [end] after it.
 @Composable
-private fun PreviewLine(line: String, label: String?, unread: Boolean) {
+private fun PreviewLine(line: String, unread: Boolean, end: @Composable RowScope.() -> Unit) {
     Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         if (unread) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(Theme.colors.accent))
@@ -517,16 +535,7 @@ private fun PreviewLine(line: String, label: String?, unread: Boolean) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        if (label != null) {
-            Text(
-                label,
-                fontSize = 12.sp,
-                color = Theme.colors.secondaryText.copy(alpha = 0.8f),
-                maxLines = 1,
-                softWrap = false,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
+        end()
     }
 }
 
