@@ -133,6 +133,12 @@ sections for code that isn't written yet.
     person's token; the people above the big tile; a button back to the grid; "Record on the canvas" only when the box says `record`.
   - `engine/AppsListing.kt` + the Apps tab (`MainTab.APPS`; replaced the former Tasks tab, `TasksTab`/`TasksList` removed) — Apps
     (`docs/phases/48-tasks-tab.md`): first in the bar once a `strut/worker` page was opened, its page kept alive (composed, not placed) behind the other tabs; Apps lists the other public apps.
+  - `ui/dashboard/ChatsScreen.kt`, `ChatSections.kt` (`ChatSections.items`/`latest`, `ChatsPage`), `SidebarLayout.kt` (`pinnedPages`,
+    `recentApps`, `withPagePinned`, `withOpened`, `recent`; `pinnedApps` read only), `ui/components/CapsuleChip.kt`, Recent in
+    `ui/apps/AppsScreen.kt` — Chats as one list (`docs/phases/58-chats-one-list.md`, port of the iPhone's 2026-11-27 change): invites,
+    Peel's row, then every chat newest first; ••• for Mentions and Threads; each of those pages pins itself as a chip above the list
+    (`PagePinButton`, in its bar); the bolt and New chat;
+    no sections, search or pinned apps. Apps shows the apps opened last and no longer pins.
   - Test coverage (`docs/phases/43-test-coverage.md`): Compose UI tests under Robolectric (`ui-test-junit4`; `robolectric.properties` pins sdk 35), the sheets take a `clock` for the arming delay, and an `app/src/androidTest` source set (signing vectors, payment runner, Storage upgrade, a real WebView over MockWebServer) that compiles but has never run.
   - `engine/MessageQuery.kt`, `ChatSearch.kt`, `Storage.searchMessages` (+ `Storage` v19: `message.content`, FTS5 `messageText`, `LIKE` fallback),
     `ui/dashboard/ChatSearchBar.kt` — in-chat message search (`docs/phases/05-conversation.md` "In-chat search", port of peel#576): `MessageQuery`

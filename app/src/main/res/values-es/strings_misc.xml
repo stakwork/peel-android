@@ -152,10 +152,9 @@
     <string name="misc_apps_no_stadeum">Aún no hay espacios de trabajo de Hive</string>
     <string name="misc_apps_unreadable">No se pudieron leer las apps</string>
     <string name="misc_apps_none_yet">Aún no hay apps</string>
-    <string name="misc_apps_pinned">Fijada en Chats</string>
-    <string name="misc_apps_unpin">Desfijar de Chats</string>
-    <string name="misc_apps_pin">Fijar en Chats</string>
     <string name="misc_apps_share_link">Compartir enlace</string>
+    <string name="misc_apps_recent">Recientes</string>
+    <string name="misc_apps_all_apps">Todas las apps</string>
     <string name="misc_apps_remove">Quitar de Apps</string>
     <string name="misc_apps_talk_on">Hablar con Jamie en %1$s</string>
     <string name="misc_apps_new_conversation">Nueva conversación</string>

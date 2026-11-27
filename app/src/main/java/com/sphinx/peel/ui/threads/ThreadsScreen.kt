@@ -61,6 +61,8 @@ import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.MessageText
 import com.sphinx.peel.ui.components.PersonHue
+import com.sphinx.peel.ui.dashboard.ChatsPage
+import com.sphinx.peel.ui.dashboard.PagePinButton
 import com.sphinx.peel.ui.dashboard.previewContent
 import com.sphinx.peel.ui.dashboard.senderDisplay
 import com.sphinx.peel.ui.theme.Theme
@@ -128,6 +130,8 @@ fun ThreadsScreen(
             if (unreadChats.isNotEmpty()) {
                 TextButton(onClick = { markRead(unreadChats) }) { Text(stringResource(R.string.ppl_mark_all_read), color = Theme.colors.accent) }
             }
+            // Shows Threads as a chip above the chats, or takes it off (docs/phases/58-chats-one-list.md).
+            PagePinButton(ChatsPage.THREADS, storage)
         }
         if (!loaded) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

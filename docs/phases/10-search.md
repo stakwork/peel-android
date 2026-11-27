@@ -1,5 +1,8 @@
 # Phase 10 — Search
 
+> **Superseded again (2026-11-27): no search in Chats.** Chats is one list newest first and the magnifying glass, `SearchField` and
+> "No results" are gone (docs/phases/58-chats-one-list.md; the iPhone the same). In-chat message search (phase 5) is unchanged.
+
 > **Superseded (2026-11-23): no Search tab.** The bar is Chats | Payments | Apps | You. Search is a magnifying glass at the top left of
 > Chats (`ChatsScreen`): it opens `SearchField` under the title, focused, and the list narrows to chats whose name matches; ✕ closes and
 > clears it. `SearchScreen`, `EmptySearch`, `MainTab.SEARCH` and the strings `tab_search` / `chats_search_detail` are gone. iOS the same

@@ -29,6 +29,8 @@ clash, unreadable files, JSON round trip, date/speaker words).
 - `AppsScreen` (pull gesture, long-press menus, icon drawing), `TalkHistoryScreen`, the save on `TalkStore.hangUp` with a live room.
 
 ## Pinned apps on the Dashboard
+> **Superseded (2026-11-27):** Android no longer pins apps. The Apps row, `PinnedAppRow`, Pin to Chats/Unpin and the row's pin are gone;
+> Apps shows Recent instead, and `SidebarLayout` keeps `pinnedApps` read only (docs/phases/58-chats-one-list.md). What follows is the history.
 Built, compiled and unit-tested (SidebarLayout and the rows under Robolectric); not run on a device. A port of the Mac sidebar's pins and the iPhone's "Pinned apps on Chats" (peel `ChatSections.Layout`): an app can be pinned under the Dashboard's Apps row, sharing the Swift apps' saved state.
 - `SidebarLayout` now holds `pinnedApps` (app keys `@<workspace>/<name>`, in pin order) and `appsOpen` (the fold, default true) in the same `Setting.SIDEBAR_LAYOUT` JSON, other fields carried through; `isPinned`, `withPinned` (the first pin reopens a closed fold, re-pin never duplicates) and `pinned(apps)` are `Layout`'s. `SidebarLayoutState.of(storage)` is the one observable holder, so Apps and the Dashboard see a pin at once.
 - `Stadeum.apps`, `readingApps`, `unreadAppIds` and `suspend readApps()` (keeps a workspace's last apps when it does not answer; reads one at a time) moved out of `AppsScreen`, which still reads on open, on a workspace change, on Refresh and on a pull.

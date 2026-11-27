@@ -1,162 +1,49 @@
 package com.sphinx.peel.ui.dashboard
 
+import com.sphinx.peel.engine.InviteRecord
 import com.sphinx.peel.storage.ConversationRow
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
+/// Chats' one list (docs/phases/58-chats-one-list.md; PeelCore's `latestListsEveryChatNewestFirst`).
 class ChatSectionsTest {
-    private fun row(chat: String, isTribe: Boolean, unread: Long = 0, muted: Boolean = false, alias: String = chat) =
+    private fun row(chat: String, isTribe: Boolean = false, unread: Long = 0, at: Long? = null) =
         ConversationRow(
-            chat, alias = alias, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = null,
-            lastFromMe = null, unread = unread, muteLevel = if (muted) 2 else 0,
+            chat, alias = chat, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = at,
+            lastFromMe = null, unread = unread,
         )
 
-    @Test
-    fun `a new contact is in the unread section with nothing unread`() {
-        val rows = listOf(row("d1", false), row("d2", false).copy(isNew = true))
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
+    private fun invite(code: String) = InviteRecord(code, "l", 1, null, null, "t", InviteRecord.Status.READY, 0)
 
-        assertEquals(listOf("d2"), sections.unread.map { it.chat })
-        assertEquals(listOf("d1"), sections.direct.map { it.chat })
+    // As `Storage.conversations` reads them: newest first, never-messaged last.
+    private val rows = listOf(
+        row("t1", isTribe = true, at = 50), row("d1", unread = 3, at = 40), row("agent", unread = 1, at = 30),
+        row("t2", isTribe = true, unread = 2, at = 20), row("d2", at = 10), row("d3"),
+    )
+
+    @Test
+    fun `every chat but the agent's, newest first, unread ones in place`() {
+        assertEquals(listOf("t1", "d1", "t2", "d2", "d3"), ChatSections.latest(rows, "agent").map { it.chat })
+        // Never trimmed: no "Show all".
+        val many = (1..40).map { row("c$it", at = 100L - it) }
+        assertEquals(40, ChatSections.latest(many, "agent").size)
     }
 
     @Test
-    fun `splits tribes from direct messages`() {
-        val rows = listOf(row("t1", true), row("d1", false), row("t2", true))
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
-
-        assertEquals(listOf("t1", "t2"), sections.tribes.map { it.chat })
-        assertEquals(listOf("d1"), sections.direct.map { it.chat })
-    }
-
-    @Test
-    fun `a closed section shows nothing`() {
-        val rows = listOf(row("t1", true))
-        val sections = ChatSections.of(rows, tribesOpen = false, directOpen = true, allTribes = false, allDirect = false)
-
-        assertEquals(emptyList<ConversationRow>(), sections.tribes)
-        assertNull(sections.allTribesCount)
-    }
-
-    @Test
-    fun `trims to RECENT and reports the full count, until all is shown`() {
-        val rows = (1..8).map { row("d$it", false) }
-        val trimmed = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
-        assertEquals(ChatSections.RECENT, trimmed.direct.size)
-        assertEquals(8, trimmed.allDirectCount)
-
-        val all = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = true)
-        assertEquals(8, all.direct.size)
-        assertEquals(8, all.allDirectCount)
-    }
-
-    @Test
-    fun `no Show all row when everything already fits`() {
-        val rows = listOf(row("d1", false), row("d2", false))
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
-
-        assertEquals(2, sections.direct.size)
-        assertNull(sections.allDirectCount)
-    }
-
-    @Test
-    fun `an unread chat moves to Unread, direct first then tribes, out of its own section`() {
-        val rows = listOf(
-            row("t1", true, unread = 3),
-            row("d1", false),
-            row("d2", false, unread = 1),
-            row("t2", true),
+    fun `invites first, then Peel's row, then the chats`() {
+        val items = ChatSections.items(rows, listOf(invite("i1"), invite("i2")), "agent")
+        assertEquals(
+            listOf("invite-i1", "invite-i2", "agent", "chat-t1", "chat-d1", "chat-t2", "chat-d2", "chat-d3"),
+            items.map { it.key },
         )
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
-
-        assertEquals(listOf("d2", "t1"), sections.unread.map { it.chat })
-        assertEquals(listOf("t2"), sections.tribes.map { it.chat })
-        assertEquals(listOf("d1"), sections.direct.map { it.chat })
+        // Peel's row even while unread: never in the chats below it.
+        assertEquals("agent", (items[2] as ChatSections.Item.Agent).conversation.chat)
     }
 
     @Test
-    fun `Unread never trims, however many`() {
-        val rows = (1..8).map { row("d$it", false, unread = 1) }
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
-
-        assertEquals(8, sections.unread.size)
-    }
-
-    @Test
-    fun `a muted chat's unread never moves it into Unread`() {
-        val rows = listOf(row("d1", false, unread = 5, muted = true))
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false)
-
-        assertEquals(emptyList<ConversationRow>(), sections.unread)
-        assertEquals(listOf("d1"), sections.direct.map { it.chat })
-    }
-
-    @Test
-    fun `a blank query is not searching`() {
-        val rows = listOf(row("t1", true, unread = 0, alias = "Sphinx Tribe"))
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false, query = "   ")
-
-        assertEquals(false, sections.searching)
-        assertEquals(listOf("t1"), sections.tribes.map { it.chat })
-    }
-
-    @Test
-    fun `a query filters every section by name, case-insensitively`() {
-        val rows = listOf(
-            row("t1", true, unread = 0, alias = "Sphinx Tribe"),
-            row("t2", true, unread = 2, alias = "Other Tribe"),
-            row("d1", false, unread = 0, alias = "Alice"),
-        )
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false, query = "sphinx")
-
-        assertEquals(true, sections.searching)
-        assertEquals(listOf("t1"), sections.tribes.map { it.chat })
-        assertEquals(emptyList<ConversationRow>(), sections.unread)
-        assertEquals(emptyList<ConversationRow>(), sections.direct)
-    }
-
-    @Test
-    fun `searching shows every match with no trimming and no Show all row`() {
-        val rows = (1..8).map { row("t$it", true, unread = 0, alias = "Tribe $it") }
-        val sections = ChatSections.of(rows, tribesOpen = false, directOpen = false, allTribes = false, allDirect = false, query = "Tribe")
-
-        assertEquals(8, sections.tribes.size)
-        assertNull(sections.allTribesCount)
-    }
-
-    @Test
-    fun `searching with no matches returns empty sections`() {
-        val rows = listOf(row("t1", true, unread = 0, alias = "Sphinx Tribe"))
-        val sections = ChatSections.of(rows, tribesOpen = true, directOpen = true, allTribes = false, allDirect = false, query = "nothing matches this")
-
-        assertEquals(emptyList<ConversationRow>(), sections.tribes)
-        assertEquals(emptyList<ConversationRow>(), sections.direct)
-        assertEquals(emptyList<ConversationRow>(), sections.unread)
-    }
-
-    private fun at(chat: String, isTribe: Boolean, ts: Long, unread: Long = 0) =
-        ConversationRow(chat, alias = chat, photoUrl = null, isTribe = isTribe, lastContent = null, lastTimestamp = ts,
-            lastFromMe = null, unread = unread, muteLevel = 0)
-
-    @Test
-    fun `recent merges tribes and people newest first, trimmed to ten`() {
-        val rows = (1..12).map { at("c$it", it % 2 == 0, ts = it.toLong()) }
-        val trimmed = ChatSections.of(rows, true, true, false, false)
-        assertEquals((12 downTo 3).map { "c$it" }, trimmed.combined.map { it.chat })
-        assertEquals(12, trimmed.allCombinedCount)
-
-        val all = ChatSections.of(rows, true, true, false, false, allRecent = true)
-        assertEquals(12, all.combined.size)
-        assertEquals(12, all.allCombinedCount)
-    }
-
-    @Test
-    fun `recent leaves unread to its section and has no show all when it fits`() {
-        val rows = listOf(at("a", false, 1), at("b", true, 2, unread = 3), at("c", true, 3))
-        val s = ChatSections.of(rows, true, true, false, false)
-        assertEquals(listOf("b"), s.unread.map { it.chat })
-        assertEquals(listOf("c", "a"), s.combined.map { it.chat })
-        assertNull(s.allCombinedCount)
+    fun `no agent chat yet means no Peel row, and no chats leaves the invites`() {
+        val items = ChatSections.items(rows.filter { it.chat != "agent" }, emptyList(), "agent")
+        assertEquals(listOf("chat-t1", "chat-d1", "chat-t2", "chat-d2", "chat-d3"), items.map { it.key })
+        assertEquals(listOf("invite-i1"), ChatSections.items(emptyList(), listOf(invite("i1")), "agent").map { it.key })
     }
 }

@@ -154,10 +154,9 @@
     <string name="misc_apps_no_stadeum">No Hive workspaces yet</string>
     <string name="misc_apps_unreadable">Couldn\'t read the apps</string>
     <string name="misc_apps_none_yet">No apps yet</string>
-    <string name="misc_apps_pinned">Pinned to Chats</string>
-    <string name="misc_apps_unpin">Unpin from Chats</string>
-    <string name="misc_apps_pin">Pin to Chats</string>
     <string name="misc_apps_share_link">Share link</string>
+    <string name="misc_apps_recent">Recent</string>
+    <string name="misc_apps_all_apps">All apps</string>
     <string name="misc_apps_remove">Remove from Apps</string>
     <string name="misc_apps_talk_on">Talk to Jamie on %1$s</string>
     <string name="misc_apps_new_conversation">New conversation</string>

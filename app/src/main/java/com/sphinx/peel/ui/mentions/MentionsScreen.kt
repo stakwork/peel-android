@@ -53,6 +53,8 @@ import com.sphinx.peel.ui.components.Avatar
 import com.sphinx.peel.ui.components.AvatarShape
 import com.sphinx.peel.ui.components.MessageText
 import com.sphinx.peel.ui.components.PersonHue
+import com.sphinx.peel.ui.dashboard.ChatsPage
+import com.sphinx.peel.ui.dashboard.PagePinButton
 import com.sphinx.peel.ui.dashboard.previewContent
 import com.sphinx.peel.ui.dashboard.senderDisplay
 import com.sphinx.peel.ui.theme.Theme
@@ -103,7 +105,9 @@ fun MentionsScreen(
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.ppl_back), tint = Theme.colors.text) }
             }
             Spacer(Modifier.width(12.dp))
-            Text(stringResource(R.string.ppl_mentions), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text)
+            Text(stringResource(R.string.ppl_mentions), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = Theme.colors.text, modifier = Modifier.weight(1f))
+            // Shows Mentions as a chip above the chats, or takes it off (docs/phases/58-chats-one-list.md).
+            PagePinButton(ChatsPage.MENTIONS, storage)
         }
         val loadError = error
         if (!loaded) {
