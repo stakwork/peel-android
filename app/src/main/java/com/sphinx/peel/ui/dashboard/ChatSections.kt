@@ -1,88 +1,38 @@
 package com.sphinx.peel.ui.dashboard
 
+import com.sphinx.peel.engine.InviteRecord
 import com.sphinx.peel.storage.ConversationRow
 
-/// Unread first, then Tribes, then Direct messages, each trimmed until
-/// shown in full. Ported from PeelCore's `ChatSections.swift`. `unread`
-/// is never trimmed, same as there — PeelCore's own `unread` array has
-/// no `shown()` call either, so a chat with something new never hides
-/// behind "Show all". Simplified from PeelCore's own split within
-/// `unread` (direct first, then tribes that mention you, then other
-/// tribes): this port has no mention tracking, so it's direct first,
-/// then every unread tribe, with no further split.
+/// Chats' one list (docs/phases/58-chats-one-list.md; PeelCore's `ChatSections.latest` and the iPhone's `ChatList`, Tom
+/// 2026-11-27): the pending invites first, then Peel's own row (the agent's DM), then every other chat newest first, unread ones in
+/// place (bold with their counts, `ChatRow`). No Unread / Tribes / Direct messages sections, no "Show all", no search.
+/// `Storage.conversations` is already newest first, so the order is kept as read, as PeelCore keeps `conversations`'.
 ///
-/// `query` filters every section by name before splitting into unread/
-/// tribes/direct (PeelCore's own `init`, which checks `matches` before
-/// classifying a conversation at all) — a chat not matching the query
-/// doesn't show, unread or not. `searching` (non-blank `query`) forces
-/// every section open with every match shown, no trimming and no "Show
-/// all" row (PeelCore's own `tribesOpen = layout.tribesOpen || searching`
-/// and `shown`'s own `!searching` guard) — PeelCore's iPhone `SearchTab`
-/// reuses the same `ChatList` the Chats tab does, filtered this way.
-data class ChatSections(
-    val unread: List<ConversationRow>,
-    val tribes: List<ConversationRow>,
-    val allTribesCount: Int?,
-    val direct: List<ConversationRow>,
-    val allDirectCount: Int?,
-    val searching: Boolean = false,
-    /// The Recent view's one list: every tribe and direct message not in `unread`, newest first,
-    /// trimmed to `RECENT_COMBINED` until shown in full (PeelCore's `combined`).
-    val combined: List<ConversationRow> = emptyList(),
-    /// How many chats there are in all, unread included, for "Show all 32 chats"; null when there is no more to show.
-    val allCombinedCount: Int? = null,
-) {
-    companion object {
-        /// How many show before "Show all" — PeelCore's own `recent`.
-        const val RECENT = 5
-
-        /// How many chats the Recent view shows before "Show all" — PeelCore's `recentCombined`.
-        const val RECENT_COMBINED = 10
-
-        fun of(
-            conversations: List<ConversationRow>,
-            tribesOpen: Boolean,
-            directOpen: Boolean,
-            allTribes: Boolean,
-            allDirect: Boolean,
-            query: String = "",
-            allRecent: Boolean = false,
-        ): ChatSections {
-            val searching = query.isNotBlank()
-            val matching = if (searching) conversations.filter { matches(it.name, query) } else conversations
-            val unreadDirect = matching.filter { !it.isTribe && it.isUnread }
-            val unreadTribes = matching.filter { it.isTribe && it.isUnread }
-            val tribes = matching.filter { it.isTribe && !it.isUnread }
-            val direct = matching.filter { !it.isTribe && !it.isUnread }
-            val (shownTribes, tribesCount) = shown(tribes, tribesOpen || searching, allTribes, searching)
-            val (shownDirect, directCount) = shown(direct, directOpen || searching, allDirect, searching)
-            val merged = (tribes + direct).sortedByDescending { it.lastTimestamp ?: 0L }
-            val (combined, combinedCount) = shown(merged, true, allRecent, searching, RECENT_COMBINED, total = matching.size)
-            return ChatSections(
-                unreadDirect + unreadTribes, shownTribes, tribesCount, shownDirect, directCount, searching, combined, combinedCount,
-            )
-        }
-
-        /// Whether a chat named `name` shows for a search — a blank query
-        /// matches everything; PeelCore's own `matches`.
-        fun matches(name: String, query: String): Boolean {
-            val trimmed = query.trim()
-            return trimmed.isEmpty() || name.contains(trimmed, ignoreCase = true)
-        }
-
-        /// A section's rows and its "Show all" count. Ported from
-        /// `ChatSections.shown`, minus the "keep the open chat visible"
-        /// case — a chat open in `ConversationScreen` can still vanish
-        /// from a collapsed or trimmed section underneath it.
-        private fun shown(
-            rows: List<ConversationRow>, open: Boolean, all: Boolean, searching: Boolean,
-            limit: Int = RECENT, total: Int = rows.size,
-        ): Pair<List<ConversationRow>, Int?> {
-            if (!open) return emptyList<ConversationRow>() to null
-            if (searching) return rows to null
-            if (rows.size <= limit) return rows to null
-            if (all) return rows to total
-            return rows.take(limit) to total
-        }
+/// Not ported: PeelCore's sections (`unread`, `tribes`, `direct`, `combined`) and its `query`, which stay for the Mac's sidebar.
+object ChatSections {
+    /// One row of the list, keyed for a `LazyColumn`.
+    sealed class Item(val key: String) {
+        data class Invite(val invite: InviteRecord) : Item("invite-${invite.code}")
+        data class Agent(val conversation: ConversationRow) : Item("agent")
+        data class Chat(val conversation: ConversationRow) : Item("chat-${conversation.chat}")
     }
+
+    /// Every chat but the agent's [agent] (Peel has its own row), as read: newest first, unread ones in place (`latestChats`).
+    fun latest(conversations: List<ConversationRow>, agent: String?): List<ConversationRow> =
+        conversations.filter { it.chat != agent }
+
+    /// The whole list: [invites] (the pending ones), the agent's row when its chat exists, then [latest].
+    fun items(conversations: List<ConversationRow>, invites: List<InviteRecord>, agent: String?): List<Item> {
+        val agentRow = conversations.firstOrNull { it.chat == agent }
+        return invites.map { Item.Invite(it) } +
+            listOfNotNull(agentRow?.let { Item.Agent(it) }) +
+            latest(conversations, agent).map { Item.Chat(it) }
+    }
+}
+
+/// The pages Chats' More menu opens (the iPhone's `ChatsPage`): Mentions and Threads. A pinned one shows as a chip above the chats,
+/// kept by [key] in the layout's `pinnedPages`.
+enum class ChatsPage(val key: String, val route: DashboardRoute) {
+    MENTIONS("mentions", DashboardRoute.MENTIONS),
+    THREADS("threads", DashboardRoute.THREADS),
 }

@@ -359,7 +359,7 @@ object Stadeum {
 
     /// Nothing of this list is kept on disk except the pinned apps' minimal records ([PinnedAppRecord]: id, name, title, icon, version, in the
     /// account's settings; wiped by [StadeumModel.disconnect], a revoked pairing and forgetting the account).
-    /// The workspaces' pinned apps as last read (`readApps`), shared by Apps and the Dashboard's pinned apps; not yet filtered to the
+    /// The workspaces' pinned apps as last read (`readApps`), Apps' list and its Recent; not yet filtered to the
     /// workspaces in use (`AppsOpenDecision.visible`). Observable.
     var apps: List<WorkspaceApp> by mutableStateOf(emptyList()); private set
     /// A read is under way.
@@ -371,7 +371,8 @@ object Stadeum {
     /// What is kept of the pinned workspace apps ([PinnedAppRecord]; minimal, in the account's settings). Right after launch a pinned
     /// app may be listed from its record ([WorkspaceApp.refreshing]) until its workspace answers.
     @Volatile internal var pinnedRecords: List<PinnedAppRecord> = emptyList()
-    /// The ids of the apps the person pinned (the sidebar layout's); none until [attach].
+    /// The ids of the apps pinned (the sidebar layout's `pinnedApps`, as saved: Android no longer pins or unpins, so a read is what
+    /// changes the records; docs/phases/58-chats-one-list.md); none until [attach].
     @Volatile internal var pinnedIds: () -> List<String> = { emptyList() }
     /// Keeps the records in the account's settings; null with none open.
     @Volatile internal var saveRecords: ((List<PinnedAppRecord>) -> Unit)? = null
@@ -397,9 +398,6 @@ object Stadeum {
         val seeded = records.filter { it.peer in peers && apps.none { app -> app.peer == it.peer } }.map { it.app }
         if (seeded.isNotEmpty()) apps = apps + seeded
     }
-
-    /// A pin or unpin: the records follow the pins.
-    fun pinsChanged() = saveIfChanged(PinnedAppRecord.following(pinnedIds(), pinnedRecords, apps))
 
     /// The workspaces' apps and their records gone, here and from the account's settings.
     private fun forgetPinned() {

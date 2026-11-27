@@ -6,8 +6,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.longClick
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import com.sphinx.peel.engine.TalkHome
 import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.ui.theme.PeelTheme
@@ -54,23 +52,6 @@ class AppsRowsUiTest {
         rule.setContent { PeelTheme { AppRow(WorkspaceApp(null, "mine", "Mine"), false, onOpen = {}, onShare = {}) } }
         rule.onNodeWithText("Mine").performTouchInput { longClick() }
         rule.onNodeWithText("Share link").assertDoesNotExist()
-        // The menu still opens: it can pin.
-        rule.onNodeWithText("Pin to Chats").assertExists()
-    }
-
-    @Test fun `the menu pins and unpins, and a pinned row shows a pin`() {
-        var toggled = 0
-        var pinned by androidx.compose.runtime.mutableStateOf(false)
-        rule.setContent { PeelTheme { AppRow(app, true, onOpen = {}, onShare = {}, pinned = pinned, onTogglePin = { toggled++; pinned = !pinned }) } }
-        rule.onNodeWithContentDescription("Pinned to Chats").assertDoesNotExist()
-        rule.onNodeWithText("Board").performTouchInput { longClick() }
-        rule.onNodeWithText("Pin to Chats").performClick()
-        assertEquals(1, toggled)
-        rule.onNodeWithContentDescription("Pinned to Chats").assertExists()
-        rule.onNodeWithText("Board").performTouchInput { longClick() }
-        rule.onNodeWithText("Unpin from Chats").performClick()
-        assertEquals(2, toggled)
-        rule.onNodeWithContentDescription("Pinned to Chats").assertDoesNotExist()
     }
 
     @Test fun `icons draw as the real lucide icon, an old name as its new one, an unknown or no name as the grid`() {

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -32,7 +33,6 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,13 +67,15 @@ import com.sphinx.peel.engine.TalkHome
 import com.sphinx.peel.engine.AppsListing
 import com.sphinx.peel.engine.WorkspaceApp
 import com.sphinx.peel.storage.Storage
+import com.sphinx.peel.ui.components.CapsuleChip
 import com.sphinx.peel.ui.dashboard.SidebarLayoutState
 import com.sphinx.peel.ui.theme.Theme
 import com.sphinx.peel.ui.toast.LocalToast
 import com.sphinx.peel.ui.toast.ToastType
 
 /// Apps, from the Dashboard's top rows — `AppsScreen.swift`: Talk to Jamie on
-/// each workspace, then the apps the Stadeum workspaces pinned as tabs, A–Z,
+/// each workspace, Recent (the apps opened last, newest first, one tap each; shown only with no search or filter, the list then
+/// headed All apps; docs/phases/58-chats-one-list.md), then the apps the Stadeum workspaces pinned as tabs, A–Z,
 /// each read and opened on its workspace's own strut with the person's token.
 /// Search, a source filter (with several workspaces), Refresh, long-press to
 /// copy a share link, pull to refresh, lucide icons (`LucideNames`/`AppIcons`), Talk rows' long-press menu
@@ -92,12 +94,12 @@ fun AppsScreen(storage: Storage, onBack: (() -> Unit)?, onTalk: (TalkHome) -> Un
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var source by remember { mutableStateOf<String?>(null) }
-    // The read is Stadeum's, shared with the Dashboard's pinned apps.
+    // The read is Stadeum's.
     val read = Stadeum.apps
     val reading = Stadeum.readingApps
     val unreadIds = Stadeum.unreadAppIds
+    // Recent is the layout's `recentApps`, shared with Chats' holder.
     val layoutState = remember(storage) { SidebarLayoutState.of(storage) }
-    val layout = layoutState.layout
     val openPage = LocalPageOpener.current
     val publicVersion by storage.publicAppsVersion.collectAsState()
     // The connection titles move too (a first sign-in names the app).
@@ -129,6 +131,14 @@ fun AppsScreen(storage: Storage, onBack: (() -> Unit)?, onTalk: (TalkHome) -> Un
     val openedShown = rows.mapNotNull { (it as? AppsListing.Row.Opened)?.app }
     // Not while searching: the search is of the apps.
     val homes = if (query.isEmpty()) Stadeum.talkHomes else emptyList()
+    // The apps opened last that are still listed; not while searching or filtering (the iPhone's `AppsScreen`).
+    val recent = if (query.isEmpty() && shownSource == null) layoutState.layout.recent(apps) else emptyList()
+    // iOS opens a page when there is one and otherwise nothing, with no word said; one opened is kept for Recent.
+    fun openApp(app: WorkspaceApp) {
+        val page = AppsOpenDecision.page(Stadeum.openings.opening(app)) ?: return
+        layoutState.change(layoutState.layout.withOpened(app.id))
+        openPage(page)
+    }
 
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -171,19 +181,19 @@ fun AppsScreen(storage: Storage, onBack: (() -> Unit)?, onTalk: (TalkHome) -> Un
         ) {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
                 if (homes.isNotEmpty()) {
-                    item { Text(stringResource(R.string.misc_apps_talk_header), Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText) }
+                    item { Header(stringResource(R.string.misc_apps_talk_header)) }
                     items(homes, key = { "talk-${it.id}" }) { home ->
                         TalkRow(home, onClick = { onTalk(home) }, onHistory = { historyHome = home })
                     }
                     item { Spacer(Modifier.size(12.dp)) }
                 }
+                if (recent.isNotEmpty()) {
+                    item(key = "section:recent-header") { Header(stringResource(R.string.misc_apps_recent)) }
+                    item(key = "section:recent") { RecentApps(recent, onOpen = { openApp(it) }) }
+                    item(key = "section:all-header") { Header(stringResource(R.string.misc_apps_all_apps)) }
+                }
                 items(shown, key = { it.id }) { app ->
-                    AppRow(app, several, pinned = layout.isPinned(app.id), onTogglePin = {
-                        layoutState.change(layout.withPinned(app.id, !layout.isPinned(app.id)))
-                    }, onOpen = {
-                        // iOS opens a page when there is one and otherwise nothing, with no word said.
-                        AppsOpenDecision.page(Stadeum.openings.opening(app))?.let(openPage)
-                    }, onShare = { link ->
+                    AppRow(app, several, onOpen = { openApp(app) }, onShare = { link ->
                         copy(context, link)
                         toast.show(context.str(R.string.misc_apps_link_copied), ToastType.Success)
                     })
@@ -211,18 +221,33 @@ fun AppsScreen(storage: Storage, onBack: (() -> Unit)?, onTalk: (TalkHome) -> Un
     }
 }
 
+/// A section's heading in the list: Talk to Jamie, Recent, All apps.
+@Composable
+private fun Header(text: String) =
+    Text(text, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = Theme.colors.secondaryText)
+
+/// The apps opened last, newest first, in one row that scrolls sideways (the iPhone's `RecentApps`): each its icon and title, a tap
+/// to open it.
+@Composable
+private fun RecentApps(apps: List<WorkspaceApp>, onOpen: (WorkspaceApp) -> Unit) {
+    LazyRow(Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(apps, key = { it.id }) { app ->
+            CapsuleChip(app.title, onClick = { onOpen(app) }) {
+                WorkspaceAppIcon(app.icon, Theme.colors.secondaryText, size = 15.dp)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun AppRow(
-    app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit,
-    /// Pinned to the Dashboard's Apps row: a small accent pin at the end.
-    pinned: Boolean = false, onTogglePin: () -> Unit = {},
-) {
+internal fun AppRow(app: WorkspaceApp, showsSource: Boolean, onOpen: () -> Unit, onShare: (String) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val link = app.shareLink()
     Box {
         Row(
-            Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = { menu = true }).padding(vertical = 10.dp),
+            // The menu holds only Share link (pins left with Chats' pinned apps): no long press without one.
+            Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = if (link != null) ({ menu = true }) else null).padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             WorkspaceAppIcon(app.icon, Theme.colors.secondaryText, Modifier.size(26.dp), 20.dp)
@@ -231,14 +256,8 @@ internal fun AppRow(
                 app.about?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = Theme.colors.secondaryText) }
                 app.caption(showsSource)?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = Theme.colors.secondaryText) }
             }
-            if (pinned) Icon(Icons.Filled.PushPin, stringResource(R.string.misc_apps_pinned), Modifier.size(14.dp).align(Alignment.CenterVertically), tint = Theme.colors.accent)
         }
         DropdownMenu(menu, { menu = false }) {
-            DropdownMenuItem(
-                text = { Text(if (pinned) stringResource(R.string.misc_apps_unpin) else stringResource(R.string.misc_apps_pin)) },
-                leadingIcon = { Icon(Icons.Filled.PushPin, null) },
-                onClick = { menu = false; onTogglePin() },
-            )
             // Copies a link to the app: nothing is sent, and it opens only for
             // someone with that workspace connected.
             if (link != null) DropdownMenuItem(text = { Text(stringResource(R.string.misc_apps_share_link)) }, onClick = { menu = false; onShare(link) })
