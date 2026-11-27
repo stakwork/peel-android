@@ -176,4 +176,7 @@
         <item quantity="one">%1$d respuesta</item>
         <item quantity="other">%1$d respuestas</item>
     </plurals>
+    <string name="ppl_invite_share_named">%1$s te invitó a Peel, una app privada de chat y billetera.\n\n1. Abre este enlace en tu teléfono y toca \"Obtener Peel\" (o \"Abrir en Peel\" si ya la tienes):\n%2$s\n2. Abre Peel. Tu invitación se completa sola.\n3. Si no, toca \"Unirme con una invitación\" y pega este mensaje completo.</string>
+    <string name="ppl_invite_share_anon">Tienes una invitación a Peel, una app privada de chat y billetera.\n\n1. Abre este enlace en tu teléfono y toca \"Obtener Peel\" (o \"Abrir en Peel\" si ya la tienes):\n%1$s\n2. Abre Peel. Tu invitación se completa sola.\n3. Si no, toca \"Unirme con una invitación\" y pega este mensaje completo.</string>
+    <string name="ppl_invite_share_subject">Invitación a Peel</string>
 </resources>
